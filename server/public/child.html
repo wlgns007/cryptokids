@@ -1,0 +1,310 @@
+<!doctype html>
+<html>
+<head>
+  <link rel="icon" href="data:,">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#ffffff">
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+    }
+  </script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CryptoKids – Child</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:16px}
+    .row{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap}
+    input,button{padding:8px;font-size:16px}
+    #historyBox{margin-top:12px;border:1px solid #ddd;padding:8px;border-radius:8px;max-width:640px}
+    .tx{padding:6px 0;border-bottom:1px dashed #eee}
+  </style>
+</head>
+<body>
+<section class="card" style="margin:16px">
+  <h2 style="margin:0 0 10px 0;">Scan Earn QR</h2>
+  <button id="btnScan" style="padding:10px 14px;border:1px solid #ddd;border-radius:10px;background:#fff">Start Camera</button>
+  <video id="vid" playsinline style="width:100%;max-width:420px;border-radius:12px;margin-top:10px;display:none"></video>
+  <canvas id="cv" style="display:none"></canvas>
+  <div id="scanMsg" class="help" style="min-height:18px;margin-top:8px"></div>
+</section>
+
+<script src="https://unpkg.com/jsqr"></script>
+<script>
+  (function () {
+    const btn = document.getElementById('btnScan');
+    const vid = document.getElementById('vid');
+    const cv  = document.getElementById('cv');
+    const ctx = cv.getContext('2d');
+    const msg = document.getElementById('scanMsg');
+    let stream = null, raf = 0, busy = false;
+
+    function say(s){ msg.textContent = s; }
+    function secureOk(){
+      if (location.protocol === 'https:' || location.hostname === 'localhost') return true;
+      return false;
+    }
+
+    async function start() {
+      if (!secureOk()) {
+        say('Camera requires HTTPS. Open the ngrok https://… URL.');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        say('Camera API not available in this browser.');
+        return;
+      }
+      try {
+        // Try back camera; fall back to any camera
+        const try1 = { video: { facingMode: { ideal: 'environment' } } };
+        const try2 = { video: true };
+
+        try { stream = await navigator.mediaDevices.getUserMedia(try1); }
+        catch { stream = await navigator.mediaDevices.getUserMedia(try2); }
+
+        vid.srcObject = stream;
+        vid.style.display = 'block';
+        await vid.play();
+        say('Point the camera at the QR code.');
+        tick();
+      } catch (e) {
+        const name = e && e.name || '';
+        if (name === 'NotAllowedError') say('Camera permission denied. Check site permissions in your browser settings.');
+        else if (name === 'NotFoundError') say('No camera found.');
+        else if (name === 'NotReadableError') say('Camera in use by another app.');
+        else say('Camera blocked or unavailable.');
+      }
+    }
+
+    function stop() {
+      cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      vid.style.display = 'none';
+      say('Camera stopped.');
+    }
+
+    function tick() {
+      if (vid.readyState === vid.HAVE_ENOUGH_DATA) {
+        cv.width = vid.videoWidth; cv.height = vid.videoHeight;
+        ctx.drawImage(vid, 0, 0, cv.width, cv.height);
+        const img = ctx.getImageData(0, 0, cv.width, cv.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data && !busy) {
+          busy = true;
+          say('QR detected. Opening…');
+          stop();
+          location.href = code.data; // your /earn already returns a full URL
+          return;
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    }
+
+    btn.addEventListener('click', () => {
+      if (stream) stop(); else start();
+    });
+  })();
+</script>
+
+  <h2>CryptoKids – Child</h2>
+
+  <div class="row">
+    <input id="userId" placeholder="User ID (e.g., leo)" />
+    <button id="btnBalance">Check Balance</button>
+    <button id="btnHistory">View History</button>
+    <button id="btnCsv">Download CSV</button>
+    <button id="btnWatch">Start Live Watch</button>
+  </div>
+
+  <div id="resp"></div>
+<!-- ADD: history controls + totals -->
+<div id="histControls" style="margin-top:8px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+  <label><input id="fltEarn" type="checkbox" checked> Show Earn</label>
+  <label><input id="fltSpend" type="checkbox" checked> Show Spend</label>
+  <span id="totals" style="opacity:.8;"></span>
+</div>
+
+  <div id="historyBox"></div>
+
+  <div id="emptyState" style="display:none; margin-top:12px; padding:12px; border:1px dashed #bbb; border-radius:10px;">
+    <div style="font-weight:600; margin-bottom:6px;">No RT yet</div>
+    <div style="font-size:14px; line-height:1.4;">
+      Ask a parent to give you a task and scan the Earn QR to get started.
+    </div>
+  </div>
+<section class="card" style="margin:16px">
+  <h2 style="margin:0 0 10px 0;">My Balance</h2>
+  <div style="display:flex;gap:8px;align-items:center">
+    <input id="kidId" type="text" placeholder="Enter your ID (e.g., leo)" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:8px">
+    <button id="btnBal" style="padding:8px 12px;border:1px solid #ddd;border-radius:8px;background:#fff">Check</button>
+  </div>
+  <div id="balMsg" class="help" style="margin-top:8px;min-height:18px"></div>
+</section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function getJSON(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+// ADD: format helpers
+function fmtIso(ts){ return new Date(ts).toLocaleString(); }
+function summarize(hist){
+  let earned = 0, spent = 0;
+  for (const tx of hist){
+    if (tx.type === 'earn') earned += Number(tx.amount)||0;
+    if (tx.type === 'spend') spent  += Number(tx.amount)||0;
+  }
+  return { earned, spent };
+}
+
+    async function checkBalance() {
+      const userId = $('userId').value.trim();
+      const respBox = $('resp');
+      const emptyState = $('emptyState');
+      const qrEl = $('qr'); // ok if not present
+
+      if (!userId) { alert('Enter User ID'); return; }
+      respBox.textContent = 'Checking...';
+
+      try {
+        const data = await getJSON(`/balance/${encodeURIComponent(userId)}`);
+        respBox.textContent = `Balance: ${data.balance} RT`;
+
+// ADD: show lifetime totals next to balance (best-effort)
+try {
+  const sum = await getJSON(`/summary/${encodeURIComponent(userId)}`);
+  respBox.textContent += `  |  Earned: ${sum.earned} RT, Spent: ${sum.spent} RT`;
+} catch(_) {}
+
+        const isEmpty = !Number.isFinite(data.balance) || data.balance <= 0;
+        emptyState.style.display = isEmpty ? 'block' : 'none';
+
+        if (qrEl) {
+          if (isEmpty) {
+            if (qrEl.tagName === 'CANVAS') {
+              const ctx = qrEl.getContext('2d');
+              ctx && ctx.clearRect(0, 0, qrEl.width, qrEl.height);
+            }
+            qrEl.style.display = 'none';
+          } else {
+            qrEl.style.display = '';
+          }
+        }
+      } catch (err) {
+        respBox.textContent = `Error checking balance: ${err.message}`;
+        emptyState.style.display = 'none';
+      }
+    }
+
+    $('btnBalance').onclick = checkBalance;
+
+    // REPLACE the whole btnHistory handler with this
+$('btnHistory').onclick = async () => {
+  const userId = $('userId').value.trim();
+  if (!userId) return alert('Enter User ID');
+
+  const hist = await getJSON(`/history/${encodeURIComponent(userId)}`);
+  const totals = summarize(hist);
+  const showEarn  = $('fltEarn')?.checked !== false;
+  const showSpend = $('fltSpend')?.checked !== false;
+
+  // update totals line
+  const t = $('totals');
+  if (t) t.textContent = `Totals — Earned: ${totals.earned} RT, Spent: ${totals.spent} RT`;
+
+  // filter by checkboxes
+  const filtered = hist.filter(tx =>
+    (tx.type === 'earn'  && showEarn) ||
+    (tx.type === 'spend' && showSpend)
+  );
+
+  $('historyBox').innerHTML = filtered.length
+    ? filtered.map(tx => `<div class="tx"><b>${tx.type}</b> ${tx.amount} RT${tx.reason ? ` – ${tx.reason}` : ''}<br><small>${fmtIso(tx.date)}</small></div>`).join('')
+    : '<i>No history matches the current filters.</i>';
+};
+
+// ALSO: re-render list live when toggles change (optional nicety)
+['fltEarn','fltSpend'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', () => $('btnHistory').click());
+});
+
+
+    // CSV download (client-side)
+    $('btnCsv').onclick = async () => {
+      const userId = $('userId').value.trim();
+      if (!userId) return alert('Enter User ID');
+
+      const hist = await getJSON(`/history/${encodeURIComponent(userId)}`);
+      if (!Array.isArray(hist) || !hist.length) {
+        alert('No history yet to export.');
+        return;
+      }
+
+      const header = ['type', 'amount', 'reason', 'date'];
+      const rows = hist.map(tx => [
+        tx.type ?? '',
+        tx.amount ?? '',
+        (tx.reason ?? '').toString().replace(/"/g, '""'),
+        new Date(tx.date).toISOString()
+      ]);
+      const csv = [header.join(','), ...rows.map(r => r.map(x => `"${x}"`).join(','))].join('\r\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `history_${userId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    // Live watch: auto-refresh balance + empty-state
+    let watchTimer = null;
+    $('btnWatch').onclick = () => {
+      const userId = $('userId').value.trim();
+      if (!userId) return alert('Enter User ID');
+      if (watchTimer) {
+        clearInterval(watchTimer); watchTimer = null;
+        $('btnWatch').textContent = 'Start Live Watch';
+        return;
+      }
+      $('btnWatch').textContent = 'Stop Live Watch';
+      watchTimer = setInterval(() => { checkBalance(); }, 3000);
+      checkBalance(); // fire immediately
+    };
+  </script>
+
+<script>
+  (function(){
+    const kid = document.getElementById('kidId');
+    const btn = document.getElementById('btnBal');
+    const msg = document.getElementById('balMsg');
+    function say(s){ msg.textContent = s; }
+    async function check(){
+      const id = (kid.value||'').trim();
+      if(!id) return say('Enter your ID.');
+      try{
+        say('Loading…');
+        const r = await fetch('/balance/'+encodeURIComponent(id));
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const j = await r.json();
+        say('Balance: '+ (j.balance ?? '?'));
+        localStorage.setItem('ck_kidId', id);
+      }catch(e){ say('Failed to load balance.'); }
+    }
+    btn?.addEventListener('click', check);
+    // auto-fill saved ID
+    const saved = localStorage.getItem('ck_kidId');
+    if(saved){ kid.value = saved; }
+  })();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,66 @@
+Cold-start checklist (every time you come back)
+
+Start the local chain
+
+cd C:\Users\iBuyPower\contracts
+npx hardhat --config .\hardhat.config.mjs node
+
+
+In a second PowerShell window: set parent PK and deploy
+
+cd C:\Users\iBuyPower\contracts
+$env:PK="0x<parent private key from node window Account #0>"
+node .\scripts\deploy_oya.mjs
+Get-Content .\addresses.json
+
+
+New chain = new contract addresses. Copy the fresh addresses into your HTML.
+
+Open the app
+
+Run a tiny server: python -m http.server 8080
+
+Open http://127.0.0.1:8080/parents-shop.html
+
+MetaMask network: Localhost 8545
+
+Import accounts: parent (Account #0) and kid (Account #1)
+
+(Once per fresh chain) configure items & badge bonuses
+Use the “Apply Config” button in the UI below (or the one-shot console snippet I give). After that, mint → approve → buy → issue → redeem will work.
+
+
+
+NOW on WEB 2.5 
+
+If you do stop it later:
+
+Start it again: npx hardhat --config .\hardhat.config.mjs node.
+
+Redeploy (node .\scripts\deploy_oya.mjs), then restart the server so it reloads the new addresses.json, and re-apply config + re-mint balances.
+
+
+
+
+
+1. Hardhat
+
+cd C:\Users\iBuyPower\contracts
+npx hardhat --config .\hardhat.config.mjs node
+
+
+2. node
+cd C:\Users\iBuyPower\contracts
+$env:PK="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"    
+node .\scripts\deploy_oya.mjs
+
+0x (#0 private key)
+
+3.
+Server
+cd C:\Users\iBuyPower\contracts\server
+node .\index.js
+
+4.
+ngrok http 4000
+

@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+<head>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0ea5e9">
+  <script>navigator.serviceWorker?.register('/sw.js');</script>
+  <meta charset="utf-8" />
+  <title>Parents Shop (Web 2.5)</title>
+  <style>
+    body{font:14px system-ui,arial;margin:24px;max-width:900px}
+    h2{margin-top:28px}
+    fieldset{margin:12px 0;padding:12px}
+    button{cursor:pointer}
+    .row{display:flex;gap:8px;flex-wrap:wrap}
+    .card{border:1px solid #ddd;padding:10px;border-radius:8px}
+  </style>
+</head>
+<body>
+  <h1>Parents Shop (Web 2.5)</h1>
+
+  <fieldset>
+    <legend>Kid</legend>
+    <div class="row">
+      <label>Pick kid:
+        <select id="kidSelect"></select>
+      </label>
+      <button id="refresh">Refresh balance</button>
+      <div>RT balance: <b id="bal">—</b></div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Chores → RT</legend>
+    <div id="chores" class="row"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Parents Shop</legend>
+    <div id="items" class="row"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Badges (VC)</legend>
+    <div id="badges" class="row"></div>
+  </fieldset>
+
+<script>
+const API = location.origin;
+let kidId = null;
+
+const CHORES = [
+  {label:"Wake up early", rt:5},
+  {label:"Brush teeth", rt:2},
+  {label:"Make bed", rt:2},
+  {label:"Homework 30m", rt:6},
+  {label:"Read 20m", rt:4},
+  {label:"Practice music", rt:5},
+  {label:"Pack backpack", rt:2},
+  {label:"Feed pet", rt:3},
+  {label:"Help dishes", rt:4},
+  {label:"Exercise", rt:5},
+];
+
+const ITEMS = [
+  {id:1, name:"Sticker pack", price:6},
+  {id:2, name:"Small toy", price:15},
+  {id:3, name:"Extra screen 20m", price:8},
+  {id:4, name:"Comic", price:7},
+  {id:5, name:"Card pack", price:9},
+  {id:6, name:"Snack", price:5},
+  {id:7, name:"Puzzle", price:12},
+  {id:8, name:"Book", price:18},
+  {id:9, name:"Craft kit", price:14},
+  {id:10, name:"Outing pass", price:25},
+];
+
+const BADGES = [
+  {id:"EARLY_BIRD_7", name:"Early Bird (7 days)", bonus:10},
+  {id:"HOMEWORK_10D", name:"Homework streak", bonus:20},
+  {id:"READ_14D",     name:"Reading streak",  bonus:15},
+  {id:"TEETH_14D",    name:"Teeth streak",    bonus:12},
+  {id:"KINDNESS_5",   name:"Kindness x5",     bonus:10},
+];
+
+async function j(method, url, body){
+  const r = await fetch(url, {
+    method, headers: {'content-type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function loadKids(){
+  const kids = await j('GET', `${API}/api/kids`);
+  const sel = document.getElementById('kidSelect');
+  sel.innerHTML = '';
+  for (const k of kids){
+    const o = document.createElement('option');
+    o.value = k.id; o.textContent = `${k.name} (${k.addr.slice(0,6)}…${k.addr.slice(-4)})`;
+    sel.appendChild(o);
+  }
+  if (kids.length){
+    kidId = kids[0].id;
+    sel.value = String(kidId);
+    await refresh();
+  }
+  sel.onchange = async () => { kidId = Number(sel.value); await refresh(); };
+}
+
+async function refresh(){
+  if (!kidId) return;
+  const b = await j('GET', `${API}/api/kids/${kidId}/balance`);
+  document.getElementById('bal').textContent = Number(b.balance).toFixed(1);
+}
+
+function renderChores(){
+  const box = document.getElementById('chores'); box.innerHTML = '';
+  for (const c of CHORES){
+    const div = document.createElement('div'); div.className='card';
+    div.innerHTML = `<div><b>${c.label}</b></div><div>${c.rt} RT</div>`;
+    const btn = document.createElement('button'); btn.textContent = `Give ${c.rt} RT`;
+    btn.onclick = async ()=>{
+      await j('POST', `${API}/api/kids/${kidId}/earn`, {amount: String(c.rt)});
+      await refresh();
+    };
+    div.appendChild(btn); box.appendChild(div);
+  }
+}
+
+function renderItems(){
+  const box = document.getElementById('items'); box.innerHTML = '';
+  for (const it of ITEMS){
+    const div = document.createElement('div'); div.className='card';
+    div.innerHTML = `<div><b>${it.name}</b></div><div>${it.price} RT</div>`;
+    const btn = document.createElement('button'); btn.textContent = `Buy`;
+    btn.onclick = async ()=>{
+      try {
+        await j('POST', `${API}/api/kids/${kidId}/buy`, {itemId: it.id, qty: 1});
+        await refresh();
+      } catch(e) { alert(e.message); }
+    };
+    div.appendChild(btn); box.appendChild(div);
+  }
+}
+
+function renderBadges(){
+  const box = document.getElementById('badges'); box.innerHTML='';
+  for (const b of BADGES){
+    const div = document.createElement('div'); div.className='card';
+    div.innerHTML = `<div><b>${b.name}</b></div><div>Bonus ${b.bonus} RT</div>`;
+    const issue = document.createElement('button'); issue.textContent='Issue to kid';
+    issue.onclick = async ()=>{ await j('POST', `${API}/api/kids/${kidId}/issue`, {badgeId: b.id}); };
+    const redeem = document.createElement('button'); redeem.textContent='Redeem';
+    redeem.onclick = async ()=>{
+      try { await j('POST', `${API}/api/kids/${kidId}/redeem`, {badgeId: b.id}); await refresh(); }
+      catch(e){ alert(e.message); }
+    };
+    div.append(issue, redeem); box.appendChild(div);
+  }
+}
+
+document.getElementById('refresh').onclick = refresh;
+renderChores(); renderItems(); renderBadges(); loadKids();
+</script>
+</body>
+</html>

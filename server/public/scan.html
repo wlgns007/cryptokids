@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>CryptoKids Scanner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 16px; }
+      h1 { font-size: 20px; margin: 8px 0 12px; }
+      #reader { width: 100%; max-width: 420px; }
+      #status { margin-top: 12px; font-size: 14px; white-space: pre-wrap; }
+      .ok { color: #0a7; }
+      .err { color: #c00; }
+      label { display:block; margin-top: 16px; font-weight: 600; }
+      textarea { width: 100%; height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+      button { margin-top: 8px; padding: 10px 14px; }
+    </style>
+    <!-- Html5Qrcode library -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  </head>
+  <body>
+    <h1>CryptoKids Scanner</h1>
+
+    <div id="reader"></div>
+    <div id="status">Ready.</div>
+
+    <label>Paste token manually (fallback)</label>
+    <textarea id="tokenBox" placeholder="token from QR if camera not allowed"></textarea>
+    <button id="redeemBtn">Redeem Pasted Token</button>
+
+    <script src="/scan.js"></script>
+  </body>
+</html>

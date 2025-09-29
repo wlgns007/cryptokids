@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CryptoKids – Shop</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:16px;line-height:1.4}
+    .row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+    input,button{padding:10px;font-size:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:12px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:12px}
+    .name{font-weight:600}
+    .price{opacity:.7}
+    #qr{margin-top:14px}
+<div id="qr"></div>
+<div id="watchNote" style="display:none; margin-top:8px; font-size:14px; opacity:.8;">
+  Watching for approval… (auto-refreshing balance)
+</div>
+
+    #msg{margin-top:8px}
+  </style>
+</head>
+<body>
+  <h2>CryptoKids – Shop</h2>
+
+  <div class="row">
+    <input id="userId" placeholder="Your ID (e.g., leo)" />
+    <button id="loadItemsBtn">Load Items</button>
+
+  </div>
+
+<!-- ADD above your items list container -->
+<div id="shopEmpty" style="display:none; margin:12px 0; padding:12px; border:1px dashed #bbb; border-radius:10px;">
+  <div style="font-weight:600; margin-bottom:6px;">No RT to spend</div>
+  <div style="font-size:14px; line-height:1.4;">
+    You can still browse, but items you can’t afford are disabled. Earn RT first to unlock purchases.
+  </div>
+</div>
+
+  <div id="items" class="grid"></div>
+  <div id="msg"></div>
+  <div id="qr"></div>
+<!-- ADD: countdown line under the QR -->
+<div id="qrTimer" style="display:none; margin-top:6px; font-size:14px; opacity:.8;"></div>
+<div id="watchNote" style="display:none; margin-top:8px; font-size:14px; opacity:.8;">
+  Watching for approval… (auto-refreshing balance)
+</div>
+
+  <script src="/qrcode.min.js"></script>
+  <script src="/shop.js?v=1"></script>
+</body>
+</html>

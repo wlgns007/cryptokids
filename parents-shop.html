@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Parents Shop – RT + VC demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;padding:20px;max-width:720px;margin:auto}
+    h1{margin:0 0 12px} .row{display:flex;gap:8px;flex-wrap:wrap}
+    button,input{padding:8px 12px;font-size:14px} .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:12px 0}
+    .muted{color:#777} .mono{font-family:ui-monospace,Consolas}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+  <h1>Parents Shop</h1>
+  <div class="muted">Chain: Localhost 8545 (Hardhat). Use the parent account (deployer) in MetaMask.</div>
+
+  <div class="card">
+    <div class="row">
+      <button id="connect">Connect Wallet</button>
+      <div id="addr" class="mono"></div>
+    </div>
+    <div>RT balance: <b id="rtBal">–</b></div>
+  </div>
+
+  <div class="card">
+    <h3>Chores → RT</h3>
+    <div class="row">
+      <input id="mintAmt" type="number" step="0.1" value="5"/> 
+      <button id="mint">Mint RT to me (parent)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Parents Shop</h3>
+    <div class="muted">Item #1 price = 6 RT (from deploy script)</div>
+    <div class="row">
+      <button id="approve">Approve 6 RT</button>
+      <button id="buy">Buy item #1</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Badges (VC)</h3>
+    <div class="row">
+      <input id="badgeId" value="EARLY_BIRD_7" class="mono"/>
+      <button id="issue">Issue VC to me (parent)</button>
+      <button id="redeem">Redeem VC for bonus RT</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // === paste your current addresses here if you redeployed ===
+  const ADDRS = {
+    RewardToken: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    BadgeVC:     "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+    Kiosk:       "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+    ParentsShop: "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"  // or ParentsShop if you redeployed/renamed on-chain
+  };
+
+  // minimal ABIs (only what we call)
+  const RT_ABI   = ["function balanceOf(address) view returns (uint256)","function mint(address,uint256)","function approve(address,uint256)"];
+  const VC_ABI   = ["function issue(address,string)"];
+  const K_ABI    = ["function redeem(string)"];
+  const SHOP_ABI = ["function buy(uint256,uint256)"];
+
+  // helpers
+  const $   = id => document.getElementById(id);
+  const fmt = v => ethers.formatUnits(v, 18);
+  const U   = n => ethers.parseUnits(String(n), 18);
+  const norm= a => ethers.getAddress(String(a).trim());
+
+  // status line
+  const statusEl = document.createElement("div");
+  statusEl.className = "muted mono";
+  document.body.insertBefore(statusEl, document.body.firstChild);
+  const note = (msg) => statusEl.textContent = msg;
+
+  // wait for MM to inject on file://
+  async function getEthereum() {
+    if (window.ethereum) return window.ethereum;
+    await new Promise(res => {
+      window.addEventListener('ethereum#initialized', () => res(), { once: true });
+      setTimeout(res, 2500); // fallback
+    });
+    return window.ethereum;
+  }
+
+  async function ensureHardhat(eth) {
+    const HH = '0x7A69'; // 31337
+    try {
+      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: HH }] });
+    } catch (e) {
+      if (e.code === 4902) {
+        await eth.request({
+          method: 'wallet_addEthereumChain',
+          params: [{
+            chainId: HH,
+            chainName: 'Localhost 8545',
+            rpcUrls: ['http://127.0.0.1:8545'],
+            nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }
+          }]
+        });
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  let provider, signer, myAddr, rt, vc, kiosk, shop;
+
+  async function connect() {
+    try {
+      note("Looking for MetaMask…");
+      const eth = await getEthereum();
+      if (!eth) { alert("Install MetaMask"); return; }
+
+      note("Requesting wallet access…");
+      await eth.request({ method: 'eth_requestAccounts' });
+
+      note("Switching to Localhost 8545…");
+      await ensureHardhat(eth);
+
+      provider = new ethers.BrowserProvider(eth);
+      signer   = await provider.getSigner();
+      myAddr   = await signer.getAddress();
+
+      // contracts
+      rt    = new ethers.Contract(norm(ADDRS.RewardToken), RT_ABI, signer);
+      vc    = new ethers.Contract(norm(ADDRS.BadgeVC),     VC_ABI,   signer);
+      kiosk = new ethers.Contract(norm(ADDRS.Kiosk),       K_ABI,    signer);
+      shop  = new ethers.Contract(norm(ADDRS.ParentsShop),     SHOP_ABI, signer);
+
+      $("addr").textContent = myAddr;
+      $("connect").disabled = true;
+      $("connect").textContent = "Connected";
+      await refreshBal();
+      note(""); // clear
+    } catch (e) {
+      console.error(e);
+      note(`Connect failed: ${e.message || e}`);
+      // If nothing pops up, click the MetaMask fox icon — the prompt may be waiting there.
+    }
+  }
+
+  async function refreshBal() {
+    if (!rt || !myAddr) return;
+    $("rtBal").textContent = fmt(await rt.balanceOf(myAddr));
+  }
+
+  $("connect").onclick = connect;
+
+  $("mint").onclick = async ()=>{
+    try {
+      const amt = $("mintAmt").value || "5";
+      await (await rt.mint(myAddr, U(amt))).wait();
+      await refreshBal();
+    } catch (e) { alert(e.message || e); }
+  };
+
+  $("approve").onclick = async ()=>{
+    try {
+      await (await rt.approve(norm(ADDRS.ParentsShop), U(6))).wait();
+      await refreshBal();
+    } catch (e) { alert(e.message || e); }
+  };
+
+  $("buy").onclick = async ()=>{
+    try {
+      await (await shop.buy(1, 1)).wait();
+      await refreshBal();
+    } catch (e) { alert(e.message || e); }
+  };
+
+  $("issue").onclick = async ()=>{
+    try {
+      const id = $("badgeId").value.trim();
+      await (await vc.issue(myAddr, id)).wait();
+      alert("VC issued: " + id);
+    } catch (e) { alert(e.message || e); }
+  };
+
+  $("redeem").onclick = async ()=>{
+    try {
+      const id = $("badgeId").value.trim();
+      await (await kiosk.redeem(id)).wait();
+      await refreshBal();
+    } catch (e) { alert(e.message || e); }
+  };
+})();
+</script>
