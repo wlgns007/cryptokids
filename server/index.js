@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 import fs from "node:fs";
+const DATA_DIR   = process.env.DATA_DIR   || '/data';
+const UPLOAD_DIR = process.env.UPLOAD_DIR || `${DATA_DIR}/uploads`;
+const DB_PATH    = process.env.DB_PATH    || `${DATA_DIR}/ck.sqlite`;
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 import multer from "multer";
 
@@ -15,9 +18,6 @@ import multer from "multer";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-const DATA_DIR = process.env.DATA_DIR || '/data';
-const UPLOAD_DIR = process.env.UPLOAD_DIR || `${DATA_DIR}/uploads`;
-const DB_PATH = process.env.DB_PATH || `${DATA_DIR}/ck.sqlite`;
 const PORT          = process.env.PORT || 4000;
 const DB_FILE       = process.env.DB_FILE || path.join(__dirname, "parentshop.db");
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
@@ -35,9 +35,9 @@ app.use(express.json({ limit: '2mb' })); // allow image data-url payload
 
 // static: serve /public (admin.html, child.html, admin.js, qrcode libs, etc.)
 const PUBLIC_DIR = path.join(__dirname, "public");
-const UPLOAD_DIR = path.join(PUBLIC_DIR, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(PUBLIC_DIR, { maxAge: '1h' }));
+app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y', fallthrough: true }));
 
 // Image upload (1 MB max, images only) -> files go into /public/uploads
 const storage = multer.diskStorage({
@@ -89,7 +89,7 @@ function requireAdminKey(req, res, next) {
 }
 
 // ===== DB init & helpers =====
-const db = new Database(DB_FILE);
+const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
 function ensureSchema() {
@@ -275,18 +275,17 @@ if (!ok.startsWith('image/')) {
   const buf = Buffer.from(b64, "base64");
   const outExt = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" })[mime] || "png";
 
-  // content-hash filename
+  // content-hash filename (write into disk-backed UPLOAD_DIR)
   const digest  = crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
   const fname   = `rw_${digest}.${outExt}`;
-  const fileDir = path.join(PUBLIC_DIR, "uploads");
-  const filePath = path.join(fileDir, fname);
-  if (!fs.existsSync(fileDir)) fs.mkdirSync(fileDir, { recursive: true });
+  const filePath = path.join(UPLOAD_DIR, fname);   // <- use UPLOAD_DIR + fname
 
   const existed = fs.existsSync(filePath);
   if (!existed) fs.writeFileSync(filePath, buf);
 
   console.log(`[ck] upload64 ${fname} ${existed ? "(dedup: existed)" : "(new)"}`);
   return res.json({ url: `/uploads/${fname}` });
+
 });
 
 // hard block old uploader to prevent random duplicate files
