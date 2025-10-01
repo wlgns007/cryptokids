@@ -228,6 +228,29 @@ function applyDelta(userId, delta, reason, kind, nonce, meta = null) {
 // ===== routes =====
 app.get("/version", (_req, res) => res.json({ build: BUILD }));
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
+// === Earn templates (admin-configured) ===
+// Example static; later wire to your DB/Admin UI
+app.get('/api/earn-templates', async (req, res) => {
+  // TODO: fetch from DB "earn_templates" table
+  const templates = [
+    { id: 'tid_homework', label: 'Homework done', amount: 2 },
+    { id: 'tid_cleanroom', label: 'Cleaned room', amount: 1 },
+    { id: 'tid_reading',  label: 'Reading 20min', amount: 1 },
+  ];
+  res.json(templates);
+});
+
+// === Rewards (shop) listing ===
+app.get('/api/rewards', (_req, res) => {
+  const items = listRewards().map(r => ({
+    id:   r.id,
+    title: r.name,
+    price: r.price,
+    imageUrl: r.image_url || '',
+    desc: r.description || ''
+  }));
+  res.json(items);
+});
 
 // Mint signed QR (admin)
 app.post('/earn', requireAdminKey, (req, res) => {

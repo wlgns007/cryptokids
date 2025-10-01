@@ -30,6 +30,8 @@
 </section>
 
 <script src="https://unpkg.com/jsqr"></script>
+<!-- add just below jsqr -->
+<script src="/qrcode.min.js"></script>
 <script>
   (function () {
     const btn = document.getElementById('btnScan');
@@ -123,6 +125,43 @@
   <label><input id="fltEarn" type="checkbox" checked> Show Earn</label>
   <label><input id="fltSpend" type="checkbox" checked> Show Spend</label>
   <span id="totals" style="opacity:.8;"></span>
+</div>
+
+<!-- === Shop (merged from shop.html) === -->
+<section id="secShop" class="card">
+  <h2>Shop</h2>
+  <div class="toolbar">
+    <button id="btnLoadShop">Load items</button>
+    <label style="margin-left:12px;">
+      <input type="checkbox" id="toggleShowUrls"> show image URLs
+    </label>
+  </div>
+  <div id="shopList" class="list"></div>
+  <p id="shopEmpty" style="display:none;">No items yet.</p>
+  <!-- add inside the Shop section, after #shopEmpty -->
+  <div id="shopQrBox" class="qrbox" style="margin-top:10px;"></div>
+</section>
+<!-- === Earn Points === -->
+<section id="secEarn" class="card">
+  <h2>Earn Points</h2>
+  <div class="row">
+    <label>Choose task:</label>
+    <select id="earnTemplate"></select>
+  </div>
+  <div class="row">
+    <button id="btnEarnQr">Generate Earn QR</button>
+  </div>
+  <div id="earnQrBox" class="qrbox"></div>
+</section>
+
+<!-- Modal-ish confirm for buying -->
+<div id="buyConfirm" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h3 id="buyTitle">Confirm purchase</h3>
+    <p id="buyDesc"></p>
+    <button id="btnBuyNow">Buy</button>
+    <button id="btnBuyCancel">Cancel</button>
+  </div>
 </div>
 
   <div id="historyBox"></div>
@@ -304,6 +343,84 @@ $('btnHistory').onclick = async () => {
     const saved = localStorage.getItem('ck_kidId');
     if(saved){ kid.value = saved; }
   })();
+  // --- Shop state ---
+let SHOP_ITEMS = [];
+let PENDING_ITEM = null;
+
+async function loadShop() {
+  const res = await fetch('/api/rewards');          // expects [{id,title,price,imageUrl,desc}]
+  const items = await res.json();
+  SHOP_ITEMS = items || [];
+  renderShop();
+}
+
+function renderShop() {
+  const list = $('shopList');
+  const empty = $('shopEmpty');
+  list.innerHTML = '';
+  if (!SHOP_ITEMS.length) { empty.style.display = ''; return; }
+  empty.style.display = 'none';
+
+  const showUrls = $('toggleShowUrls')?.checked;
+  for (const it of SHOP_ITEMS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <img src="${it.imageUrl || ''}" alt="" class="thumb" />
+      <div class="col">
+        <div class="title">${it.title} — <b>${it.price}</b> RT</div>
+        <div class="desc">${it.desc || ''}</div>
+        ${showUrls && it.imageUrl ? `<div class="url">${it.imageUrl}</div>` : ''}
+      </div>
+      <div class="col actions">
+        <button data-id="${it.id}" class="btnBuy">Buy</button>
+      </div>
+    `;
+    list.appendChild(row);
+  }
+
+  list.querySelectorAll('.btnBuy').forEach(btn => {
+    btn.addEventListener('click', () => openBuyConfirm(btn.dataset.id));
+  });
+}
+
+function openBuyConfirm(id) {
+  PENDING_ITEM = SHOP_ITEMS.find(x => String(x.id) === String(id)) || null;
+  if (!PENDING_ITEM) return;
+  $('buyTitle').textContent = 'Confirm purchase';
+  $('buyDesc').textContent  = `${PENDING_ITEM.title} — ${PENDING_ITEM.price} RT`;
+  $('buyConfirm').style.display = 'block';
+}
+function closeBuyConfirm() {
+  $('buyConfirm').style.display = 'none';
+  PENDING_ITEM = null;
+}
+
+// BUY = generate a QR that admin will scan to redeem (will change to “pending” flow in Step 3)
+
+async function buyNowGenerateQr() {
+  if (!PENDING_ITEM) return;
+  const userId = $('userId').value.trim();     // ← use #userId (exists)
+  if (!userId) { alert('Missing user id'); return; }
+
+  const res = await fetch('/shop/mintSpend', { // ← new route (matches index.js)
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ userId, rewardId: PENDING_ITEM.id }) // ← rewardId, not itemId
+  });
+  const j = await res.json();
+  if (!res.ok) { alert(j.error || 'Failed to mint'); return; }
+
+  closeBuyConfirm();
+  // show the QR for parent/admin to scan
+  renderQrInto('shopQrBox', j.url);            // ← use existing QR helper/box
+}
+
+$('btnLoadShop')?.addEventListener('click', loadShop);
+$('toggleShowUrls')?.addEventListener('change', renderShop);
+$('btnBuyNow')?.addEventListener('click', buyNowGenerateQr);
+$('btnBuyCancel')?.addEventListener('click', closeBuyConfirm);
+
 </script>
 
 </body>
