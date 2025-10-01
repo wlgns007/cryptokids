@@ -1,7 +1,6 @@
 // index.js — CryptoKids / Parents Shop API (ESM)
 // Node 22+
 // npm i express better-sqlite3
-
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +35,16 @@ app.use(express.json({ limit: '2mb' })); // allow image data-url payload
 // static: serve /public (admin.html, child.html, admin.js, qrcode libs, etc.)
 const PUBLIC_DIR = path.join(__dirname, "public");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use(express.static(PUBLIC_DIR, { maxAge: '1h' }));
+// static: serve /public (admin.html, child.html, etc.) — don't cache HTML
+app.use(express.static(PUBLIC_DIR, {
+  maxAge: '1h',
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-store'); // always fetch fresh HTML
+    }
+  }
+}));
+
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y', fallthrough: true }));
 
 // Image upload (1 MB max, images only) -> files go into /public/uploads
@@ -92,6 +100,14 @@ function requireAdminKey(req, res, next) {
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
+function getRewardById(id) {
+  return db.prepare(`
+    SELECT id, name, price, description, image_url
+    FROM rewards
+    WHERE id = ? AND active = 1
+  `).get(Number(id));
+}
+
 function ensureSchema() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS balances (
@@ -128,15 +144,22 @@ function ensureSchema() {
 ensureSchema();
 // === Rewards table (Parents Shop) ===
 // Schema: rewards(id, name, price, active)
-
+// Spend requests (child buy -> admin scan -> HOLD -> Given)
 db.exec(`
-  CREATE TABLE IF NOT EXISTS rewards (
-    id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    name   TEXT NOT NULL,
-    price  INTEGER NOT NULL CHECK(price > 0),
-    active INTEGER NOT NULL DEFAULT 1
+  CREATE TABLE IF NOT EXISTS spend_requests (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    token     TEXT UNIQUE NOT NULL,
+    userId    TEXT NOT NULL,
+    itemId    TEXT NOT NULL,
+    status    TEXT NOT NULL DEFAULT 'pending',  -- pending|hold|given|canceled
+    price     INTEGER,
+    title     TEXT,
+    imageUrl  TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT
   );
 `);
+
 
 // ADD: one-time migration for image_url on rewards
 {
@@ -151,6 +174,97 @@ const cols = db.prepare(`PRAGMA table_info(rewards)`).all();
 if (!cols.some(c => c.name === 'description')) {
   db.exec(`ALTER TABLE rewards ADD COLUMN description TEXT DEFAULT ''`);
 }
+
+// NEW: admin scans the QR -> debit immediately, mark as HOLD (no timer)
+app.get('/admin/scan/spend/:token', (req, res) => {
+  try {
+    const { token } = req.params;
+    const row = db.prepare(`SELECT * FROM spend_requests WHERE token = ?`).get(token);
+    if (!row) return res.status(404).send('Invalid or already used QR.');
+
+    if (row.status === 'hold' || row.status === 'given') {
+      return res.send(`<html><body style="font-family:sans-serif">
+        <h2>Already processed</h2>
+        <p>User <b>${row.userId}</b> • <b>${row.title || 'Item'}</b> • ${row.price || '?' } RT</p>
+        <p>Status: <b>${row.status}</b></p>
+      </body></html>`);
+    }
+
+    const bal = getBalance(row.userId); // sync helper
+    if (bal < row.price) {
+      return res.send(`<html><body style="font-family:sans-serif;color:#b00">
+        <h2>Insufficient funds</h2>
+        <p>Needs ${row.price} RT, current balance ${bal} RT.</p>
+      </body></html>`);
+    }
+
+    db.prepare(`UPDATE spend_requests SET status='hold', updatedAt=datetime('now') WHERE token=?`).run(token);
+
+    // ledger entry: debit now, marked as HOLD
+    addLedger({
+      userId: row.userId,
+      delta: -Number(row.price),
+      reason: 'spend_hold',
+      kind: 'spend',
+      meta: { itemId: row.itemId, title: row.title, token }
+    });
+
+    return res.send(`<html><body style="font-family:sans-serif">
+      <h2>Held for pickup</h2>
+      <p>Child <b>${row.userId}</b></p>
+      <p>Item <b>${row.title || 'Reward'}</b> • ${row.price || '?'} RT</p>
+      <p>Status: <b>HOLD</b>. Mark as "Given" later in Admin → Holds.</p>
+    </body></html>`);
+  } catch (e) {
+    console.error('scan spend error', e);
+    return res.status(500).send('Server error');
+  }
+});
+
+app.get('/api/admin/holds', (req, res) => {
+  const { userId } = req.query || {};
+  const stmt = userId
+    ? db.prepare(`SELECT * FROM spend_requests WHERE status='hold' AND userId=? ORDER BY updatedAt DESC`)
+    : db.prepare(`SELECT * FROM spend_requests WHERE status='hold' ORDER BY updatedAt DESC`);
+  const rows = userId ? stmt.all(String(userId)) : stmt.all();
+  res.json(rows || []);
+});
+
+// NEW: mark hold as given
+app.post('/api/admin/holds/given', express.json(), (req, res) => {
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ error: 'bad_request' });
+
+  const row = db.prepare(`SELECT * FROM spend_requests WHERE token=?`).get(String(token));
+  if (!row || row.status !== 'hold') return res.status(404).json({ error: 'not_found_or_not_hold' });
+
+  db.prepare(`UPDATE spend_requests SET status='given', updatedAt=datetime('now') WHERE token=?`).run(String(token));
+
+  // optional: ledger marker (no balance change)
+  addLedger({
+    userId: row.userId,
+    delta: 0,
+    reason: 'spend_given',
+    kind: 'spend',
+    meta: { itemId: row.itemId, title: row.title, token }
+  });
+
+  res.json({ ok: true });
+});
+
+
+    // simple confirmation page for admin (no approve links)
+    return res.send(`<html><body style="font-family:sans-serif">
+      <h2>Held for pickup</h2>
+      <p>Child <b>${row.userId}</b></p>
+      <p>Item <b>${row.title || 'Reward'}</b> • ${row.price || '?'} RT</p>
+      <p>Status: <b>HOLD</b>. Mark as "Given" later in Admin → Holds.</p>
+      </body></html>`);
+  } catch (e) {
+    console.error('scan spend error', e);
+    return res.status(500).send('Server error');
+  }
+});
 
 // Prepared statements
 const listRewardsStmt = db.prepare(`
@@ -376,45 +490,31 @@ app.post("/s/approve", express.urlencoded({ extended: false }), (req, res) => {
 });
 
 // Shop: mint a spend token (no admin key; parent approval happens by scanning)
-app.post("/shop/mintSpend", (req, res) => {
-  const userIdRaw = req.body?.userId;
-  const rewardId  = req.body?.rewardId;
-  if (!userIdRaw || !rewardId) return res.status(400).json({ error: "Missing userId/rewardId" });
+app.post('/shop/mintSpend', (req, res) => {
+  try {
+    const { userId, rewardId } = req.body || {};
+    if (!userId || !rewardId) return res.status(400).json({ error: 'bad_request' });
 
-  const userId = normId(userIdRaw);
+    const r = getRewardById(rewardId);
+    if (!r) return res.status(404).json({ error: 'reward_not_found' });
 
-  const reward = db.prepare(
-    `SELECT id, name, price FROM rewards WHERE id = ? AND active = 1`
-  ).get(Number(rewardId));
-  if (!reward) return res.status(404).json({ error: "REWARD_NOT_FOUND" });
+    const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
 
-  const current = getBalance(userId);
-  if (current < reward.price) {
-    return res.status(400).json({ error: "INSUFFICIENT_FUNDS", balance: current, price: reward.price });
+    db.prepare(`
+      INSERT INTO spend_requests (token,userId,itemId,status,price,title,imageUrl,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))
+    `).run(token, String(userId), String(rewardId), 'pending', r.price, r.name, r.image_url || null);
+
+    const scanPath = `/admin/scan/spend/${token}`;
+    const host  = req.headers["x-forwarded-host"]  || req.headers.host;
+    const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+    const absolute = `${proto}://${host}${scanPath}`;
+
+    res.json({ url: absolute, token });
+  } catch (e) {
+    console.error('mintSpend error', e);
+    res.status(500).json({ error: 'server_error' });
   }
-
-  const payload = {
-    v: 1,
-    kind:  "spend",
-    userId,                                   // normalized
-    price: Math.floor(reward.price),
-    item:  reward.name.slice(0, 120),
-    exp:   nowSec() + (5 * 60),
-    n:     crypto.randomUUID(),
-  };
-
-  const payloadStr = JSON.stringify(payload);
-  const token = `${b64url.enc(payloadStr)}.${sign(payloadStr)}`;
-
-  const host  = req.headers["x-forwarded-host"] || req.headers.host;
-  const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
-  const url   = `${proto}://${host}/s/${token}`;
-
-  res.json({
-    url,
-    expiresAt: payload.exp,
-    payload: { userId: payload.userId, item: reward.name, price: reward.price }
-  });
 });
 
 
