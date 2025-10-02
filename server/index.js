@@ -373,6 +373,44 @@ app.get('/api/rewards', (_req, res) => {
   }));
   res.json(items);
 });
+// Example earn templates (pre-made tasks kids can pick)
+// Later we can store these in SQLite; for now, static is fine.
+app.get('/api/earn-templates', (_req, res) => {
+  res.json([
+    { id: 'tid_homework',  label: 'Homework done',      amount: 2 },
+    { id: 'tid_cleanroom', label: 'Cleaned room',       amount: 1 },
+    { id: 'tid_reading',   label: 'Reading 20 minutes', amount: 1 },
+    { id: 'tid_dishes',    label: 'Helped with dishes', amount: 1 },
+    { id: 'tid_math',      label: 'Math practice (15m)',amount: 1 }
+  ]);
+});
+
+// /qr/earn — child picks multiple tasks -> admin scan approves -> credit
+app.post('/qr/earn', express.json(), (req, res) => {
+  const { userId, templateIds } = req.body || {};
+  if (!userId || !Array.isArray(templateIds) || !templateIds.length) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+
+  // map ids -> amounts from your earn_templates store
+  // Example: if you keep templates in memory; else fetch from DB
+  const tplById = Object.fromEntries((earnTemplates() || []).map(t => [String(t.id), t]));
+  const items = templateIds.map(id => tplById[String(id)]).filter(Boolean);
+  const total = items.reduce((s, t) => s + Number(t.amount || 0), 0);
+  if (!total) return res.status(400).json({ error: 'invalid_templates' });
+
+  const token = crypto.randomUUID().replace(/-/g,'').slice(0,24);
+  db.prepare(`
+    INSERT INTO earn_requests (token,userId,templates_json,amount,status,createdAt)
+    VALUES (?,?,?,?, 'pending', datetime('now'))
+  `).run(token, String(userId), JSON.stringify(templateIds), total);
+
+  const host  = req.headers["x-forwarded-host"]  || req.headers.host;
+  const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+  const absolute = `${proto}://${host}/admin/scan/earn/${token}`;
+
+  res.json({ qrUrl: absolute, token, amount: total });
+});
 
 // Mint signed QR (admin)
 app.post('/earn', requireAdminKey, (req, res) => {
