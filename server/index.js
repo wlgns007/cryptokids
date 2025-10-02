@@ -2,14 +2,19 @@
 // Node 22+
 // npm i express better-sqlite3
 import express from "express";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import Database from "better-sqlite3";
+// REPLACE the existing better-sqlite3 import with this:
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const Database = require('better-sqlite3');
 import fs from "node:fs";
-const DATA_DIR   = process.env.DATA_DIR   || '/data';
+import path from "node:path";
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
 const UPLOAD_DIR = process.env.UPLOAD_DIR || `${DATA_DIR}/uploads`;
-const DB_PATH    = process.env.DB_PATH    || `${DATA_DIR}/ck.sqlite`;
+const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'cryptokids.db');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 import multer from "multer";
 
@@ -142,6 +147,20 @@ function ensureSchema() {
   db.prepare(`UPDATE ledger   SET created_at = ? WHERE created_at = 0`).run(nowSec());
 }
 ensureSchema();
+// Ensure rewards table exists (before PRAGMA or COUNT on rewards)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS rewards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    price INTEGER NOT NULL,
+    description TEXT DEFAULT '',
+    image_url TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    createdAt TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+
 // === Rewards table (Parents Shop) ===
 // Schema: rewards(id, name, price, active)
 // Spend requests (child buy -> admin scan -> HOLD -> Given)
@@ -173,6 +192,17 @@ db.exec(`
 const cols = db.prepare(`PRAGMA table_info(rewards)`).all();
 if (!cols.some(c => c.name === 'description')) {
   db.exec(`ALTER TABLE rewards ADD COLUMN description TEXT DEFAULT ''`);
+}
+
+// seed a few rewards locally if table is empty
+const count = db.prepare(`SELECT COUNT(*) AS c FROM rewards`).get().c;
+if (!count) {
+  const seed = db.prepare(`
+    INSERT INTO rewards (name, price, description, image_url, active)
+    VALUES (?, ?, ?, ?, 1)
+  `);
+  seed.run('Ice Cream', 5, 'One scoop', '');
+  seed.run('30 min Screen Time', 10, 'Extra screen time', '');
 }
 
 // NEW: admin scans the QR -> debit immediately, mark as HOLD (no timer)
@@ -240,15 +270,6 @@ app.post('/api/admin/holds/given', express.json(), (req, res) => {
   if (!row || row.status !== 'hold') return res.status(404).json({ error: 'not_found_or_not_hold' });
 
   db.prepare(`UPDATE spend_requests SET status='given', updatedAt=datetime('now') WHERE token=?`).run(String(token));
-
-  // optional: ledger marker (no balance change)
-  addLedger({
-    userId: row.userId,
-    delta: 0,
-    reason: 'spend_given',
-    kind: 'spend',
-    meta: { itemId: row.itemId, title: row.title, token }
-  });
 
   res.json({ ok: true });
 });
