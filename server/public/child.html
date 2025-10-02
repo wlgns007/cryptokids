@@ -18,12 +18,40 @@
     input,button{padding:8px;font-size:16px}
     #historyBox{margin-top:12px;border:1px solid #ddd;padding:8px;border-radius:8px;max-width:640px}
     .tx{padding:6px 0;border-bottom:1px dashed #eee}
+/* make first card sit flush at the top, and all H2s align left */
+.card:first-of-type { margin-top: 0 !important; }
+h2 { margin-left: 0 !important; }
+
   </style>
+  <!-- ADD into <head> ... </head> in child.html -->
+  <style>
+    /* Shop thumbnails */
+    #secShop .row {
+      display: grid;
+      grid-template-columns: 96px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #eee;
+    }
+    #secShop .thumb {
+      width: 96px;
+      height: 96px;
+      object-fit: cover;       /* center-crop big images */
+      border-radius: 12px;
+      display: block;
+    }
+    #secShop .title { font-weight: 600; }
+    #secShop .desc  { font-size: 0.92rem; opacity: 0.8; }
+    #secShop .url   { font-size: 0.8rem; word-break: break-all; opacity: 0.7; }
+    #secShop .actions button { padding: 6px 10px; border-radius: 10px; }
+  </style>
+
 </head>
 <body>
-<section class="card" style="margin:16px">
-  <h2 style="margin:0 0 10px 0;">Scan Earn QR</h2>
-  <button id="btnScan" style="padding:10px 14px;border:1px solid #ddd;border-radius:10px;background:#fff">Start Camera</button>
+<section class="card">
+  <h2 style="margin-left:0">Scan Earn QR</h2>
+  <button id="btnScan" style="padding:8px 14px;border:1px solid #ddd;border-radius:8px;background:#fff">Start Camera</button>
   <video id="vid" playsinline style="width:100%;max-width:420px;border-radius:12px;margin-top:10px;display:none"></video>
   <canvas id="cv" style="display:none"></canvas>
   <div id="scanMsg" class="help" style="min-height:18px;margin-top:8px"></div>
@@ -109,7 +137,7 @@
   })();
 </script>
 
-  <h2>CryptoKids – Child</h2>
+  <h2>CryptoKids – Balance</h2>
 
   <div class="row">
     <input id="userId" placeholder="User ID (e.g., leo)" />
@@ -172,14 +200,6 @@
       Ask a parent to give you a task and scan the Earn QR to get started.
     </div>
   </div>
-<section class="card" style="margin:16px">
-  <h2 style="margin:0 0 10px 0;">My Balance</h2>
-  <div style="display:flex;gap:8px;align-items:center">
-    <input id="kidId" type="text" placeholder="Enter your ID (e.g., leo)" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:8px">
-    <button id="btnBal" style="padding:8px 12px;border:1px solid #ddd;border-radius:8px;background:#fff">Check</button>
-  </div>
-  <div id="balMsg" class="help" style="margin-top:8px;min-height:18px"></div>
-</section>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -321,28 +341,7 @@ $('btnHistory').onclick = async () => {
   </script>
 
 <script>
-  (function(){
-    const kid = document.getElementById('kidId');
-    const btn = document.getElementById('btnBal');
-    const msg = document.getElementById('balMsg');
-    function say(s){ msg.textContent = s; }
-    async function check(){
-      const id = (kid.value||'').trim();
-      if(!id) return say('Enter your ID.');
-      try{
-        say('Loading…');
-        const r = await fetch('/balance/'+encodeURIComponent(id));
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        const j = await r.json();
-        say('Balance: '+ (j.balance ?? '?'));
-        localStorage.setItem('ck_kidId', id);
-      }catch(e){ say('Failed to load balance.'); }
-    }
-    btn?.addEventListener('click', check);
-    // auto-fill saved ID
-    const saved = localStorage.getItem('ck_kidId');
-    if(saved){ kid.value = saved; }
-  })();
+
   // --- Shop state ---
 let SHOP_ITEMS = [];
 let PENDING_ITEM = null;
@@ -424,5 +423,16 @@ $('btnBuyCancel')?.addEventListener('click', closeBuyConfirm);
 </script>
 <!-- load child behavior (shop + earn). bump v when you change the file -->
 <script src="/child.js?v=ck8"></script>
+<script>
+  // Remove any section that renders a "My Balance" heading (in case a legacy script injects it)
+  window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('h2').forEach(h => {
+      if (h.textContent.trim() === 'My Balance') {
+        const sec = h.closest('section') || h.parentElement;
+        if (sec) sec.remove();
+      }
+    });
+  });
+</script>
 </body>
 </html>
