@@ -176,10 +176,11 @@ if (!cols.some(c => c.name === 'description')) {
 }
 
 // NEW: admin scans the QR -> debit immediately, mark as HOLD (no timer)
+// Admin scans QR -> debit now and set HOLD (no timer/approve link)
 app.get('/admin/scan/spend/:token', (req, res) => {
   try {
     const { token } = req.params;
-    const row = db.prepare(`SELECT * FROM spend_requests WHERE token = ?`).get(token);
+    const row = db.prepare(`SELECT * FROM spend_requests WHERE token = ?`).get(String(token));
     if (!row) return res.status(404).send('Invalid or already used QR.');
 
     if (row.status === 'hold' || row.status === 'given') {
@@ -190,7 +191,7 @@ app.get('/admin/scan/spend/:token', (req, res) => {
       </body></html>`);
     }
 
-    const bal = getBalance(row.userId); // sync helper
+    const bal = getBalance(row.userId);
     if (bal < row.price) {
       return res.send(`<html><body style="font-family:sans-serif;color:#b00">
         <h2>Insufficient funds</h2>
@@ -198,9 +199,8 @@ app.get('/admin/scan/spend/:token', (req, res) => {
       </body></html>`);
     }
 
-    db.prepare(`UPDATE spend_requests SET status='hold', updatedAt=datetime('now') WHERE token=?`).run(token);
+    db.prepare(`UPDATE spend_requests SET status='hold', updatedAt=datetime('now') WHERE token=?`).run(String(token));
 
-    // ledger entry: debit now, marked as HOLD
     addLedger({
       userId: row.userId,
       delta: -Number(row.price),
@@ -220,6 +220,7 @@ app.get('/admin/scan/spend/:token', (req, res) => {
     return res.status(500).send('Server error');
   }
 });
+
 
 app.get('/api/admin/holds', (req, res) => {
   const { userId } = req.query || {};
@@ -250,20 +251,6 @@ app.post('/api/admin/holds/given', express.json(), (req, res) => {
   });
 
   res.json({ ok: true });
-});
-
-
-    // simple confirmation page for admin (no approve links)
-    return res.send(`<html><body style="font-family:sans-serif">
-      <h2>Held for pickup</h2>
-      <p>Child <b>${row.userId}</b></p>
-      <p>Item <b>${row.title || 'Reward'}</b> • ${row.price || '?'} RT</p>
-      <p>Status: <b>HOLD</b>. Mark as "Given" later in Admin → Holds.</p>
-      </body></html>`);
-  } catch (e) {
-    console.error('scan spend error', e);
-    return res.status(500).send('Server error');
-  }
 });
 
 // Prepared statements
