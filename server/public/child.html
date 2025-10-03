@@ -103,10 +103,64 @@
       cursor: pointer;
     }
 
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
+</head>
+<body>
+  <!-- ck11 -->
+<section class="card">
+  <h2 style="margin-left:0">Scan Earn QR</h2>
+  <button id="btnScan" style="padding:8px 14px;border:1px solid #ddd;border-radius:8px;background:#fff">Start Camera</button>
+  <video id="vid" playsinline style="width:100%;max-width:420px;border-radius:12px;margin-top:10px;display:none"></video>
+  <canvas id="cv" style="display:none"></canvas>
+  <div id="scanMsg" class="help" style="min-height:18px;margin-top:8px"></div>
+</section>
+
+<script src="https://unpkg.com/jsqr"></script>
+<!-- add just below jsqr -->
+<script src="/qrcode.min.js"></script>
+<script>
+  (function () {
+    const btn = document.getElementById('btnScan');
+    const vid = document.getElementById('vid');
+    const cv  = document.getElementById('cv');
+    const ctx = cv.getContext('2d');
+    const msg = document.getElementById('scanMsg');
+    let stream = null, raf = 0, busy = false;
+
+    function say(s){ msg.textContent = s; }
+    function secureOk(){
+      if (location.protocol === 'https:' || location.hostname === 'localhost') return true;
+      return false;
+    }
+
+    async function start() {
+      if (!secureOk()) {
+        say('Camera requires HTTPS. Open the ngrok https://… URL.');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        say('Camera API not available in this browser.');
+        return;
+      }
+      try {
+        // Try back camera; fall back to any camera
+        const try1 = { video: { facingMode: { ideal: 'environment' } } };
+        const try2 = { video: true };
+
+        try { stream = await navigator.mediaDevices.getUserMedia(try1); }
+        catch { stream = await navigator.mediaDevices.getUserMedia(try2); }
+
+        vid.srcObject = stream;
+        vid.style.display = 'block';
+        await vid.play();
+        say('Point the camera at the QR code.');
+        tick();
+      } catch (e) {
+        const name = e && e.name || '';
+        if (name === 'NotAllowedError') say('Camera permission denied. Check site permissions in your browser settings.');
+        else if (name === 'NotFoundError') say('No camera found.');
+        else if (name === 'NotReadableError') say('Camera in use by another app.');
+        else say('Camera blocked or unavailable.');
+      }
     }
 
     #historyList {
