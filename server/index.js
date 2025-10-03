@@ -23,7 +23,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 const PORT          = process.env.PORT || 4000;
-const DB_FILE       = process.env.DB_FILE || path.join(__dirname, "parentshop.db");
+const _DB_FILE       = process.env.DB_FILE || path.join(__dirname, "parentshop.db");
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY     = (process.env.ADMIN_KEY || "adminkey").trim();
 // ADD (dev only): show which key is active (masked)
@@ -63,7 +63,7 @@ const storage = multer.diskStorage({
   },
 });
 
-const uploadAny = multer({
+const _uploadAny = multer({
   storage,
   limits: { fileSize: 1 * 1024 * 1024 }, // 1 MB
   fileFilter: (_req, file, cb) => {
