@@ -16,14 +16,13 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const UPLOAD_DIR = process.env.UPLOAD_DIR || `${DATA_DIR}/uploads`;
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'cryptokids.db');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-import multer from "multer";
 
 // ===== config =====
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 const PORT          = process.env.PORT || 4000;
-const _DB_FILE       = process.env.DB_FILE || path.join(__dirname, "parentshop.db");
+//const DB_FILE       = process.env.DB_FILE || path.join(__dirname, "parentshop.db");
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY     = (process.env.ADMIN_KEY || "adminkey").trim();
 // ADD (dev only): show which key is active (masked)
@@ -51,25 +50,6 @@ app.use(express.static(PUBLIC_DIR, {
 }));
 
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1y', fallthrough: true }));
-
-// Image upload (1 MB max, images only) -> files go into /public/uploads
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const ext = (file.originalname || "").split(".").pop()?.toLowerCase() || "bin";
-    const safeExt = ext.replace(/[^a-z0-9]/g, "") || "bin";
-    const name = `rw_${Date.now()}_${Math.random().toString(36).slice(2,8)}.${safeExt}`;
-    cb(null, name);
-  },
-});
-
-const _uploadAny = multer({
-  storage,
-  limits: { fileSize: 1 * 1024 * 1024 }, // 1 MB
-  fileFilter: (_req, file, cb) => {
-    cb(/^image\/(png|jpe?g|webp|gif)$/i.test(file.mimetype) ? null : new Error("Only PNG/JPG/WebP/GIF allowed"));
-  },
-}).any(); // <-- accept ANY field name
 
 // make req.protocol honor X-Forwarded-Proto (needed for ngrok => https)
 app.set('trust proxy', 1);
@@ -530,15 +510,6 @@ if (!ok.startsWith('image/')) {
 app.post("/admin/upload-image", requireAdminKey, (_req, res) => {
   return res.status(410).json({ error: "DEPRECATED — use /admin/upload-image64" });
 });
-
-// Multer error handler (keeps JSON shape)
-app.use((err, _req, res, next) => {
-  if (err && (err.name === "MulterError" || (err.message && err.message.startsWith("Only ")))) {
-    return res.status(400).json({ error: err.message });
-  }
-  return next(err);
-});
-
 
 // ADD: apply the spend after explicit approval
 app.post("/s/approve", express.urlencoded({ extended: false }), (req, res) => {

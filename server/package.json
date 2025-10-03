@@ -2,11 +2,13 @@
   "name": "cryptokids",
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
+ "scripts": {
   "start": "node server/index.js",
   "dev": "node --watch server/index.js",
-  "test": "echo \"Error: no test specified\" && exit 1"
-  "format": "prettier -w ."
+  "test": "echo \"Error: no test specified\" && exit 1",
+  "format": "prettier -w .",
+  "lint": "eslint . --config ./eslint.config.mjs",
+  "lint:fix": "eslint . --fix --config ./eslint.config.mjs"
 },
   "dependencies": {
     "better-sqlite3": "^12.4.1",

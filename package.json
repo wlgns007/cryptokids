@@ -6,7 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "lint": "eslint . --config ./eslint.config.mjs",
+    "lint:fix": "eslint . --fix --config ./eslint.config.mjs"
   },
   "keywords": [],
   "author": "",
