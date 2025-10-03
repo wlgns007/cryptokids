@@ -298,7 +298,9 @@
         toast(err.message || 'Redeem failed', 'error');
       }
     }
-  });
+    const text = await res.text().catch(() => '');
+    return { type: 'text', body: text };
+  }
 
   setupScanner({
     buttonId: 'btnEarnCamera',
