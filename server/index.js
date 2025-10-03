@@ -458,25 +458,16 @@ app.get("/api/rewards", (_req, res) => {
   })));
 });
 
-app.post("/api/rewards", (req, res) => {
-  const key = (req.headers["x-admin-key"] || "").toString().trim();
-  if (!key || key !== ADMIN_KEY) {
-    return res.status(401).type("application/json").json({ ok: false, error: "UNAUTHORIZED" });
-  }
+app.post("/api/rewards", requireAdminKey, (req, res) => {
   const { name, price, description = "", imageUrl = "" } = req.body || {};
   if (!name || !Number.isFinite(Number(price))) {
-    return res.status(400).type("application/json").json({ ok: false, error: "invalid_reward" });
+    return res.status(400).json({ error: "invalid_reward" });
   }
-  try {
-    const info = db.prepare(`
-      INSERT INTO rewards (name, price, description, image_url, active, created_at)
-      VALUES (?, ?, ?, ?, 1, ?)
-    `).run(String(name), Math.floor(Number(price)), String(description || ""), String(imageUrl || ""), nowSec());
-    res.status(201).type("application/json").json({ ok: true, id: info.lastInsertRowid });
-  } catch (err) {
-    console.error("Reward insert failed", err);
-    res.status(500).type("application/json").json({ ok: false, error: "server_error" });
-  }
+  const info = db.prepare(`
+    INSERT INTO rewards (name, price, description, image_url, active, created_at)
+    VALUES (?, ?, ?, ?, 1, ?)
+  `).run(String(name), Math.floor(Number(price)), String(description || ""), String(imageUrl || ""), nowSec());
+  res.status(201).json({ id: info.lastInsertRowid });
 });
 
 app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {

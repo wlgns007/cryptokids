@@ -55,20 +55,6 @@
     new QRCode(el, { text, width: 200, height: 200 });
   }
 
-  async function parseResponseBody(res) {
-    const contentType = res.headers?.get?.('content-type') || '';
-    if (contentType.includes('application/json')) {
-      try {
-        return { type: 'json', body: await res.json() };
-      } catch (err) {
-        console.error('Failed to parse JSON response', err);
-        return { type: 'json', body: null };
-      }
-    }
-    const text = await res.text().catch(() => '');
-    return { type: 'text', body: text };
-  }
-
   function parseTokenFromScan(data) {
     try {
       if (!data) return null;
@@ -312,7 +298,9 @@
         toast(err.message || 'Redeem failed', 'error');
       }
     }
-  });
+    const text = await res.text().catch(() => '');
+    return { type: 'text', body: text };
+  }
 
   setupScanner({
     buttonId: 'btnEarnCamera',
@@ -341,155 +329,89 @@
   });
 
   // ===== Rewards =====
-  const SHOW_URLS_KEY = 'ck_show_urls';
-  let rewardsCache = [];
-  let rewardsLoaded = false;
-
-  function shouldShowRewardUrls() {
-    return !!$('toggleUrls')?.checked;
+  function applyUrlToggle(show) {
+    document.body.classList.toggle('hide-urls', !show);
   }
-
-  (function initRewardToggle() {
+  const SHOW_URLS_KEY = 'ck_show_urls';
+  (function initToggle() {
     const toggle = $('toggleUrls');
     if (!toggle) return;
     const saved = localStorage.getItem(SHOW_URLS_KEY);
-    toggle.checked = saved === '1';
+    const show = saved === '1';
+    toggle.checked = show;
+    applyUrlToggle(show);
     toggle.addEventListener('change', () => {
       localStorage.setItem(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
-      if (rewardsLoaded) renderRewards();
+      applyUrlToggle(toggle.checked);
     });
   })();
 
-  async function refreshRewards() {
+  async function loadRewards() {
     const list = $('rewardsList');
-    const status = $('rewardsStatus');
-    if (!list) return;
+    const filter = $('filterRewards').value.toLowerCase();
     list.innerHTML = '<div class="muted">Loading...</div>';
-    if (status) status.textContent = 'Loading...';
     try {
       const res = await fetch('/api/rewards');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'failed');
-      rewardsCache = Array.isArray(data) ? data : [];
-      rewardsLoaded = true;
-      renderRewards();
-      if (status) status.textContent = '';
-    } catch (err) {
-      if (status) status.textContent = err.message || 'Failed to load rewards';
+      const items = await res.json();
+      if (!res.ok) throw new Error(items.error || 'failed');
       list.innerHTML = '';
-    }
-  }
+      const filtered = items.filter(it => !filter || it.title.toLowerCase().includes(filter));
+      for (const r of filtered) {
+        const card = document.createElement('div');
+        card.style.background = '#fff';
+        card.style.border = '1px solid var(--line)';
+        card.style.borderRadius = '10px';
+        card.style.padding = '12px';
+        card.style.display = 'grid';
+        card.style.gridTemplateColumns = '80px 1fr auto';
+        card.style.gap = '12px';
+        card.style.alignItems = 'center';
 
-  function renderRewards() {
-    const list = $('rewardsList');
-    if (!list) return;
-    const filterValue = ($('filterRewards')?.value || '').toLowerCase();
-    const showUrls = shouldShowRewardUrls();
-    list.innerHTML = '';
-
-    if (!rewardsCache.length) {
-      if (rewardsLoaded) {
-        list.innerHTML = '<div class="muted">No rewards yet.</div>';
-      }
-      return;
-    }
-
-    const filtered = rewardsCache.filter((item) => {
-      if (!filterValue) return true;
-      return item.title?.toLowerCase().includes(filterValue);
-    });
-
-    if (!filtered.length) {
-      list.innerHTML = '<div class="muted">No rewards match.</div>';
-      return;
-    }
-
-    for (const reward of filtered) {
-      const card = document.createElement('div');
-      card.style.background = '#fff';
-      card.style.border = '1px solid var(--line)';
-      card.style.borderRadius = '10px';
-      card.style.padding = '12px';
-      card.style.display = 'grid';
-      card.style.gridTemplateColumns = '80px 1fr auto';
-      card.style.gap = '12px';
-      card.style.alignItems = 'center';
-
-      const thumb = document.createElement('div');
-      thumb.style.width = '80px';
-      thumb.style.height = '80px';
-      thumb.style.borderRadius = '10px';
-      thumb.style.overflow = 'hidden';
-      thumb.style.background = '#e2e8f0';
-      thumb.style.display = 'flex';
-      thumb.style.alignItems = 'center';
-      thumb.style.justifyContent = 'center';
-      thumb.style.fontSize = '11px';
-      thumb.style.color = '#6b7280';
-      thumb.textContent = 'No image';
-      if (reward.imageUrl) {
         const img = document.createElement('img');
-        img.src = reward.imageUrl;
+        img.src = r.imageUrl || '';
         img.alt = '';
-        img.style.width = '100%';
-        img.style.height = '100%';
+        img.style.width = '80px';
+        img.style.height = '80px';
         img.style.objectFit = 'cover';
-        img.onerror = () => {
-          img.remove();
-          thumb.textContent = 'No image';
-        };
-        thumb.textContent = '';
-        thumb.appendChild(img);
+        img.style.borderRadius = '10px';
+        img.onerror = () => img.remove();
+        if (r.imageUrl) card.appendChild(img); else card.appendChild(document.createElement('div'));
+
+        const meta = document.createElement('div');
+        meta.innerHTML = `<div style="font-weight:600;">${r.title}</div><div class="muted">${r.price} points</div>`;
+        if (r.description) {
+          const desc = document.createElement('div');
+          desc.className = 'muted';
+          desc.textContent = r.description;
+          meta.appendChild(desc);
+        }
+        if (r.imageUrl) {
+          const url = document.createElement('div');
+          url.className = 'muted url';
+          url.textContent = r.imageUrl;
+          meta.appendChild(url);
+        }
+        card.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.flexDirection = 'column';
+        actions.style.gap = '6px';
+        const disableBtn = document.createElement('button');
+        disableBtn.textContent = 'Deactivate';
+        disableBtn.addEventListener('click', () => updateReward(r.id, { active: 0 }));
+        actions.appendChild(disableBtn);
+        card.appendChild(actions);
+
+        list.appendChild(card);
       }
-      card.appendChild(thumb);
-
-      const meta = document.createElement('div');
-      const titleEl = document.createElement('div');
-      titleEl.style.fontWeight = '600';
-      titleEl.textContent = reward.title;
-      meta.appendChild(titleEl);
-
-      const priceEl = document.createElement('div');
-      priceEl.className = 'muted';
-      priceEl.textContent = `${reward.price} points`;
-      meta.appendChild(priceEl);
-
-      if (reward.description) {
-        const desc = document.createElement('div');
-        desc.className = 'muted';
-        desc.textContent = reward.description;
-        meta.appendChild(desc);
-      }
-      if (showUrls && reward.imageUrl) {
-        const url = document.createElement('div');
-        url.className = 'muted';
-        url.textContent = reward.imageUrl;
-        meta.appendChild(url);
-      }
-      card.appendChild(meta);
-
-      const actions = document.createElement('div');
-      actions.style.display = 'flex';
-      actions.style.flexDirection = 'column';
-      actions.style.gap = '6px';
-      const disableBtn = document.createElement('button');
-      disableBtn.textContent = 'Deactivate';
-      disableBtn.addEventListener('click', () => updateReward(reward.id, { active: 0 }));
-      actions.appendChild(disableBtn);
-      card.appendChild(actions);
-
-      list.appendChild(card);
+      if (!filtered.length) list.innerHTML = '<div class="muted">No rewards match.</div>';
+    } catch (err) {
+      $('rewardsStatus').textContent = err.message || 'Failed to load rewards';
     }
   }
-
-  $('btnLoadRewards')?.addEventListener('click', refreshRewards);
-  $('filterRewards')?.addEventListener('input', () => {
-    if (!rewardsLoaded) {
-      refreshRewards();
-      return;
-    }
-    renderRewards();
-  });
+  $('btnLoadRewards')?.addEventListener('click', loadRewards);
+  $('filterRewards')?.addEventListener('input', loadRewards);
 
   async function updateReward(id, body) {
     try {
@@ -503,7 +425,7 @@
         throw new Error(data.error || 'update failed');
       }
       toast('Reward updated');
-      refreshRewards();
+      loadRewards();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
     }
@@ -524,26 +446,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, price, imageUrl, description })
       });
-      const parsed = await parseResponseBody(res);
-      if (!res.ok) {
-        if (parsed.type === 'json' && parsed.body) {
-          throw new Error(parsed.body.error || 'create failed');
-        }
-        console.error('Reward create failed (non-JSON response)', parsed.body);
-        toast(`Reward could not be created (status ${res.status}).`, 'error');
-        return;
-      }
-      if (parsed.type !== 'json' || !parsed.body || parsed.body.ok !== true) {
-        console.warn('Reward create response unexpected', parsed.body);
-        toast('Reward created but response was unexpected.', 'error');
-        return;
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'create failed');
       toast('Reward added');
       $('rewardName').value = '';
       $('rewardCost').value = '';
       $('rewardImage').value = '';
       $('rewardDescription').value = '';
-      refreshRewards();
+      loadRewards();
     } catch (err) {
       toast(err.message || 'Create failed', 'error');
     }
