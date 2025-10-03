@@ -72,11 +72,6 @@
       min-width: 220px;
     }
 
-    .admin-key .hint {
-      font-size: 12px;
-      color: var(--muted);
-    }
-
     .jump-links {
       display: flex;
       flex-wrap: wrap;
@@ -193,60 +188,6 @@
     .stack {
       display: grid;
       gap: 12px;
-    }
-
-    .rewards-controls {
-      display: grid;
-      gap: 12px;
-    }
-
-    .rewards-controls .search-full {
-      width: 100%;
-    }
-
-    .rewards-controls .search-full input {
-      width: 100%;
-    }
-
-    #secRewards .row.controls {
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    #secRewards .row.controls > * {
-      flex: 0 0 auto;
-    }
-
-    #secRewards .row.controls label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .earn-controls {
-      display: grid;
-      gap: 12px;
-    }
-
-    .earn-controls .control-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .earn-controls .control-row > * {
-      flex: 0 0 auto;
-    }
-
-    .earn-controls .search-full {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .earn-controls .search-full input {
-      width: 100%;
     }
 
     .drop {
@@ -432,24 +373,6 @@
       table {
         font-size: 13px;
       }
-
-      #secRewards .row.controls {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      #secRewards .row.controls > * {
-        width: 100%;
-      }
-
-      .earn-controls .control-row {
-        flex-direction: column;
-        align-items: stretch;
-      }
-
-      .earn-controls .control-row > * {
-        width: 100%;
-      }
     }
   </style>
   <script>
@@ -468,9 +391,8 @@
       <div class="admin-key">
         <label>
           Admin Key
-          <input id="adminKey" type="text" placeholder="Mamapapa">
+          <input id="adminKey" type="text" placeholder="enter admin key">
         </label>
-        <small class="hint">Configured on server (ADMIN_KEY).</small>
         <button id="saveAdminKey">Save</button>
       </div>
     </header>
@@ -561,16 +483,14 @@
 
       <section class="card" id="secRewards">
         <h2>Rewards Menu</h2>
-        <div class="rewards-controls">
-          <div class="row controls">
-            <button id="btnLoadRewards">Load items</button>
-            <label>
-              <input type="checkbox" id="toggleUrls">
-              <span>Show image URLs</span>
-            </label>
-          </div>
-          <label class="search-full">Search
+        <div class="row" style="align-items:flex-end;">
+          <button id="btnLoadRewards">Load Rewards</button>
+          <label style="flex:1;">Search
             <input id="filterRewards" type="text" placeholder="Search rewards">
+          </label>
+          <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
+            <input type="checkbox" id="toggleUrls">
+            <span>Show image URLs</span>
           </label>
         </div>
         <div id="rewardsList" class="stack"></div>
@@ -606,12 +526,10 @@
 
       <section class="card" id="secEarnMenu">
         <h2>Edit Earn Points Menu</h2>
-        <div class="earn-controls">
-          <div class="control-row">
-            <button id="btnAddTemplate" class="primary">Add Task</button>
-            <button id="btnReloadTemplates">Reload</button>
-          </div>
-          <label class="search-full">Search
+        <div class="row">
+          <button id="btnAddTemplate" class="primary">Add Template</button>
+          <button id="btnReloadTemplates">Reload</button>
+          <label style="flex:1;">Search
             <input id="templateSearch" type="text" placeholder="search templates">
           </label>
         </div>
