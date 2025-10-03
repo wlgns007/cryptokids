@@ -160,6 +160,18 @@ db.exec(`
   );
 `);
 
+await db.exec(`
+  CREATE TABLE IF NOT EXISTS holds (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL,
+    itemId TEXT,
+    itemName TEXT,
+    points INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held',
+    createdAt INTEGER NOT NULL,
+    givenAt INTEGER
+  );
+`);
 
 // === Rewards table (Parents Shop) ===
 // Schema: rewards(id, name, price, active)
@@ -238,6 +250,24 @@ app.get('/admin/scan/spend/:token', (req, res) => {
       kind: 'spend',
       meta: { itemId: row.itemId, title: row.title, token }
     });
+    // upsert into holds table so Admin → Holds can see it
+    const hid = row.token; // use the spend token as hold id
+    const exists = db.prepare(`SELECT 1 FROM holds WHERE id=?`).get(hid);
+    if (!exists) {
+      db.prepare(`
+        INSERT INTO holds (id, userId, itemId, itemName, points, status, createdAt, givenAt)
+        VALUES (?, ?, ?, ?, ?, 'held', ?, NULL)
+      `).run(
+        hid,
+        String(row.userId),
+        String(row.itemId || ''),
+        String(row.title || ''),
+        Number(row.price || 0),
+        Date.now()
+      );
+    } else {
+      db.prepare(`UPDATE holds SET status='held', givenAt=NULL WHERE id=?`).run(hid);
+    }
 
     return res.send(`<html><body style="font-family:sans-serif">
       <h2>Held for pickup</h2>
@@ -351,16 +381,6 @@ function applyDelta(userId, delta, reason, kind, nonce, meta = null) {
 app.get("/version", (_req, res) => res.json({ build: BUILD }));
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 // === Earn templates (admin-configured) ===
-// Example static; later wire to your DB/Admin UI
-app.get('/api/earn-templates', async (req, res) => {
-  // TODO: fetch from DB "earn_templates" table
-  const templates = [
-    { id: 'tid_homework', label: 'Homework done', amount: 2 },
-    { id: 'tid_cleanroom', label: 'Cleaned room', amount: 1 },
-    { id: 'tid_reading',  label: 'Reading 20min', amount: 1 },
-  ];
-  res.json(templates);
-});
 
 // === Rewards (shop) listing ===
 app.get('/api/rewards', (_req, res) => {
@@ -373,43 +393,78 @@ app.get('/api/rewards', (_req, res) => {
   }));
   res.json(items);
 });
+// GET /api/holds?all=1 -> include closed; default: only 'held'
+app.get('/api/holds', requireAdminKey, (req, res) => {
+  const includeAll = req.query.all === '1';
+  const stmt = includeAll
+    ? db.prepare(`SELECT * FROM holds ORDER BY createdAt DESC`)
+    : db.prepare(`SELECT * FROM holds WHERE status='held' ORDER BY createdAt DESC`);
+  const rows = stmt.all();
+  res.json(rows);
+});
+
+// PATCH /api/holds/:id  body: {status:'held'|'given'|'canceled'}
+app.patch('/api/holds/:id', requireAdminKey, (req, res) => {
+  const id = String(req.params.id || '');
+  const status = String(req.body?.status || '').toLowerCase();
+  if (!['held', 'given', 'canceled'].includes(status)) {
+    return res.status(400).json({ error: 'invalid_status' });
+  }
+  const givenAt = status === 'given' ? Date.now() : null;
+
+  const info = db.prepare(`UPDATE holds SET status=?, givenAt=? WHERE id=?`).run(status, givenAt, id);
+  if (!info.changes) return res.status(404).json({ error: 'not_found' });
+
+  const row = db.prepare(`SELECT * FROM holds WHERE id=?`).get(id);
+  res.json(row);
+});
+
+
 // Example earn templates (pre-made tasks kids can pick)
-// Later we can store these in SQLite; for now, static is fine.
+function earnTemplates() {
+  return [
+    { id: 'tid_homework',  label: 'Homework done',       amount: 2 },
+    { id: 'tid_cleanroom', label: 'Cleaned room',        amount: 1 },
+    { id: 'tid_reading',   label: 'Reading 20 minutes',  amount: 1 },
+    { id: 'tid_dishes',    label: 'Helped with dishes',  amount: 1 },
+    { id: 'tid_math',      label: 'Math practice (15m)', amount: 1 },
+  ];
+}
+// API endpoint for front-end
 app.get('/api/earn-templates', (_req, res) => {
-  res.json([
-    { id: 'tid_homework',  label: 'Homework done',      amount: 2 },
-    { id: 'tid_cleanroom', label: 'Cleaned room',       amount: 1 },
-    { id: 'tid_reading',   label: 'Reading 20 minutes', amount: 1 },
-    { id: 'tid_dishes',    label: 'Helped with dishes', amount: 1 },
-    { id: 'tid_math',      label: 'Math practice (15m)',amount: 1 }
-  ]);
+  res.json(earnTemplates());
 });
 
 // /qr/earn — child picks multiple tasks -> admin scan approves -> credit
+// /qr/earn — child picks templates -> generate signed /r token (no DB row)
 app.post('/qr/earn', express.json(), (req, res) => {
   const { userId, templateIds } = req.body || {};
   if (!userId || !Array.isArray(templateIds) || !templateIds.length) {
     return res.status(400).json({ error: 'bad_request' });
   }
 
-  // map ids -> amounts from your earn_templates store
-  // Example: if you keep templates in memory; else fetch from DB
-  const tplById = Object.fromEntries((earnTemplates() || []).map(t => [String(t.id), t]));
-  const items = templateIds.map(id => tplById[String(id)]).filter(Boolean);
-  const total = items.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const tplById = Object.fromEntries(earnTemplates().map(t => [String(t.id), t]));
+  const picked  = templateIds.map(id => tplById[String(id)]).filter(Boolean);
+  const total   = picked.reduce((s, t) => s + Number(t.amount || 0), 0);
   if (!total) return res.status(400).json({ error: 'invalid_templates' });
 
-  const token = crypto.randomUUID().replace(/-/g,'').slice(0,24);
-  db.prepare(`
-    INSERT INTO earn_requests (token,userId,templates_json,amount,status,createdAt)
-    VALUES (?,?,?,?, 'pending', datetime('now'))
-  `).run(token, String(userId), JSON.stringify(templateIds), total);
+  // Build the same signed payload used by /earn -> /r/:token
+  const payload = {
+    v: 1,
+    userId: String(userId).trim().toLowerCase(),
+    amount: Math.floor(total),
+    task:   picked.map(t => t.label).join(', ').slice(0, 120),
+    exp:    nowSec() + QR_TTL_SEC,
+    n:      crypto.randomUUID(),
+  };
+  const payloadStr = JSON.stringify(payload);
+  const token = `${b64url.enc(payloadStr)}.${sign(payloadStr)}`;
 
-  const host  = req.headers["x-forwarded-host"]  || req.headers.host;
+  const host  = req.headers["x-forwarded-host"] || req.headers.host;
   const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
-  const absolute = `${proto}://${host}/admin/scan/earn/${token}`;
+  const qrUrl = `${proto}://${host}/r/${token}`;
 
-  res.json({ qrUrl: absolute, token, amount: total });
+  res.json({ qrUrl, token, amount: total });
 });
 
 // Mint signed QR (admin)

@@ -1,0 +1,11 @@
+node_modules/
+artifacts/
+cache/
+dist/
+build/
+scripts/deploy_oya.mjs
+scripts/deploy_reward_only.mjs
+scripts/deploy_plain.mjs
+scripts/interact_oya.mjs
+server/public/Backup/
+server/public/qrcode.js

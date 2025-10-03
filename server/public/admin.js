@@ -11,7 +11,19 @@ if (window.__CK_ADMIN_INIT__) {
     const escapeHTML = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
       '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
     }[c]));
+function getAdminKey() {
+  // Prefer saved key, fallback to input box if present
+  const k = localStorage.getItem('adminKey') || ($('adminKey')?.value || '').trim();
+  return k || '';
+}
 
+function formatDate(ts) {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return ts;
+  }
+}
 // ADD: attach a drop/click uploader that writes the returned URL into target input
 function attachInlineUploader(dropEl, fileEl, statusEl, targetInputEl) {
   if (!dropEl || !fileEl || !targetInputEl) return;
@@ -118,6 +130,128 @@ async function hashFileSHA256(file) {
 }
 
 // ---- API adapter: tries public routes, falls back to admin routes ----
+// --- Holds API client ---
+async function apiGetHolds(includeClosed=false) {
+  const key = getAdminKey();
+  const qs = includeClosed ? '?all=1' : '';
+  const res = await fetch(`/api/holds${qs}`, {
+    headers: { 'x-admin-key': key }
+  });
+  if (!res.ok) throw new Error(`Load holds failed: ${res.status}`);
+  return res.json(); // [{id,userId,itemName,points,status,createdAt,givenAt}]
+}
+
+async function apiMarkGiven(holdId, isGiven) {
+  const key = getAdminKey();
+  const res = await fetch(`/api/holds/${holdId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-key': key
+    },
+    body: JSON.stringify({ status: isGiven ? 'given' : 'held' })
+  });
+  if (!res.ok) throw new Error(`Mark given failed: ${res.status}`);
+  return res.json();
+}
+
+async function apiCancelHold(holdId) {
+  const key = getAdminKey();
+  const res = await fetch(`/api/holds/${holdId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-admin-key': key
+    },
+    body: JSON.stringify({ status: 'canceled' })
+  });
+  if (!res.ok) throw new Error(`Cancel hold failed: ${res.status}`);
+  return res.json();
+}
+// --- Holds UI ---
+async function loadHolds() {
+  const statusEl = $('holdsStatus');
+  const tbody = $('tblHolds').querySelector('tbody');
+  const includeClosed = $('chkShowClosedHolds')?.checked;
+
+  statusEl.textContent = 'Loading...';
+  tbody.innerHTML = '';
+
+  try {
+    const rows = await apiGetHolds(!!includeClosed);
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">No holds</td></tr>`;
+      statusEl.textContent = '';
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const h of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${formatDate(h.createdAt)}</td>
+        <td>${h.userId}</td>
+        <td>${h.itemName || h.itemId || ''}</td>
+        <td>${h.points}</td>
+        <td>${h.status}</td>
+        <td>
+          <input type="checkbox" ${h.status === 'given' ? 'checked' : ''} data-hold-id="${h.id}" class="hold-given">
+        </td>
+        <td>
+          <button data-cancel-id="${h.id}" class="btn-cancel-hold" ${h.status !== 'held' ? 'disabled' : ''}>Cancel</button>
+        </td>
+      `;
+      frag.appendChild(tr);
+    }
+    tbody.appendChild(frag);
+    statusEl.textContent = '';
+
+  } catch (err) {
+    statusEl.textContent = err.message || String(err);
+  }
+}
+
+// Event delegation for checkbox + cancel
+function bindHoldsEvents() {
+  const tbody = $('tblHolds').querySelector('tbody');
+
+  tbody.addEventListener('change', async (e) => {
+    if (e.target.matches('.hold-given')) {
+      const id = e.target.getAttribute('data-hold-id');
+      const checked = e.target.checked;
+      try {
+        await apiMarkGiven(id, checked);
+        // Refresh the status cell
+        const row = e.target.closest('tr');
+        if (row) row.children[4].textContent = checked ? 'given' : 'held';
+      } catch (err) {
+        alert(err.message || 'Failed to update');
+        // revert UI if API failed
+        e.target.checked = !checked;
+      }
+    }
+  });
+
+  tbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-cancel-hold');
+    if (!btn) return;
+    const id = btn.getAttribute('data-cancel-id');
+    if (!confirm('Cancel this hold?')) return;
+    try {
+      await apiCancelHold(id);
+      await loadHolds();
+    } catch (err) {
+      alert(err.message || 'Failed to cancel');
+    }
+  });
+
+  $('btnLoadHolds')?.addEventListener('click', loadHolds);
+  $('chkShowClosedHolds')?.addEventListener('change', loadHolds);
+}
+
+// One-time init call (do this once in your main init)
+bindHoldsEvents();
+
 const api = {
   async listRewards() {
     try {

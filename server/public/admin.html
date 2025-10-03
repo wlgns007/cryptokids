@@ -79,7 +79,7 @@
   </header>
 
   <div class="wrap">
-
+    <!-- Admin Panels -->
   <!-- 1) Issue first -->
   <section class="card" style="grid-column: 1 / -1;">
     <h2>Issue (legacy)</h2>
@@ -109,6 +109,38 @@
       <button id="btnAddReward">Add</button>
     </div>
     <div class="row"><input id="rImg" type="text" placeholder="Image URL (optional — auto-filled if you upload below)"></div>
+
+    <!-- Holds Panel -->
+    <section id="holdsPanel" class="card">
+      <h2>Holds</h2>
+
+      <div class="toolbar">
+        <button id="btnLoadHolds">Load Holds</button>
+        <label>
+          <input type="checkbox" id="chkShowClosedHolds">
+          Show closed (Given/Canceled)
+        </label>
+      </div>
+
+      <div class="table-wrap">
+        <table id="tblHolds">
+          <thead>
+          <tr>
+            <th>Created</th>
+            <th>User</th>
+            <th>Item</th>
+            <th>Points</th>
+            <th>Status</th>
+            <th>Given</th>
+            <th>Cancel</th>
+          </tr>
+          </thead>
+          <tbody><!-- rows injected by admin.js --></tbody>
+        </table>
+      </div>
+
+      <small id="holdsStatus" class="muted"></small>
+    </section>
 
     <!-- Optional Uploader -->
     <div style="margin-top:10px;">
