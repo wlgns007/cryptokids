@@ -326,7 +326,6 @@
         toast(err.message || 'Scan failed', 'error');
       }
     }
-  });
 
   // ===== Rewards =====
   function applyUrlToggle(show) {
