@@ -1,9 +1,13 @@
-const CACHE = 'ck-v2'; // bump version to refresh SW
+const CACHE = 'ck-v3-__BUILD__';
 const ASSETS = [
-  '/', '/admin.html', '/child.html',
-  '/admin.js', '/qrcode.min.js',
-  '/manifest.webmanifest',
-  '/icon-192.png', '/icon-512.png' // keep if you added them
+  `/admin.html?v=__BUILD__`,
+  `/child.html?v=__BUILD__`,
+  `/admin.js?v=__BUILD__`,
+  `/child.js?v=__BUILD__`,
+  `/qrcode.min.js?v=__BUILD__`,
+  `/manifest.webmanifest?v=__BUILD__`,
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
 self.addEventListener('install', (e) => {

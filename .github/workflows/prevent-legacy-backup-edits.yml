@@ -1,0 +1,49 @@
+name: Prevent legacy and backup edits
+
+on:
+  push:
+    branches: ["main", "work", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Skip if override marker is present
+        id: override
+        run: |
+          marker="[allow legacy changes]"
+          if git log -1 --pretty=%B | grep -iq "$marker"; then
+            echo "override=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "override=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fail on legacy or backup edits
+        if: steps.override.outputs.override != 'true'
+        run: |
+          set -eo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            diff_range="${base}...HEAD"
+          else
+            if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+              first_commit=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+              diff_range="${first_commit}..HEAD"
+            else
+              diff_range="${{ github.event.before }}..${{ github.sha }}"
+            fi
+          fi
+
+          forbidden=$(git diff --name-only "$diff_range" -- 'legacy/**' 'public/Backup/**')
+          if [ -n "$forbidden" ]; then
+            echo "The following forbidden paths were modified:" >&2
+            echo "$forbidden" >&2
+            exit 1
+          fi
+        shell: bash
