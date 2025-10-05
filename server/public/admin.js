@@ -542,42 +542,29 @@ setupScanner({
     }
   }
 
-  document.getElementById('btnCreateReward')?.addEventListener('click', async (e) => {
+  document.getElementById('btnCreateReward')?.addEventListener('click', async (e)=>{
     e.preventDefault();
+    const name = document.getElementById('rewardName')?.value?.trim() || '';
+    const cost = Number(document.getElementById('rewardCost')?.value || NaN);
+    const imageUrl = document.getElementById('rewardImage')?.value?.trim() || null;
+    const description = document.getElementById('rewardDesc')?.value?.trim() || '';
+    if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
-    const nameEl  = document.getElementById('rewardName');
-    const costEl  = document.getElementById('rewardCost');
-    const imgEl   = document.getElementById('rewardImage');
-    const descEl  = document.getElementById('rewardDesc');
-
-    const name = nameEl?.value?.trim() || '';
-    const cost = Number(costEl?.value ?? NaN);
-    const imageUrl = (imgEl?.value?.trim() || '') || null;  // optional
-    const description = descEl?.value?.trim() || '';
-
-    if (!name || Number.isNaN(cost)) {
-      toast('Name and numeric cost required', 'error');
-      return;
-    }
-
-    // use the auth-aware helper so 401s stop once key is saved
     const { res, body } = await adminFetch('/api/rewards', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ name, cost, imageUrl, description }),
     });
 
-    if (res.status === 401) { toast('Admin key invalid. Save "Mamapapa" then retry.', 'error'); return; }
-    if (!res.ok) { toast((typeof body === 'string' ? body : body?.error) || 'Create failed', 'error'); return; }
+    if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+    if (!res.ok){ toast((typeof body === 'string' ? body : body?.error) || 'Create failed', 'error'); return; }
 
     toast('Reward created');
-
-    // reset + refresh list
-    if (nameEl) nameEl.value = '';
-    if (costEl) costEl.value = '1';
-    if (imgEl)  imgEl.value  = '';
-    if (descEl) descEl.value = '';
-    loadRewards?.();
+    document.getElementById('rewardName').value = '';
+    document.getElementById('rewardCost').value = '1';
+    document.getElementById('rewardImage').value = '';
+    document.getElementById('rewardDesc').value = '';
+    loadRewards?.(); // refresh the list if available
   });
 
   // image upload
