@@ -308,9 +308,9 @@
         img.src = item.imageUrl;
         img.alt = '';
         img.loading = 'lazy';
-        img.width = 96; img.height = 96;
-        img.style.objectFit = 'cover';
-        img.style.aspectRatio = '1 / 1';
+        img.setAttribute('width', '96');
+        img.setAttribute('height', '96');
+        img.setAttribute('style', 'object-fit:cover; aspect-ratio:1/1;');
         img.onerror = () => img.remove();
         row.appendChild(img);
       } else {

@@ -344,19 +344,14 @@ setupScanner({
       return;
     }
     try {
-      const { res, body } = await adminFetch('/api/earn/scan', {
+      const res = await adminFetch('/api/earn/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: parsed.token })
       });
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Scan failed');
-        throw new Error(msg);
-      }
-      const data = body && typeof body === 'object' ? body : {};
-      const amount = data.amount ?? '??';
-      const user = data.userId || 'unknown user';
-      toast(`Credited ${amount} to ${user}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Scan failed');
+      toast(`Credited ${data.amount} to ${data.userId}`);
     } catch (err) {
       toast(err.message || 'Scan failed', 'error');
     }
