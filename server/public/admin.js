@@ -544,10 +544,15 @@ setupScanner({
 
   document.getElementById('btnCreateReward')?.addEventListener('click', async (e)=>{
     e.preventDefault();
-    const name = document.getElementById('rewardName')?.value?.trim() || '';
-    const cost = Number(document.getElementById('rewardCost')?.value || NaN);
-    const imageUrl = document.getElementById('rewardImage')?.value?.trim() || null;
-    const description = document.getElementById('rewardDesc')?.value?.trim() || '';
+    const nameEl = document.getElementById('rewardName');
+    const costEl = document.getElementById('rewardCost');
+    const imageEl = document.getElementById('rewardImage');
+    const descEl = document.getElementById('rewardDesc');
+
+    const name = nameEl?.value?.trim() || '';
+    const cost = Number(costEl?.value || NaN);
+    const imageUrl = imageEl?.value?.trim() || null;
+    const description = descEl?.value?.trim() || '';
     if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
     const { res, body } = await adminFetch('/api/rewards', {
@@ -560,10 +565,10 @@ setupScanner({
     if (!res.ok){ toast((typeof body === 'string' ? body : body?.error) || 'Create failed', 'error'); return; }
 
     toast('Reward created');
-    document.getElementById('rewardName').value = '';
-    document.getElementById('rewardCost').value = '1';
-    document.getElementById('rewardImage').value = '';
-    document.getElementById('rewardDesc').value = '';
+    if (nameEl) nameEl.value = '';
+    if (costEl) costEl.value = '1';
+    if (imageEl) imageEl.value = '';
+    if (descEl) descEl.value = '';
     loadRewards?.(); // refresh the list if available
   });
 
