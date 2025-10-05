@@ -1,446 +1,439 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <link rel="icon" href="data:,">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#ffffff">
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
-    }
-  </script>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CryptoKids – Child</title>
+  <link rel="icon" href="data:,">
+  <link rel="manifest" href="/manifest.webmanifest?v=7e01534">
+  <meta name="theme-color" content="#ffffff">
   <style>
-    body{font-family:system-ui,Arial;margin:16px}
-    .row{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap}
-    input,button{padding:8px;font-size:16px}
-    #historyBox{margin-top:12px;border:1px solid #ddd;padding:8px;border-radius:8px;max-width:640px}
-    .tx{padding:6px 0;border-bottom:1px dashed #eee}
-/* make first card sit flush at the top, and all H2s align left */
-.card:first-of-type { margin-top: 0 !important; }
-h2 { margin-left: 0 !important; }
-
-  </style>
-  <!-- ADD into <head> ... </head> in child.html -->
-  <style>
-    /* Shop thumbnails */
-    #secShop .row {
-      display: grid;
-      grid-template-columns: 96px 1fr auto;
-      gap: 12px;
-      align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px solid #eee;
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --fg: #0f172a;
+      --muted: #6b7280;
+      --accent: #2563eb;
     }
-    #secShop .thumb {
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 32px clamp(16px, 5vw, 56px);
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(14, 116, 144, 0.08));
+      color: var(--fg);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: clamp(28px, 6vw, 38px);
+    }
+
+    header p {
+      margin: 8px 0 0;
+      max-width: 520px;
+      color: rgba(15, 23, 42, 0.7);
+    }
+
+    main {
+      flex: 1;
+      display: grid;
+      gap: 24px;
+      padding: 32px clamp(16px, 4vw, 48px) 48px;
+    }
+
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: clamp(20px, 3vw, 28px);
+      display: grid;
+      gap: 16px;
+      box-shadow: 0 12px 24px rgba(15, 23, 42, 0.04);
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .row > * {
+      flex: 1 1 160px;
+    }
+
+    input,
+    button,
+    select,
+    textarea {
+      font-family: inherit;
+      font-size: 15px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    button {
+      background: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    #historyList {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #f9fafb;
+      padding: 12px;
+      max-height: 320px;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+    }
+
+    .hist-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px dashed rgba(148, 163, 184, 0.5);
+    }
+
+    .hist-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .earn-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .earn-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #f8fafc;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .earn-card header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .earn-card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .earn-card .desc {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .earn-card .video {
+      font-size: 14px;
+    }
+
+    #earnQrBox,
+    #shopQrBox {
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      min-height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+    }
+
+    #earnQrBox:empty::after,
+    #shopQrBox:empty::after {
+      content: "QR will appear here";
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    video {
+      width: 100%;
+      max-width: 360px;
+      border-radius: 16px;
+      display: none;
+    }
+
+    canvas {
+      display: none;
+    }
+
+    #shopList {
+      display: grid;
+      gap: 16px;
+    }
+
+    .shop-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .shop-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .shop-thumb {
       width: 96px;
       height: 96px;
-      object-fit: cover;       /* center-crop big images */
       border-radius: 12px;
+      overflow: hidden;
+      background: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      padding: 4px;
+      flex-shrink: 0;
+    }
+
+    .thumb-button {
+      appearance: none;
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+      cursor: zoom-in;
+    }
+
+    .thumb-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .reward-thumb {
+      width: 96px !important;
+      height: 96px !important;
+      object-fit: cover;
+      aspect-ratio: 1 / 1;
+      display: block;
+      max-width: none;
+    }
+
+    .reward-card .reward-thumb {
+      width: 96px !important;
+      height: 96px !important;
+      object-fit: cover;
+      aspect-ratio: 1 / 1;
       display: block;
     }
-    #secShop .title { font-weight: 600; }
-    #secShop .desc  { font-size: 0.92rem; opacity: 0.8; }
-    #secShop .url   { font-size: 0.8rem; word-break: break-all; opacity: 0.7; }
-    #secShop .actions button { padding: 6px 10px; border-radius: 10px; }
-    .earn-list { display:grid; gap:8px; }
-.earn-item { display:flex; gap:10px; align-items:center; }
-.earn-item .amt { opacity:.8; font-size:.9rem; }
 
+    .shop-item button {
+      justify-self: end;
+    }
+
+    .image-modal[hidden] {
+      display: none;
+    }
+
+    .image-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.72);
+      display: grid;
+      place-items: center;
+      padding: 32px clamp(16px, 6vw, 64px);
+      z-index: 1200;
+    }
+
+    .image-modal__dialog {
+      background: #ffffff;
+      border-radius: 18px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      max-width: min(90vw, 520px);
+      width: 100%;
+      box-shadow: 0 32px 56px rgba(15, 23, 42, 0.24);
+    }
+
+    .image-modal__close {
+      justify-self: end;
+      background: transparent;
+      border: none;
+      font-size: 26px;
+      line-height: 1;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .image-modal__dialog img {
+      width: 100%;
+      max-height: 70vh;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+
+    .image-modal__caption {
+      display: none;
+      font-size: 14px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 640px) {
+      header {
+        padding: 28px 18px;
+      }
+
+      main {
+        padding: 24px 16px 32px;
+      }
+
+      section {
+        padding: 18px;
+      }
+
+      .shop-item {
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        align-items: flex-start;
+      }
+
+      .shop-item button {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+      }
+    }
   </style>
-
+  <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=56663a5'));
+      }
+  </script>
 </head>
 <body>
-<section class="card">
-  <h2 style="margin-left:0">Scan Earn QR</h2>
-  <button id="btnScan" style="padding:8px 14px;border:1px solid #ddd;border-radius:8px;background:#fff">Start Camera</button>
-  <video id="vid" playsinline style="width:100%;max-width:420px;border-radius:12px;margin-top:10px;display:none"></video>
-  <canvas id="cv" style="display:none"></canvas>
-  <div id="scanMsg" class="help" style="min-height:18px;margin-top:8px"></div>
-</section>
+  <header>
+    <h1>CryptoKids</h1>
+    <p>Check balances, complete tasks, and redeem rewards with quick QR scans.</p>
+  </header>
 
-<script src="https://unpkg.com/jsqr"></script>
-<!-- add just below jsqr -->
-<script src="/qrcode.min.js"></script>
-<script>
-  (function () {
-    const btn = document.getElementById('btnScan');
-    const vid = document.getElementById('vid');
-    const cv  = document.getElementById('cv');
-    const ctx = cv.getContext('2d');
-    const msg = document.getElementById('scanMsg');
-    let stream = null, raf = 0, busy = false;
+  <main>
+    <section id="secBalance">
+      <h2>Balance History</h2>
+      <div class="row">
+        <input id="childUserId" placeholder="User ID" />
+        <button id="btnCheck" class="primary">Check Balance</button>
+        <button id="btnHistory">Refresh History</button>
+        <button id="btnCsv">Download CSV</button>
+      </div>
+      <div class="row" style="align-items:center;">
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input id="showEarn" type="checkbox"> Show Earn
+        </label>
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input id="showSpend" type="checkbox"> Show Spend
+        </label>
+        <span id="summary" class="muted"></span>
+      </div>
+      <div id="balanceResult" class="muted"></div>
+      <div id="historyList"></div>
+    </section>
 
-    function say(s){ msg.textContent = s; }
-    function secureOk(){
-      if (location.protocol === 'https:' || location.hostname === 'localhost') return true;
-      return false;
-    }
-
-    async function start() {
-      if (!secureOk()) {
-        say('Camera requires HTTPS. Open the ngrok https://… URL.');
-        return;
-      }
-      if (!navigator.mediaDevices?.getUserMedia) {
-        say('Camera API not available in this browser.');
-        return;
-      }
-      try {
-        // Try back camera; fall back to any camera
-        const try1 = { video: { facingMode: { ideal: 'environment' } } };
-        const try2 = { video: true };
-
-        try { stream = await navigator.mediaDevices.getUserMedia(try1); }
-        catch { stream = await navigator.mediaDevices.getUserMedia(try2); }
-
-        vid.srcObject = stream;
-        vid.style.display = 'block';
-        await vid.play();
-        say('Point the camera at the QR code.');
-        tick();
-      } catch (e) {
-        const name = e && e.name || '';
-        if (name === 'NotAllowedError') say('Camera permission denied. Check site permissions in your browser settings.');
-        else if (name === 'NotFoundError') say('No camera found.');
-        else if (name === 'NotReadableError') say('Camera in use by another app.');
-        else say('Camera blocked or unavailable.');
-      }
-    }
-
-    function stop() {
-      cancelAnimationFrame(raf);
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      stream = null;
-      vid.style.display = 'none';
-      say('Camera stopped.');
-    }
-
-    function tick() {
-      if (vid.readyState === vid.HAVE_ENOUGH_DATA) {
-        cv.width = vid.videoWidth; cv.height = vid.videoHeight;
-        ctx.drawImage(vid, 0, 0, cv.width, cv.height);
-        const img = ctx.getImageData(0, 0, cv.width, cv.height);
-        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-        if (code && code.data && !busy) {
-          busy = true;
-          say('QR detected. Opening…');
-          stop();
-          location.href = code.data; // your /earn already returns a full URL
-          return;
-        }
-      }
-      raf = requestAnimationFrame(tick);
-    }
-
-    btn.addEventListener('click', () => {
-      if (stream) stop(); else start();
-    });
-  })();
-</script>
-
-  <h2>CryptoKids – Balance</h2>
-
-  <div class="row">
-    <input id="userId" placeholder="User ID (e.g., leo)" />
-    <button id="btnBalance">Check Balance</button>
-    <button id="btnHistory">View History</button>
-    <button id="btnCsv">Download CSV</button>
-    <button id="btnWatch">Start Live Watch</button>
-  </div>
-
-  <div id="resp"></div>
-<!-- ADD: history controls + totals -->
-<div id="histControls" style="margin-top:8px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-  <label><input id="fltEarn" type="checkbox" checked> Show Earn</label>
-  <label><input id="fltSpend" type="checkbox" checked> Show Spend</label>
-  <span id="totals" style="opacity:.8;"></span>
-</div>
-
-<!-- === Shop (merged from shop.html) === -->
-<section id="secShop" class="card">
-  <h2>Shop</h2>
-  <div class="toolbar">
-    <button id="btnLoadShop">Load items</button>
-    <label style="margin-left:12px;">
-      <input type="checkbox" id="toggleShowUrls"> show image URLs
-    </label>
-  </div>
-  <div id="shopList" class="list"></div>
-  <p id="shopEmpty" style="display:none;">No items yet.</p>
-  <!-- add inside the Shop section, after #shopEmpty -->
-  <div id="shopQrBox" class="qrbox" style="margin-top:10px;"></div>
-</section>
-<!-- === Earn Points === -->
-<section id="secEarn" class="card">
-  <h2>Earn Points</h2>
-  <div class="row" style="align-items:flex-start">
-    <div class="col" style="width:100%">
-      <div style="font-weight:600;margin-bottom:6px">Choose tasks</div>
+    <section id="secEarn">
+      <h2>Earn Points</h2>
+      <div class="muted">Select your tasks, then generate a QR code for an adult to scan.</div>
       <div id="earnList" class="earn-list"></div>
-      <div style="margin-top:8px;opacity:.8" id="earnSummary">Selected: 0 RT</div>
-      <div style="margin-top:10px">
-        <button id="btnEarnQr">Generate Earn QR</button>
+      <div class="row" style="align-items:center;">
+        <div id="earnSummary" class="muted">Selected: 0 points</div>
+        <button id="btnEarnQr" class="primary" style="flex:0 0 auto;">Generate QR</button>
       </div>
-      <div id="earnQrBox" class="qrbox" style="margin-top:10px"></div>
+      <div id="earnQrBox"></div>
+    </section>
+
+    <section id="secScanReceive">
+      <h2>Scan to Receive Points</h2>
+      <div class="muted">Scan the QR from an adult to add points instantly.</div>
+      <button id="btnScanReceive" class="primary" style="align-self:flex-start;">Start Camera</button>
+      <video id="receiveVideo" playsinline></video>
+      <canvas id="receiveCanvas"></canvas>
+      <div id="receiveStatus" class="muted"></div>
+    </section>
+
+    <section id="secShop">
+      <h2>Rewards Menu</h2>
+      <div class="row">
+        <button id="btnLoadShop" class="primary" style="flex:0 0 auto;">Load Rewards</button>
+      </div>
+      <div id="shopList"></div>
+      <div id="shopEmpty" class="muted" style="display:none;">No rewards yet.</div>
+      <div id="shopMsg" class="muted"></div>
+      <div id="shopQrBox"></div>
+    </section>
+  </main>
+
+  <footer>
+    Powered by CryptoKids
+  </footer>
+
+  <div id="imageModal" class="image-modal" hidden aria-hidden="true">
+    <div class="image-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="modalImageCaption">
+      <button id="closeImageModal" class="image-modal__close" type="button" aria-label="Close image preview">×</button>
+      <img id="modalImage" alt="Reward image preview">
+      <div id="modalImageCaption" class="image-modal__caption"></div>
     </div>
   </div>
-</section>
 
-
-<!-- Modal-ish confirm for buying -->
-<div id="buyConfirm" class="modal" style="display:none;">
-  <div class="modal-content">
-    <h3 id="buyTitle">Confirm purchase</h3>
-    <p id="buyDesc"></p>
-    <button id="btnBuyNow">Buy</button>
-    <button id="btnBuyCancel">Cancel</button>
-  </div>
-</div>
-
-  <div id="historyBox"></div>
-
-  <div id="emptyState" style="display:none; margin-top:12px; padding:12px; border:1px dashed #bbb; border-radius:10px;">
-    <div style="font-weight:600; margin-bottom:6px;">No RT yet</div>
-    <div style="font-size:14px; line-height:1.4;">
-      Ask a parent to give you a task and scan the Earn QR to get started.
-    </div>
-  </div>
-
-  <script>
-    const $ = (id) => document.getElementById(id);
-
-    async function getJSON(url) {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
-    }
-// ADD: format helpers
-function fmtIso(ts){ return new Date(ts).toLocaleString(); }
-function summarize(hist){
-  let earned = 0, spent = 0;
-  for (const tx of hist){
-    if (tx.type === 'earn') earned += Number(tx.amount)||0;
-    if (tx.type === 'spend') spent  += Number(tx.amount)||0;
-  }
-  return { earned, spent };
-}
-
-    async function checkBalance() {
-      const userId = $('userId').value.trim();
-      const respBox = $('resp');
-      const emptyState = $('emptyState');
-      const qrEl = $('qr'); // ok if not present
-
-      if (!userId) { alert('Enter User ID'); return; }
-      respBox.textContent = 'Checking...';
-
-      try {
-        const data = await getJSON(`/balance/${encodeURIComponent(userId)}`);
-        respBox.textContent = `Balance: ${data.balance} RT`;
-
-// ADD: show lifetime totals next to balance (best-effort)
-try {
-  const sum = await getJSON(`/summary/${encodeURIComponent(userId)}`);
-  respBox.textContent += `  |  Earned: ${sum.earned} RT, Spent: ${sum.spent} RT`;
-} catch(_) {}
-
-        const isEmpty = !Number.isFinite(data.balance) || data.balance <= 0;
-        emptyState.style.display = isEmpty ? 'block' : 'none';
-
-        if (qrEl) {
-          if (isEmpty) {
-            if (qrEl.tagName === 'CANVAS') {
-              const ctx = qrEl.getContext('2d');
-              ctx && ctx.clearRect(0, 0, qrEl.width, qrEl.height);
-            }
-            qrEl.style.display = 'none';
-          } else {
-            qrEl.style.display = '';
-          }
-        }
-      } catch (err) {
-        respBox.textContent = `Error checking balance: ${err.message}`;
-        emptyState.style.display = 'none';
-      }
-    }
-
-    $('btnBalance').onclick = checkBalance;
-
-    // REPLACE the whole btnHistory handler with this
-$('btnHistory').onclick = async () => {
-  const userId = $('userId').value.trim();
-  if (!userId) return alert('Enter User ID');
-
-  const hist = await getJSON(`/history/${encodeURIComponent(userId)}`);
-  const totals = summarize(hist);
-  const showEarn  = $('fltEarn')?.checked !== false;
-  const showSpend = $('fltSpend')?.checked !== false;
-
-  // update totals line
-  const t = $('totals');
-  if (t) t.textContent = `Totals — Earned: ${totals.earned} RT, Spent: ${totals.spent} RT`;
-
-  // filter by checkboxes
-  const filtered = hist.filter(tx =>
-    (tx.type === 'earn'  && showEarn) ||
-    (tx.type === 'spend' && showSpend)
-  );
-
-  $('historyBox').innerHTML = filtered.length
-    ? filtered.map(tx => `<div class="tx"><b>${tx.type}</b> ${tx.amount} RT${tx.reason ? ` – ${tx.reason}` : ''}<br><small>${fmtIso(tx.date)}</small></div>`).join('')
-    : '<i>No history matches the current filters.</i>';
-};
-
-// ALSO: re-render list live when toggles change (optional nicety)
-['fltEarn','fltSpend'].forEach(id => {
-  const el = document.getElementById(id);
-  if (el) el.addEventListener('change', () => $('btnHistory').click());
-});
-
-
-    // CSV download (client-side)
-    $('btnCsv').onclick = async () => {
-      const userId = $('userId').value.trim();
-      if (!userId) return alert('Enter User ID');
-
-      const hist = await getJSON(`/history/${encodeURIComponent(userId)}`);
-      if (!Array.isArray(hist) || !hist.length) {
-        alert('No history yet to export.');
-        return;
-      }
-
-      const header = ['type', 'amount', 'reason', 'date'];
-      const rows = hist.map(tx => [
-        tx.type ?? '',
-        tx.amount ?? '',
-        (tx.reason ?? '').toString().replace(/"/g, '""'),
-        new Date(tx.date).toISOString()
-      ]);
-      const csv = [header.join(','), ...rows.map(r => r.map(x => `"${x}"`).join(','))].join('\r\n');
-
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `history_${userId}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    };
-
-    // Live watch: auto-refresh balance + empty-state
-    let watchTimer = null;
-    $('btnWatch').onclick = () => {
-      const userId = $('userId').value.trim();
-      if (!userId) return alert('Enter User ID');
-      if (watchTimer) {
-        clearInterval(watchTimer); watchTimer = null;
-        $('btnWatch').textContent = 'Start Live Watch';
-        return;
-      }
-      $('btnWatch').textContent = 'Stop Live Watch';
-      watchTimer = setInterval(() => { checkBalance(); }, 3000);
-      checkBalance(); // fire immediately
-    };
-  </script>
-
-<script>
-
-  // --- Shop state ---
-let SHOP_ITEMS = [];
-let PENDING_ITEM = null;
-
-async function loadShop() {
-  const res = await fetch('/api/rewards');          // expects [{id,title,price,imageUrl,desc}]
-  const items = await res.json();
-  SHOP_ITEMS = items || [];
-  renderShop();
-}
-
-function renderShop() {
-  const list = $('shopList');
-  const empty = $('shopEmpty');
-  list.innerHTML = '';
-  if (!SHOP_ITEMS.length) { empty.style.display = ''; return; }
-  empty.style.display = 'none';
-
-  const showUrls = $('toggleShowUrls')?.checked;
-  for (const it of SHOP_ITEMS) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.innerHTML = `
-      <img src="${it.imageUrl || ''}" alt="" class="thumb" />
-      <div class="col">
-        <div class="title">${it.title} — <b>${it.price}</b> RT</div>
-        <div class="desc">${it.desc || ''}</div>
-        ${showUrls && it.imageUrl ? `<div class="url">${it.imageUrl}</div>` : ''}
-      </div>
-      <div class="col actions">
-        <button data-id="${it.id}" class="btnBuy">Buy</button>
-      </div>
-    `;
-    list.appendChild(row);
-  }
-
-  list.querySelectorAll('.btnBuy').forEach(btn => {
-    btn.addEventListener('click', () => openBuyConfirm(btn.dataset.id));
-  });
-}
-
-function openBuyConfirm(id) {
-  PENDING_ITEM = SHOP_ITEMS.find(x => String(x.id) === String(id)) || null;
-  if (!PENDING_ITEM) return;
-  $('buyTitle').textContent = 'Confirm purchase';
-  $('buyDesc').textContent  = `${PENDING_ITEM.title} — ${PENDING_ITEM.price} RT`;
-  $('buyConfirm').style.display = 'block';
-}
-function closeBuyConfirm() {
-  $('buyConfirm').style.display = 'none';
-  PENDING_ITEM = null;
-}
-
-// BUY = generate a QR that admin will scan to redeem (will change to “pending” flow in Step 3)
-
-async function buyNowGenerateQr() {
-  if (!PENDING_ITEM) return;
-  const userId = $('userId').value.trim();     // ← use #userId (exists)
-  if (!userId) { alert('Missing user id'); return; }
-
-  const res = await fetch('/shop/mintSpend', { // ← new route (matches index.js)
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ userId, rewardId: PENDING_ITEM.id }) // ← rewardId, not itemId
-  });
-  const j = await res.json();
-  if (!res.ok) { alert(j.error || 'Failed to mint'); return; }
-
-  closeBuyConfirm();
-  // show the QR for parent/admin to scan
-  renderQrInto('shopQrBox', j.url);            // ← use existing QR helper/box
-}
-
-$('btnLoadShop')?.addEventListener('click', loadShop);
-$('toggleShowUrls')?.addEventListener('change', renderShop);
-$('btnBuyNow')?.addEventListener('click', buyNowGenerateQr);
-$('btnBuyCancel')?.addEventListener('click', closeBuyConfirm);
-
-</script>
-<!-- load child behavior (shop + earn). bump v when you change the file -->
-<script src="/child.js?v=ck8"></script>
-<script>
-  // Remove any section that renders a "My Balance" heading (in case a legacy script injects it)
-  window.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('h2').forEach(h => {
-      if (h.textContent.trim() === 'My Balance') {
-        const sec = h.closest('section') || h.parentElement;
-        if (sec) sec.remove();
-      }
-    });
-  });
-</script>
+  <script src="https://unpkg.com/jsqr"></script>
+  <script src="/qrcode.min.js?v=23ffecc"></script>
+  <script defer src="child.js?v=7e01534"></script>
 </body>
 </html>
