@@ -21,7 +21,7 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "cryptokids.db");
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
-const ADMIN_KEY = (process.env.ADMIN_KEY || "adminkey").trim();
+const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
 const PORT = process.env.PORT || 4000;

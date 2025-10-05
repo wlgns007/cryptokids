@@ -301,17 +301,17 @@
 
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
 
-  async function loadRewards() {
+  async function loadRewards(){
     const list = $('shopList');
     if (list) list.innerHTML = '<div class="muted">Loading...</div>';
     const empty = $('shopEmpty');
     if (empty) empty.style.display = 'none';
-    try {
+    try{
       const res = await fetch('/api/rewards?active=1');
-      const data = await res.json().catch(() => []);
+      const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to load rewards');
-      renderRewards(Array.isArray(data) ? data : []);
-    } catch (err) {
+      renderRewards(data || []);
+    }catch(err){
       renderError(err.message || String(err));
     }
   }
@@ -340,22 +340,31 @@
       const card = document.createElement('div');
       card.className = 'reward-card';
 
-      const thumb = document.createElement('img');
-      thumb.className = 'reward-thumb';
-      thumb.src = item.image_url || item.imageUrl || '';
-      thumb.loading = 'lazy';
-      thumb.width = 96; thumb.height = 96;
-      thumb.style.objectFit = 'cover';
-      thumb.style.aspectRatio = '1/1';
-      thumb.addEventListener('click', () => openImageModal(thumb.src));
-      card.appendChild(thumb);
+      if (item.image_url){
+        const thumb = document.createElement('img');
+        thumb.className = 'reward-thumb';
+        thumb.src = item.image_url;
+        thumb.alt = item.name;
+        thumb.loading = 'lazy';
+        thumb.width = 96; thumb.height = 96;
+        thumb.style.objectFit = 'cover'; thumb.style.aspectRatio = '1/1';
+        thumb.addEventListener('click', ()=> openImageModal(thumb.src));
+        thumb.onerror = () => thumb.remove();
+        card.appendChild(thumb);
+      } else {
+        const spacer = document.createElement('div');
+        spacer.style.width = '96px';
+        spacer.style.height = '96px';
+        spacer.style.flex = '0 0 auto';
+        card.appendChild(spacer);
+      }
 
       const info = document.createElement('div');
       info.style.flex = '1 1 auto';
 
-      const titleEl = document.createElement('div');
-      titleEl.textContent = `${index + 1}. ${item.name}`;
-      info.appendChild(titleEl);
+      const title = document.createElement('div');
+      title.textContent = `${index + 1}. ${item.name}`;
+      info.appendChild(title);
 
       const cost = document.createElement('div');
       cost.className = 'muted';

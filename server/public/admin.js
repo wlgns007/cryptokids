@@ -542,31 +542,29 @@ setupScanner({
     }
   }
 
-  document.getElementById('btnCreateReward')?.addEventListener('click', async (e) => {
+  document.getElementById('btnCreateReward')?.addEventListener('click', async (e)=>{
     e.preventDefault();
-
     const name = document.getElementById('rewardName')?.value?.trim() || '';
-    const cost = Number(document.getElementById('rewardCost')?.value ?? NaN);
-    const imageUrl = (document.getElementById('rewardImage')?.value?.trim() || '') || null;
+    const cost = Number(document.getElementById('rewardCost')?.value || NaN);
+    const imageUrl = document.getElementById('rewardImage')?.value?.trim() || null;
     const description = document.getElementById('rewardDesc')?.value?.trim() || '';
-
     if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
     const { res, body } = await adminFetch('/api/rewards', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json' },
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ name, cost, imageUrl, description }),
     });
 
-    if (res.status === 401) { toast('Admin key invalid. Save "Mamapapa" then retry.', 'error'); return; }
-    if (!res.ok)        { toast((typeof body==='string'? body : body?.error)||'Create failed','error'); return; }
+    if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+    if (!res.ok){ toast((typeof body === 'string' ? body : body?.error) || 'Create failed', 'error'); return; }
 
-    toast('Reward created');  // reset + refresh
+    toast('Reward created');
     document.getElementById('rewardName').value = '';
     document.getElementById('rewardCost').value = '1';
     document.getElementById('rewardImage').value = '';
     document.getElementById('rewardDesc').value = '';
-    loadRewards?.();
+    loadRewards?.(); // refresh the list if available
   });
 
   // image upload
