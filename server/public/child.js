@@ -266,15 +266,46 @@
     }
   });
 
-  // ===== Shop =====
+  function toast(msg) {
+    if (!msg) return;
+    window.alert(msg);
+  }
+
+  function setQR(text = '', url = '') {
+    const msg = $('shopMsg');
+    if (msg) msg.textContent = text || '';
+    const box = $('shopQrBox');
+    if (!box) return;
+    box.innerHTML = '';
+    if (url) {
+      const img = new Image();
+      img.src = url;
+      img.alt = 'Reward QR code';
+      img.loading = 'lazy';
+      img.style.maxWidth = '220px';
+      img.style.maxHeight = '220px';
+      img.style.background = '#fff';
+      img.style.padding = '8px';
+      img.style.borderRadius = '12px';
+      box.appendChild(img);
+    }
+  }
+
+  function openImageModal(src){
+    const m = document.createElement('div');
+    Object.assign(m.style,{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',display:'grid',placeItems:'center',zIndex:9999});
+    m.addEventListener('click',()=>m.remove());
+    const big = new Image(); big.src = src; big.style.maxWidth='90vw'; big.style.maxHeight='90vh'; big.style.boxShadow='0 8px 24px rgba(0,0,0,.5)';
+    m.appendChild(big); document.body.appendChild(m);
+  }
+
   $('btnLoadShop')?.addEventListener('click', loadShop);
   async function loadShop() {
     const userId = getUserId();
     if (!userId) { alert('Enter user id'); return; }
-    $('shopMsg').textContent = 'Loading...';
+    setQR('Loading...');
     $('shopList').innerHTML = '';
     $('shopEmpty').style.display = 'none';
-    $('shopQrBox').innerHTML = '';
     try {
       const [balanceRes, rewardsRes] = await Promise.all([
         fetch(`/summary/${encodeURIComponent(userId)}`),
@@ -285,9 +316,10 @@
       if (!balanceRes.ok) throw new Error(balanceData.error || 'balance failed');
       if (!rewardsRes.ok) throw new Error(rewards.error || 'rewards failed');
       $('shopMsg').textContent = `Balance: ${balanceData.balance} points`;
+      setQR('');
       renderShop(rewards, balanceData.balance);
     } catch (err) {
-      $('shopMsg').textContent = err.message || 'Failed to load shop';
+      setQR(err.message || 'Failed to load shop');
     }
   }
 
@@ -319,6 +351,7 @@
         placeholder.style.height = '96px';
         row.appendChild(placeholder);
       }
+      row.appendChild(img);
 
       const info = document.createElement('div');
       const title = document.createElement('div');
@@ -349,7 +382,7 @@
   async function createHold(item) {
     const userId = getUserId();
     if (!userId) { alert('Enter user id'); return; }
-    $('shopMsg').textContent = 'Creating hold...';
+    setQR('Creating hold...');
     try {
       const res = await fetch('/api/holds', {
         method: 'POST',
@@ -364,7 +397,8 @@
       checkBalance();
       loadHistory();
     } catch (err) {
-      $('shopMsg').textContent = err.message || 'Failed to create hold';
+      setQR('');
+      toast(err.message || 'Create hold failed', 'error');
     }
   }
 

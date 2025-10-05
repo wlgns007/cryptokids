@@ -185,6 +185,11 @@
       font-size: 13px;
     }
 
+    .mono {
+      font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      word-break: break-all;
+    }
+
     .stack {
       display: grid;
       gap: 12px;
@@ -489,7 +494,7 @@
             <input id="filterRewards" type="text" placeholder="Search rewards">
           </label>
           <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
-            <input type="checkbox" id="toggleUrls">
+            <input type="checkbox" id="adminShowUrls">
             <span>Show image URLs</span>
           </label>
         </div>
@@ -506,7 +511,7 @@
           <label>Cost
             <input id="rewardCost" type="number" min="1" step="1" placeholder="points">
           </label>
-          <label>Image URL
+          <label>Image URL (optional)
             <input id="rewardImage" type="text" placeholder="https://...">
           </label>
         </div>

@@ -448,26 +448,37 @@ app.delete("/api/earn-templates/:id", requireAdminKey, (req, res) => {
 });
 
 app.get("/api/rewards", (_req, res) => {
-  const rows = db.prepare("SELECT id, name, price, description, image_url FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
+  const rows = db.prepare("SELECT id, name, price, description, image_url, active FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
   res.json(rows.map(r => ({
     id: r.id,
+    name: r.name,
     title: r.name,
+    cost: r.price,
     price: r.price,
     description: r.description || "",
-    imageUrl: r.image_url || ""
+    image_url: r.image_url || "",
+    imageUrl: r.image_url || "",
+    active: r.active
   })));
 });
 
-app.post("/api/rewards", requireAdminKey, (req, res) => {
-  const { name, price, description = "", imageUrl = "" } = req.body || {};
-  if (!name || !Number.isFinite(Number(price))) {
-    return res.status(400).json({ error: "invalid_reward" });
+app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
+  try {
+    const { name, cost, imageUrl = null, description = "" } = req.body || {};
+    if (!name || Number.isNaN(Number(cost))) return res.status(400).json({ error: "name and cost required" });
+    const stmt = db.prepare("INSERT INTO rewards (name, price, image_url, description, active, created_at) VALUES (?, ?, ?, ?, 1, ?)");
+    const info = stmt.run(String(name), Math.floor(Number(cost)), imageUrl ? String(imageUrl) : null, String(description || ""), nowSec());
+    const row = db.prepare("SELECT id, name, price AS cost, image_url, description, active FROM rewards WHERE id = ?").get(info.lastInsertRowid);
+    if (!row) return res.status(500).json({ error: "create reward failed" });
+    res.status(201).json({
+      ...row,
+      price: row.cost,
+      imageUrl: row.image_url
+    });
+  } catch (e) {
+    console.error("create reward", e);
+    res.status(500).json({ error: "create reward failed" });
   }
-  const info = db.prepare(`
-    INSERT INTO rewards (name, price, description, image_url, active, created_at)
-    VALUES (?, ?, ?, ?, 1, ?)
-  `).run(String(name), Math.floor(Number(price)), String(description || ""), String(imageUrl || ""), nowSec());
-  res.status(201).json({ id: info.lastInsertRowid });
 });
 
 app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
@@ -619,49 +630,40 @@ app.post("/api/earn/quick", requireAdminKey, (req, res) => {
   res.json({ ok: true, userId, amount: tpl.points, balance: next });
 });
 
-app.post("/api/holds", (req, res) => {
-  const userId = normId(req.body?.userId);
-  const itemId = Number(req.body?.itemId);
-  if (!userId || !itemId) {
-    return res.status(400).json({ error: "invalid_payload" });
-  }
-  const reward = db.prepare("SELECT * FROM rewards WHERE id = ? AND active = 1").get(itemId);
-  if (!reward) {
-    return res.status(404).json({ error: "reward_not_found" });
-  }
-  const id = crypto.randomUUID();
-  const createdAt = Date.now();
-  db.prepare(`
-    INSERT INTO holds (id, userId, status, itemId, itemName, itemImage, quotedCost, createdAt)
-    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
-  `).run(id, userId, String(reward.id), reward.name, reward.image_url || "", reward.price, createdAt);
-  applyLedger({
-    userId,
-    delta: 0,
-    action: "spend_hold",
-    note: reward.name,
-    holdId: id,
-    itemId: String(reward.id),
-    templates: null,
-    actor: "child",
-    req
-  });
-  const { token, payload } = createToken("spend", { holdId: id });
-  res.status(201).json({
-    hold: {
-      id,
+app.post("/api/holds", express.json(), (req, res) => {
+  try {
+    const userId = normId(req.body?.userId);
+    const itemId = Number(req.body?.itemId);
+    if (!userId || !itemId) return res.status(400).json({ error: "userId and itemId required" });
+
+    const reward = db.prepare("SELECT id, name, price, image_url FROM rewards WHERE id = ? AND active = 1").get(itemId);
+    if (!reward) return res.status(404).json({ error: "reward not found" });
+
+    const id = crypto.randomUUID();
+    const createdAt = Date.now();
+    db.prepare(`
+      INSERT INTO holds (id, userId, status, itemId, itemName, itemImage, quotedCost, createdAt)
+      VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+    `).run(id, userId, String(reward.id), reward.name, reward.image_url || "", reward.price, createdAt);
+
+    applyLedger({
       userId,
-      status: "pending",
-      itemId: reward.id,
-      itemName: reward.name,
-      itemImage: reward.image_url || "",
-      quotedCost: reward.price,
-      createdAt
-    },
-    token,
-    qrText: buildQrUrl(req, token),
-    expiresAt: payload.exp
-  });
+      delta: 0,
+      action: "spend_hold",
+      note: reward.name,
+      holdId: id,
+      itemId: String(reward.id),
+      templates: null,
+      actor: "child",
+      req
+    });
+
+    const { token } = createToken("spend", { holdId: id, cost: reward.price });
+    res.status(201).json({ holdId: id, token });
+  } catch (e) {
+    console.error("create hold", e);
+    res.status(500).json({ error: "create hold failed" });
+  }
 });
 
 app.get("/api/holds", requireAdminKey, (req, res) => {

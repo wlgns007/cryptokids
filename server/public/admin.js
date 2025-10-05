@@ -364,7 +364,7 @@ setupScanner({
   }
   const SHOW_URLS_KEY = 'ck_show_urls';
   (function initToggle() {
-    const toggle = $('toggleUrls');
+    const toggle = $('adminShowUrls');
     if (!toggle) return;
     const saved = localStorage.getItem(SHOW_URLS_KEY);
     const show = saved === '1';
@@ -373,6 +373,7 @@ setupScanner({
     toggle.addEventListener('change', () => {
       localStorage.setItem(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
       applyUrlToggle(toggle.checked);
+      loadRewards();
     });
   })();
 
@@ -385,8 +386,17 @@ setupScanner({
       const items = await res.json();
       if (!res.ok) throw new Error(items.error || 'failed');
       list.innerHTML = '';
-      const filtered = items.filter(it => !filter || it.title.toLowerCase().includes(filter));
-      for (const r of filtered) {
+      const normalized = Array.isArray(items) ? items.map(item => ({
+        id: item.id,
+        name: (item.name || item.title || '').trim(),
+        cost: Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0),
+        description: item.description || '',
+        imageUrl: item.imageUrl || item.image_url || '',
+        image_url: item.image_url || item.imageUrl || ''
+      })) : [];
+      const filtered = normalized.filter(it => !filter || it.name.toLowerCase().includes(filter));
+      const showUrls = document.getElementById('adminShowUrls')?.checked;
+      for (const item of filtered) {
         const card = document.createElement('div');
         card.style.background = '#fff';
         card.style.border = '1px solid var(--line)';
@@ -398,28 +408,29 @@ setupScanner({
         card.style.alignItems = 'center';
 
         const img = document.createElement('img');
-        img.src = r.imageUrl || '';
+        img.src = item.imageUrl || '';
         img.alt = '';
         img.style.width = '80px';
         img.style.height = '80px';
         img.style.objectFit = 'cover';
         img.style.borderRadius = '10px';
         img.onerror = () => img.remove();
-        if (r.imageUrl) card.appendChild(img); else card.appendChild(document.createElement('div'));
+        if (item.imageUrl) card.appendChild(img); else card.appendChild(document.createElement('div'));
 
         const meta = document.createElement('div');
-        meta.innerHTML = `<div style="font-weight:600;">${r.title}</div><div class="muted">${r.price} points</div>`;
-        if (r.description) {
+        meta.innerHTML = `<div style="font-weight:600;">${item.name}</div><div class="muted">${item.cost} points</div>`;
+        if (item.description) {
           const desc = document.createElement('div');
           desc.className = 'muted';
-          desc.textContent = r.description;
+          desc.textContent = item.description;
           meta.appendChild(desc);
         }
-        if (r.imageUrl) {
-          const url = document.createElement('div');
-          url.className = 'muted url';
-          url.textContent = r.imageUrl;
-          meta.appendChild(url);
+        const showImgUrl = showUrls && item.image_url;
+        if (showImgUrl) {
+          const p = document.createElement('div');
+          p.className = 'muted mono';
+          p.textContent = item.image_url;
+          meta.appendChild(p);
         }
         card.appendChild(meta);
 
@@ -429,7 +440,7 @@ setupScanner({
         actions.style.gap = '6px';
         const disableBtn = document.createElement('button');
         disableBtn.textContent = 'Deactivate';
-        disableBtn.addEventListener('click', () => updateReward(r.id, { active: 0 }));
+        disableBtn.addEventListener('click', () => updateReward(item.id, { active: 0 }));
         actions.appendChild(disableBtn);
         card.appendChild(actions);
 
