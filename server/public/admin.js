@@ -3,6 +3,7 @@
   window.__CK_ADMIN_READY__ = true;
 
   const ADMIN_KEY_DEFAULT = 'Mamapapa';
+  const ADMIN_INVALID_MSG = 'Admin key invalid. Use "Mamapapa" → Save, then retry.';
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
@@ -27,6 +28,20 @@
     }, ms);
   }
 
+  function openImageModal(src){
+    if (!src) return;
+    const m=document.createElement('div');
+    Object.assign(m.style,{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',display:'grid',placeItems:'center',zIndex:9999});
+    m.addEventListener('click',()=>m.remove());
+    const big=new Image();
+    big.src=src;
+    big.style.maxWidth='90vw';
+    big.style.maxHeight='90vh';
+    big.style.boxShadow='0 8px 24px rgba(0,0,0,.5)';
+    m.appendChild(big);
+    document.body.appendChild(m);
+  }
+
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
     return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
@@ -46,18 +61,15 @@
     if (saved && keyInput) keyInput.value = saved;
   });
 
+  function getAdminKey(){
+    const el = document.getElementById('adminKey');
+    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
+  }
   async function adminFetch(url, opts = {}) {
-    const key = (localStorage.getItem('CK_ADMIN_KEY') || $k('adminKey')?.value || '').trim();
-    const headers = { ...(opts.headers || {}), 'x-admin-key': key };
+    const headers = { ...(opts.headers||{}), 'x-admin-key': getAdminKey() };
     const res = await fetch(url, { ...opts, headers });
-
-    const ctype = res.headers.get('content-type') || '';
-    let body;
-    if (ctype.includes('application/json')) {
-      body = await res.json().catch(() => ({}));
-    } else {
-      body = await res.text().catch(() => '');
-    }
+    const ct = res.headers.get('content-type') || '';
+    const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
   }
 
@@ -105,6 +117,11 @@
         body: JSON.stringify({ userId, amount, note: note || undefined })
       });
       const data = body && typeof body === 'object' ? body : {};
+      if (res.status === 401){
+        toast(ADMIN_INVALID_MSG, 'error');
+        $('issueStatus').textContent = 'Admin key invalid.';
+        return;
+      }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'request failed');
         throw new Error(msg);
@@ -125,9 +142,13 @@
     const userId = $('issueUserId').value.trim();
     if (!userId) return toast('Enter user id', 'error');
     try {
-      const res = await fetch(`/balance/${encodeURIComponent(userId)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
+      const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (!res.ok){
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
       $('issueStatus').textContent = `Balance: ${data.balance} points`;
     } catch (err) {
       toast(err.message || 'Balance failed', 'error');
@@ -149,6 +170,12 @@
     holdsTable.innerHTML = '';
     try {
       const { res, body } = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
+      if (res.status === 401){
+        toast(ADMIN_INVALID_MSG, 'error');
+        $('holdsStatus').textContent = 'Admin key invalid.';
+        holdsTable.innerHTML = '<tr><td colspan="6" class="muted">Admin key invalid.</td></tr>';
+        return;
+      }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
         throw new Error(msg);
@@ -197,6 +224,7 @@
     if (!confirm('Cancel this hold?')) return;
     try {
       const { res, body } = await adminFetch(`/api/holds/${id}/cancel`, { method: 'POST' });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
         throw new Error(msg);
@@ -316,6 +344,7 @@ setupScanner({
         })
       });
 
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'Approve failed');
         throw new Error(msg);
@@ -344,13 +373,17 @@ setupScanner({
       return;
     }
     try {
-      const res = await adminFetch('/api/earn/scan', {
+      const { res, body } = await adminFetch('/api/earn/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: parsed.token })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Scan failed');
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Scan failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
       toast(`Credited ${data.amount} to ${data.userId}`);
     } catch (err) {
       toast(err.message || 'Scan failed', 'error');
@@ -379,76 +412,112 @@ setupScanner({
 
   async function loadRewards() {
     const list = $('rewardsList');
-    const filter = $('filterRewards').value.toLowerCase();
+    if (!list) return;
+    const statusEl = $('rewardsStatus');
+    const filterValue = $('filterRewards')?.value?.toLowerCase?.() || '';
     list.innerHTML = '<div class="muted">Loading...</div>';
+    if (statusEl) statusEl.textContent = '';
     try {
-      const res = await fetch('/api/rewards');
-      const items = await res.json();
-      if (!res.ok) throw new Error(items.error || 'failed');
+      const { res, body } = await adminFetch('/api/rewards');
+      if (res.status === 401){
+        toast(ADMIN_INVALID_MSG, 'error');
+        list.innerHTML = '<div class="muted">Admin key invalid.</div>';
+        return;
+      }
+      if (!res.ok){
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to load rewards');
+        throw new Error(msg);
+      }
+      const items = Array.isArray(body) ? body : [];
       list.innerHTML = '';
-      const normalized = Array.isArray(items) ? items.map(item => ({
+      const normalized = items.map(item => ({
         id: item.id,
         name: (item.name || item.title || '').trim(),
         cost: Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0),
         description: item.description || '',
         imageUrl: item.imageUrl || item.image_url || '',
         image_url: item.image_url || item.imageUrl || ''
-      })) : [];
-      const filtered = normalized.filter(it => !filter || it.name.toLowerCase().includes(filter));
+      }));
+      const filtered = normalized.filter(it => !filterValue || it.name.toLowerCase().includes(filterValue));
       const showUrls = document.getElementById('adminShowUrls')?.checked;
       for (const item of filtered) {
         const card = document.createElement('div');
+        card.className = 'reward-card';
+        card.style.display = 'flex';
+        card.style.alignItems = 'center';
+        card.style.gap = '12px';
         card.style.background = '#fff';
         card.style.border = '1px solid var(--line)';
         card.style.borderRadius = '10px';
         card.style.padding = '12px';
-        card.style.display = 'grid';
-        card.style.gridTemplateColumns = '80px 1fr auto';
-        card.style.gap = '12px';
-        card.style.alignItems = 'center';
 
-        const img = document.createElement('img');
-        img.src = item.imageUrl || '';
-        img.alt = '';
-        img.style.width = '80px';
-        img.style.height = '80px';
-        img.style.objectFit = 'cover';
-        img.style.borderRadius = '10px';
-        img.onerror = () => img.remove();
-        if (item.imageUrl) card.appendChild(img); else card.appendChild(document.createElement('div'));
+        const thumb = document.createElement('img');
+        thumb.className = 'reward-thumb';
+        thumb.src = item.imageUrl || '';
+        thumb.alt = '';
+        thumb.loading = 'lazy';
+        thumb.width = 96;
+        thumb.height = 96;
+        thumb.style.objectFit = 'cover';
+        thumb.style.aspectRatio = '1/1';
+        thumb.addEventListener('click', () => { if (thumb.src) openImageModal(thumb.src); });
+        if (thumb.src){
+          card.appendChild(thumb);
+        } else {
+          const spacer = document.createElement('div');
+          spacer.style.width = '96px';
+          spacer.style.height = '96px';
+          spacer.style.flex = '0 0 auto';
+          card.appendChild(spacer);
+        }
 
-        const meta = document.createElement('div');
-        meta.innerHTML = `<div style="font-weight:600;">${item.name}</div><div class="muted">${item.cost} points</div>`;
+        const info = document.createElement('div');
+        info.style.flex = '1 1 auto';
+        const title = document.createElement('div');
+        title.style.fontWeight = '600';
+        title.textContent = item.name || 'Reward';
+        info.appendChild(title);
+
+        const cost = document.createElement('div');
+        cost.className = 'muted';
+        cost.textContent = `${item.cost || 0} points`;
+        info.appendChild(cost);
+
         if (item.description) {
           const desc = document.createElement('div');
           desc.className = 'muted';
           desc.textContent = item.description;
-          meta.appendChild(desc);
+          info.appendChild(desc);
         }
-        const showImgUrl = showUrls && item.image_url;
-        if (showImgUrl) {
-          const p = document.createElement('div');
-          p.className = 'muted mono';
-          p.textContent = item.image_url;
-          meta.appendChild(p);
+
+        card.appendChild(info);
+
+        if (showUrls && item.image_url){
+          const div = document.createElement('div');
+          div.className = 'muted mono';
+          div.textContent = item.image_url;
+          card.appendChild(div);
         }
-        card.appendChild(meta);
 
         const actions = document.createElement('div');
         actions.style.display = 'flex';
         actions.style.flexDirection = 'column';
         actions.style.gap = '6px';
-        const disableBtn = document.createElement('button');
-        disableBtn.textContent = 'Deactivate';
-        disableBtn.addEventListener('click', () => updateReward(item.id, { active: 0 }));
-        actions.appendChild(disableBtn);
+        actions.style.flex = '0 0 auto';
+        actions.style.marginLeft = 'auto';
+        const deactivate = document.createElement('button');
+        deactivate.textContent = 'Deactivate';
+        deactivate.addEventListener('click', () => updateReward(item.id, { active: 0 }));
+        actions.appendChild(deactivate);
         card.appendChild(actions);
 
         list.appendChild(card);
       }
       if (!filtered.length) list.innerHTML = '<div class="muted">No rewards match.</div>';
     } catch (err) {
-      $('rewardsStatus').textContent = err.message || 'Failed to load rewards';
+      const msg = err.message || 'Failed to load rewards';
+      if (statusEl) statusEl.textContent = msg;
+      if (list) list.innerHTML = `<div class="muted">${msg}</div>`;
     }
   }
   $('btnLoadRewards')?.addEventListener('click', loadRewards);
@@ -461,6 +530,7 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (respBody && respBody.error) || (typeof respBody === 'string' ? respBody : 'update failed');
         throw new Error(msg);
@@ -472,45 +542,43 @@ setupScanner({
     }
   }
 
-  async function createReward() {
-    const name = $('rewardName').value.trim();
-    const cost = $('rewardCost').value;
-    const imageUrl = $('rewardImage').value.trim();
-    const description = $('rewardDescription').value.trim();
-    const costValue = Number(cost);
-    if (!name || !Number.isFinite(costValue) || costValue <= 0) {
-      toast('Enter name and positive price', 'error');
+  document.getElementById('btnCreateReward')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+
+    const nameEl  = document.getElementById('rewardName');
+    const costEl  = document.getElementById('rewardCost');
+    const imgEl   = document.getElementById('rewardImage');
+    const descEl  = document.getElementById('rewardDesc');
+
+    const name = nameEl?.value?.trim() || '';
+    const cost = Number(costEl?.value ?? NaN);
+    const imageUrl = (imgEl?.value?.trim() || '') || null;  // optional
+    const description = descEl?.value?.trim() || '';
+
+    if (!name || Number.isNaN(cost)) {
+      toast('Name and numeric cost required', 'error');
       return;
     }
-    try {
-      const payload = { name, cost: costValue, imageUrl, description };
-      const { res, body } = await adminFetch('/api/rewards', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.status === 401) {
-        toast('Admin key invalid. Use "Mamapapa" → Save, then retry.', 'error');
-        return;
-      }
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Create failed');
-        toast(msg, 'error');
-        return;
-      }
-      $('rewardsStatus').textContent = '';
-      toast('Reward created');
-      $('rewardName').value = '';
-      $('rewardCost').value = '';
-      $('rewardImage').value = '';
-      $('rewardDescription').value = '';
-      reloadRewards?.();
-      loadRewards();
-    } catch (err) {
-      toast(err.message || 'Create failed', 'error');
-    }
-  }
-  $('btnCreateReward')?.addEventListener('click', createReward);
+
+    // use the auth-aware helper so 401s stop once key is saved
+    const { res, body } = await adminFetch('/api/rewards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, cost, imageUrl, description }),
+    });
+
+    if (res.status === 401) { toast('Admin key invalid. Save "Mamapapa" then retry.', 'error'); return; }
+    if (!res.ok) { toast((typeof body === 'string' ? body : body?.error) || 'Create failed', 'error'); return; }
+
+    toast('Reward created');
+
+    // reset + refresh list
+    if (nameEl) nameEl.value = '';
+    if (costEl) costEl.value = '1';
+    if (imgEl)  imgEl.value  = '';
+    if (descEl) descEl.value = '';
+    loadRewards?.();
+  });
 
   // image upload
   const drop = $('drop');
@@ -538,6 +606,7 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image64: base64 })
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); uploadStatus.textContent = 'Admin key invalid.'; return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'upload failed');
         throw new Error(msg);
@@ -566,9 +635,13 @@ setupScanner({
 
   async function loadTemplates() {
     try {
-      const res = await fetch('/api/earn-templates?sort=sort_order');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'failed');
+      const { res, body } = await adminFetch('/api/earn-templates?sort=sort_order');
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (!res.ok){
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
+        throw new Error(msg);
+      }
+      const data = Array.isArray(body) ? body : [];
       earnTemplates = data;
       renderTemplates();
       populateQuickTemplates();
@@ -627,6 +700,7 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, points, description, youtube_url, sort_order })
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'create failed');
         throw new Error(msg);
@@ -653,6 +727,7 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, points, description, youtube_url, sort_order })
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'update failed');
         throw new Error(msg);
@@ -686,6 +761,7 @@ setupScanner({
     if (!confirm('Delete this template?')) return;
     try {
       const { res, body } = await adminFetch(`/api/earn-templates/${id}`, { method: 'DELETE' });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'delete failed');
         throw new Error(msg);
@@ -719,6 +795,7 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ templateId, userId })
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'quick failed');
         throw new Error(msg);
@@ -777,6 +854,11 @@ setupScanner({
       const params = buildHistoryParams();
       const qs = new URLSearchParams(params).toString();
       const { res, body } = await adminFetch(`/api/history?${qs}`);
+      if (res.status === 401){
+        toast(ADMIN_INVALID_MSG, 'error');
+        historyTable.innerHTML = '<tr><td colspan="11" class="muted">Admin key invalid.</td></tr>';
+        return;
+      }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'history failed');
         throw new Error(msg);
