@@ -304,8 +304,13 @@
       row.className = 'shop-item';
       if (item.imageUrl) {
         const img = document.createElement('img');
+        img.className = 'reward-thumb';
         img.src = item.imageUrl;
         img.alt = '';
+        img.loading = 'lazy';
+        img.setAttribute('width', '96');
+        img.setAttribute('height', '96');
+        img.setAttribute('style', 'object-fit:cover; aspect-ratio:1/1;');
         img.onerror = () => img.remove();
         row.appendChild(img);
       } else {
