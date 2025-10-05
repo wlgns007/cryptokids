@@ -266,15 +266,46 @@
     }
   });
 
-  // ===== Shop =====
+  function toast(msg) {
+    if (!msg) return;
+    window.alert(msg);
+  }
+
+  function setQR(text = '', url = '') {
+    const msg = $('shopMsg');
+    if (msg) msg.textContent = text || '';
+    const box = $('shopQrBox');
+    if (!box) return;
+    box.innerHTML = '';
+    if (url) {
+      const img = new Image();
+      img.src = url;
+      img.alt = 'Reward QR code';
+      img.loading = 'lazy';
+      img.style.maxWidth = '220px';
+      img.style.maxHeight = '220px';
+      img.style.background = '#fff';
+      img.style.padding = '8px';
+      img.style.borderRadius = '12px';
+      box.appendChild(img);
+    }
+  }
+
+  function openImageModal(src){
+    const m = document.createElement('div');
+    Object.assign(m.style,{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',display:'grid',placeItems:'center',zIndex:9999});
+    m.addEventListener('click',()=>m.remove());
+    const big = new Image(); big.src = src; big.style.maxWidth='90vw'; big.style.maxHeight='90vh'; big.style.boxShadow='0 8px 24px rgba(0,0,0,.5)';
+    m.appendChild(big); document.body.appendChild(m);
+  }
+
   $('btnLoadShop')?.addEventListener('click', loadShop);
   async function loadShop() {
     const userId = getUserId();
     if (!userId) { alert('Enter user id'); return; }
-    $('shopMsg').textContent = 'Loading...';
+    setQR('Loading...');
     $('shopList').innerHTML = '';
     $('shopEmpty').style.display = 'none';
-    $('shopQrBox').innerHTML = '';
     try {
       const [balanceRes, rewardsRes] = await Promise.all([
         fetch(`/summary/${encodeURIComponent(userId)}`),
@@ -285,9 +316,10 @@
       if (!balanceRes.ok) throw new Error(balanceData.error || 'balance failed');
       if (!rewardsRes.ok) throw new Error(rewards.error || 'rewards failed');
       $('shopMsg').textContent = `Balance: ${balanceData.balance} points`;
+      setQR('');
       renderShop(rewards, balanceData.balance);
     } catch (err) {
-      $('shopMsg').textContent = err.message || 'Failed to load shop';
+      setQR(err.message || 'Failed to load shop');
     }
   }
 
@@ -298,25 +330,43 @@
       $('shopEmpty').style.display = 'block';
       return;
     }
-    for (const item of items) {
-      const canAfford = balance >= item.price;
+    items.forEach((item, index) => {
+      item.name = item.name || item.title || '';
+      const cost = Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0);
+      const canAfford = balance >= cost;
       const row = document.createElement('div');
-      row.className = 'shop-item';
-      if (item.imageUrl) {
-        const img = document.createElement('img');
-        img.src = item.imageUrl;
-        img.alt = '';
-        img.onerror = () => img.remove();
-        row.appendChild(img);
-      } else {
-        const placeholder = document.createElement('div');
-        placeholder.style.width = '96px';
-        placeholder.style.height = '96px';
-        row.appendChild(placeholder);
+      row.className = 'shop-item reward-card';
+
+      const img = document.createElement('img');
+      img.className = 'reward-thumb';
+      img.src = item.image_url || item.imageUrl || '';
+      img.alt = '';
+      img.loading = 'lazy';
+      img.width = 96; img.height = 96;
+      img.style.objectFit = 'cover'; img.style.aspectRatio = '1 / 1';
+      img.addEventListener('click', () => {
+        if (img.src) openImageModal(img.src);
+      });
+      if (!img.src) {
+        img.style.background = '#e2e8f0';
       }
+      row.appendChild(img);
 
       const info = document.createElement('div');
-      info.innerHTML = `<div class="price">${item.title}</div><div class="muted">${item.price} points</div><div class="muted">${item.description || ''}</div>`;
+      const titleEl = document.createElement('div');
+      titleEl.className = 'price';
+      titleEl.textContent = `${index + 1}. ${item.name}`;
+      info.appendChild(titleEl);
+
+      const price = document.createElement('div');
+      price.className = 'muted';
+      price.textContent = `${cost} points`;
+      info.appendChild(price);
+
+      const description = document.createElement('div');
+      description.className = 'muted';
+      description.textContent = item.description || '';
+      info.appendChild(description);
       row.appendChild(info);
 
       const btn = document.createElement('button');
@@ -325,27 +375,29 @@
       if (canAfford) btn.addEventListener('click', () => createHold(item));
       row.appendChild(btn);
       list.appendChild(row);
-    }
+    });
   }
 
   async function createHold(item) {
     const userId = getUserId();
     if (!userId) { alert('Enter user id'); return; }
-    $('shopMsg').textContent = 'Creating hold...';
+    setQR('Creating hold...');
     try {
       const res = await fetch('/api/holds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, itemId: item.id })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'hold failed');
-      $('shopMsg').textContent = `Show this QR to an adult to pick up ${item.title}.`;
-      renderQr('shopQrBox', data.qrText);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Create hold failed');
+      const url = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.token)}`;
+      setQR('', url);
+      $('shopMsg').textContent = `Show this QR to an adult to pick up ${item.name || item.title || 'this item'}.`;
       checkBalance();
       loadHistory();
     } catch (err) {
-      $('shopMsg').textContent = err.message || 'Failed to create hold';
+      setQR('');
+      toast(err.message || 'Create hold failed', 'error');
     }
   }
 

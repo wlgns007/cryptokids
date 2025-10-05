@@ -5,8 +5,8 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CryptoKids — Admin</title>
-  <link rel="icon" href="data:,">
-  <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__">
+  <!-- <link rel="icon" href="/favicon.ico"> -->
+  <!-- <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__"> -->
   <meta name="theme-color" content="#ffffff">
   <style>
     :root {
@@ -183,6 +183,11 @@
     .muted {
       color: var(--muted);
       font-size: 13px;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+      word-break: break-all;
     }
 
     .stack {
@@ -391,7 +396,7 @@
       <div class="admin-key">
         <label>
           Admin Key
-          <input id="adminKey" type="text" placeholder="enter admin key">
+          <input id="adminKey" type="text" placeholder="enter admin key (Mamapapa)">
         </label>
         <button id="saveAdminKey">Save</button>
       </div>
@@ -489,7 +494,7 @@
             <input id="filterRewards" type="text" placeholder="Search rewards">
           </label>
           <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
-            <input type="checkbox" id="toggleUrls">
+            <input type="checkbox" id="adminShowUrls">
             <span>Show image URLs</span>
           </label>
         </div>
@@ -506,12 +511,12 @@
           <label>Cost
             <input id="rewardCost" type="number" min="1" step="1" placeholder="points">
           </label>
-          <label>Image URL
+          <label>Image URL (optional)
             <input id="rewardImage" type="text" placeholder="https://...">
           </label>
         </div>
         <label>Description
-          <textarea id="rewardDescription" placeholder="optional details"></textarea>
+          <textarea id="rewardDesc" placeholder="optional details"></textarea>
         </label>
         <div class="row" style="align-items:center;">
           <div id="drop" class="drop" style="flex:1;">
@@ -633,6 +638,6 @@
 
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
-  <script src="/admin.js?v=__BUILD__"></script>
+  <script defer src="admin.js?v={{shortCommit}}"></script>
 </body>
 </html>
