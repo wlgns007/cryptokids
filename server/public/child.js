@@ -1,47 +1,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const LS_FILTER = 'ck_child_filters';
-  const imageModal = $('imageModal');
-  const modalImage = $('modalImage');
-  const modalCaption = $('modalImageCaption');
-
-  function openImageModal(src, title) {
-    if (!imageModal || !modalImage || !src) return;
-    modalImage.src = src;
-    modalImage.alt = title ? `${title} preview` : 'Reward preview';
-    if (modalCaption) {
-      modalCaption.textContent = title || '';
-      modalCaption.style.display = title ? 'block' : 'none';
-    }
-    imageModal.hidden = false;
-    imageModal.setAttribute('aria-hidden', 'false');
-    document.body.style.overflow = 'hidden';
-  }
-
-  function closeImageModal() {
-    if (!imageModal || !modalImage) return;
-    imageModal.hidden = true;
-    imageModal.setAttribute('aria-hidden', 'true');
-    modalImage.src = '';
-    modalImage.alt = 'Reward image preview';
-    if (modalCaption) {
-      modalCaption.textContent = '';
-      modalCaption.style.display = 'none';
-    }
-    document.body.style.removeProperty('overflow');
-  }
-
-  imageModal?.addEventListener('click', (event) => {
-    if (event.target === imageModal) {
-      closeImageModal();
-    }
-  });
-  $('closeImageModal')?.addEventListener('click', closeImageModal);
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && imageModal && !imageModal.hidden) {
-      closeImageModal();
-    }
-  });
 
   function getUserId() {
     return $('childUserId').value.trim();
@@ -182,10 +141,7 @@
   $('btnEarnQr')?.addEventListener('click', async () => {
     const userId = getUserId();
     if (!userId) { alert('Enter user id'); return; }
-    const selected = Array.from(document.querySelectorAll('#earnList input[type="checkbox"]:checked')).map((el) => ({
-      id: Number(el.dataset.id),
-      count: 1
-    }));
+    const selected = Array.from(document.querySelectorAll('#earnList input[type="checkbox"]:checked')).map(el => ({ id: Number(el.dataset.id), count: 1 }));
     if (!selected.length) { alert('Pick at least one task'); return; }
     try {
       const res = await fetch('/api/tokens/earn', {
@@ -346,52 +302,21 @@
       const canAfford = balance >= item.price;
       const row = document.createElement('div');
       row.className = 'shop-item';
-
-      const thumb = document.createElement('div');
-      thumb.className = 'shop-thumb';
       if (item.imageUrl) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'thumb-button';
-        button.setAttribute('aria-label', `View ${item.title} image`);
-        button.addEventListener('click', () => openImageModal(item.imageUrl, item.title));
-
         const img = document.createElement('img');
         img.src = item.imageUrl;
-        img.alt = `${item.title} thumbnail`;
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.className = 'reward-thumb';
-        img.addEventListener('error', () => {
-          button.remove();
-          thumb.textContent = 'No image';
-        });
-
-        button.appendChild(img);
-        thumb.textContent = '';
-        thumb.appendChild(button);
+        img.alt = '';
+        img.onerror = () => img.remove();
+        row.appendChild(img);
       } else {
-        thumb.textContent = 'No image';
+        const placeholder = document.createElement('div');
+        placeholder.style.width = '96px';
+        placeholder.style.height = '96px';
+        row.appendChild(placeholder);
       }
-      row.appendChild(thumb);
 
       const info = document.createElement('div');
-      const title = document.createElement('div');
-      title.className = 'price';
-      title.textContent = item.title;
-      info.appendChild(title);
-
-      const price = document.createElement('div');
-      price.className = 'muted';
-      price.textContent = `${item.price} points`;
-      info.appendChild(price);
-
-      if (item.description) {
-        const desc = document.createElement('div');
-        desc.className = 'muted';
-        desc.textContent = item.description;
-        info.appendChild(desc);
-      }
+      info.innerHTML = `<div class="price">${item.title}</div><div class="muted">${item.price} points</div><div class="muted">${item.description || ''}</div>`;
       row.appendChild(info);
 
       const btn = document.createElement('button');

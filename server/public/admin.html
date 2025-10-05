@@ -6,8 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CryptoKids — Admin</title>
   <link rel="icon" href="data:,">
-  <!-- temporarily removing manifest/icon links to avoid 404s -->
-  <!-- <link rel="manifest" href="/manifest.webmanifest?v=56663a5"> -->
+  <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__">
   <meta name="theme-color" content="#ffffff">
   <style>
     :root {
@@ -71,11 +70,6 @@
       display: grid;
       gap: 10px;
       min-width: 220px;
-    }
-
-    .admin-key .hint {
-      font-size: 12px;
-      color: var(--muted);
     }
 
     .jump-links {
@@ -194,61 +188,6 @@
     .stack {
       display: grid;
       gap: 12px;
-    }
-
-    .rewards-controls {
-      display: grid;
-      gap: 12px;
-      grid-template-columns: 1fr;
-    }
-
-    .rewards-controls .search-full {
-      width: 100%;
-    }
-
-    .rewards-controls .search-full input {
-      width: 100%;
-    }
-
-    #secRewards .row.controls {
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    #secRewards .row.controls > * {
-      flex: 0 0 auto;
-    }
-
-    #secRewards .row.controls label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .earn-controls {
-      display: grid;
-      gap: 12px;
-    }
-
-    .earn-controls .control-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .earn-controls .control-row > * {
-      flex: 0 0 auto;
-    }
-
-    .earn-controls .search-full {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .earn-controls .search-full input {
-      width: 100%;
     }
 
     .drop {
@@ -435,65 +374,11 @@
         font-size: 13px;
       }
     }
-
-    @media (max-width: 480px) {
-      .rewards-controls {
-        grid-template-columns: 1fr;
-      }
-
-      #secRewards .row.controls {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 10px;
-      }
-
-      #secRewards .row.controls > * {
-        width: 100%;
-      }
-
-      #secRewards .row.controls label {
-        align-items: center;
-      }
-
-      .earn-controls {
-        grid-template-columns: 1fr;
-      }
-
-      .earn-controls .control-row {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 10px;
-      }
-
-      .earn-controls .control-row > * {
-        width: 100%;
-      }
-    }
-
-    @media (min-width: 481px) {
-      .rewards-controls {
-        grid-template-columns: auto 1fr;
-        align-items: end;
-      }
-
-      .rewards-controls .search-full {
-        grid-column: 2;
-      }
-
-      .earn-controls {
-        grid-template-columns: auto 1fr;
-        align-items: end;
-      }
-
-      .earn-controls .search-full {
-        grid-column: 2;
-      }
-    }
   </style>
   <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=56663a5'));
-      }
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=__BUILD__'));
+    }
   </script>
 </head>
 <body>
@@ -506,9 +391,8 @@
       <div class="admin-key">
         <label>
           Admin Key
-          <input id="adminKey" type="text" placeholder="Mamapapa">
+          <input id="adminKey" type="text" placeholder="enter admin key">
         </label>
-        <small class="hint">Configured on server (ADMIN_KEY).</small>
         <button id="saveAdminKey">Save</button>
       </div>
     </header>
@@ -599,16 +483,14 @@
 
       <section class="card" id="secRewards">
         <h2>Rewards Menu</h2>
-        <div class="rewards-controls">
-          <div class="row controls">
-            <button id="btnLoadRewards">Load items</button>
-            <label>
-              <input type="checkbox" id="toggleUrls">
-              <span>Show image URLs</span>
-            </label>
-          </div>
-          <label class="search-full">Search
+        <div class="row" style="align-items:flex-end;">
+          <button id="btnLoadRewards">Load Rewards</button>
+          <label style="flex:1;">Search
             <input id="filterRewards" type="text" placeholder="Search rewards">
+          </label>
+          <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
+            <input type="checkbox" id="toggleUrls">
+            <span>Show image URLs</span>
           </label>
         </div>
         <div id="rewardsList" class="stack"></div>
@@ -644,12 +526,10 @@
 
       <section class="card" id="secEarnMenu">
         <h2>Edit Earn Points Menu</h2>
-        <div class="earn-controls">
-          <div class="control-row">
-            <button id="btnAddTemplate" class="primary">Add Task</button>
-            <button id="btnReloadTemplates">Reload</button>
-          </div>
-          <label class="search-full">Search
+        <div class="row">
+          <button id="btnAddTemplate" class="primary">Add Template</button>
+          <button id="btnReloadTemplates">Reload</button>
+          <label style="flex:1;">Search
             <input id="templateSearch" type="text" placeholder="search templates">
           </label>
         </div>
@@ -751,8 +631,8 @@
 
   <div id="toastHost" class="toast-host" aria-live="polite"></div>
 
-  <script src="/qrcode.min.js?v=23ffecc"></script>
+  <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
-  <script defer src="admin.js?v=2d96281"></script>
+  <script src="/admin.js?v=__BUILD__"></script>
 </body>
 </html>

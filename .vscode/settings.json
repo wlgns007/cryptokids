@@ -1,0 +1,6 @@
+{
+  "search.exclude": {
+    "legacy/**": true,
+    "public/Backup/**": true
+  }
+}
