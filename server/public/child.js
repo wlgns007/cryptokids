@@ -331,36 +331,37 @@
       return;
     }
     items.forEach((item, index) => {
-      item.name = item.name || item.title || '';
-      const cost = Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0);
-      const canAfford = balance >= cost;
+      const canAfford = balance >= item.price;
       const row = document.createElement('div');
-      row.className = 'shop-item reward-card';
-
-      const img = document.createElement('img');
-      img.className = 'reward-thumb';
-      img.src = item.image_url || item.imageUrl || '';
-      img.alt = '';
-      img.loading = 'lazy';
-      img.width = 96; img.height = 96;
-      img.style.objectFit = 'cover'; img.style.aspectRatio = '1 / 1';
-      img.addEventListener('click', () => {
-        if (img.src) openImageModal(img.src);
-      });
-      if (!img.src) {
-        img.style.background = '#e2e8f0';
+      row.className = 'shop-item';
+      if (item.imageUrl) {
+        const img = document.createElement('img');
+        img.className = 'reward-thumb';
+        img.src = item.imageUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.setAttribute('width', '96');
+        img.setAttribute('height', '96');
+        img.setAttribute('style', 'object-fit:cover; aspect-ratio:1/1;');
+        img.onerror = () => img.remove();
+        row.appendChild(img);
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.style.width = '96px';
+        placeholder.style.height = '96px';
+        row.appendChild(placeholder);
       }
       row.appendChild(img);
 
       const info = document.createElement('div');
-      const titleEl = document.createElement('div');
-      titleEl.className = 'price';
-      titleEl.textContent = `${index + 1}. ${item.name}`;
-      info.appendChild(titleEl);
+      const title = document.createElement('div');
+      title.className = 'price';
+      title.textContent = `${index + 1}. ${item.title}`;
+      info.appendChild(title);
 
       const price = document.createElement('div');
       price.className = 'muted';
-      price.textContent = `${cost} points`;
+      price.textContent = `${item.price} points`;
       info.appendChild(price);
 
       const description = document.createElement('div');
@@ -388,11 +389,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, itemId: item.id })
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Create hold failed');
-      const url = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data.token)}`;
-      setQR('', url);
-      $('shopMsg').textContent = `Show this QR to an adult to pick up ${item.name || item.title || 'this item'}.`;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'hold failed');
+      const label = item.name || item.title || 'this item';
+      $('shopMsg').textContent = `Show this QR to an adult to pick up ${label}.`;
+      renderQr('shopQrBox', data.qrText);
       checkBalance();
       loadHistory();
     } catch (err) {

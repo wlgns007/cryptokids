@@ -46,17 +46,18 @@
     if (saved && keyInput) keyInput.value = saved;
   });
 
-  // auth-aware fetch for admin endpoints
-  function getAdminKey() {
-    const el = document.getElementById('adminKey');
-    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
-  }
   async function adminFetch(url, opts = {}) {
-    const headers = { ...(opts.headers || {}), 'x-admin-key': getAdminKey() };
+    const key = (localStorage.getItem('CK_ADMIN_KEY') || $k('adminKey')?.value || '').trim();
+    const headers = { ...(opts.headers || {}), 'x-admin-key': key };
     const res = await fetch(url, { ...opts, headers });
+
     const ctype = res.headers.get('content-type') || '';
-    const isJson = ctype.includes('application/json');
-    const body = await (isJson ? res.json().catch(() => ({})) : res.text().catch(() => ''));
+    let body;
+    if (ctype.includes('application/json')) {
+      body = await res.json().catch(() => ({}));
+    } else {
+      body = await res.text().catch(() => '');
+    }
     return { res, body };
   }
 
@@ -343,19 +344,14 @@ setupScanner({
       return;
     }
     try {
-      const { res, body } = await adminFetch('/api/earn/scan', {
+      const res = await adminFetch('/api/earn/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: parsed.token })
       });
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Scan failed');
-        throw new Error(msg);
-      }
-      const data = body && typeof body === 'object' ? body : {};
-      const amount = data.amount ?? '??';
-      const user = data.userId || 'unknown user';
-      toast(`Credited ${amount} to ${user}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Scan failed');
+      toast(`Credited ${data.amount} to ${data.userId}`);
     } catch (err) {
       toast(err.message || 'Scan failed', 'error');
     }
@@ -477,35 +473,39 @@ setupScanner({
   }
 
   async function createReward() {
-    const name = $('rewardName').value || '';
+    const name = $('rewardName').value.trim();
     const cost = $('rewardCost').value;
-    const imageUrl = $('rewardImage').value || '';
-    const desc = $('rewardDesc')?.value || '';
+    const imageUrl = $('rewardImage').value.trim();
+    const description = $('rewardDescription').value.trim();
     const costValue = Number(cost);
-    if (!name.trim() || !Number.isFinite(costValue) || costValue <= 0) {
+    if (!name || !Number.isFinite(costValue) || costValue <= 0) {
       toast('Enter name and positive price', 'error');
       return;
     }
     try {
-      const payload = {
-        name: name.trim(),
-        cost: Number(cost),
-        imageUrl: imageUrl.trim() || null,
-        description: desc.trim() || ''
-      };
+      const payload = { name, cost: costValue, imageUrl, description };
       const { res, body } = await adminFetch('/api/rewards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (res.status === 401) { toast('Admin key invalid. Use "Mamapapa" → Save, then retry.', 'error'); return; }
+      if (res.status === 401) {
+        toast('Admin key invalid. Use "Mamapapa" → Save, then retry.', 'error');
+        return;
+      }
       if (!res.ok) {
-        const msg = typeof body === 'string' ? body : (body?.error || 'Create failed');
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Create failed');
         toast(msg, 'error');
         return;
       }
+      $('rewardsStatus').textContent = '';
       toast('Reward created');
+      $('rewardName').value = '';
+      $('rewardCost').value = '';
+      $('rewardImage').value = '';
+      $('rewardDescription').value = '';
       reloadRewards?.();
+      loadRewards();
     } catch (err) {
       toast(err.message || 'Create failed', 'error');
     }
