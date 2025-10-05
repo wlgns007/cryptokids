@@ -266,41 +266,64 @@
     });
   }
 
-  setupScanner({
-    buttonId: 'btnHoldCamera',
-    videoId: 'holdVideo',
-    canvasId: 'holdCanvas',
-    statusId: 'holdScanStatus',
-    onToken: async (raw) => {
-      const parsed = parseTokenFromScan(raw);
-      if (!parsed || parsed.payload.typ !== 'spend') {
-        toast('Not a spend token', 'error');
-        return;
-      }
-      const holdId = parsed.payload.data?.holdId;
-      if (!holdId) {
-        toast('Hold id missing', 'error');
-        return;
-      }
-      const override = $('holdOverride').value;
-      try {
-        const res = await adminFetch(`/api/holds/${holdId}/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: parsed.token, finalCost: override ? Number(override) : undefined })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Approve failed');
-        toast(`Redeemed ${data.finalCost} points`);
-        $('holdOverride').value = '';
-        loadHolds();
-      } catch (err) {
-        toast(err.message || 'Redeem failed', 'error');
-      }
+// Hold scanner — APPROVE spend token
+// Hold scanner — APPROVE spend token
+setupScanner({
+  buttonId: 'btnHoldCamera',
+  videoId: 'holdVideo',
+  canvasId: 'holdCanvas',
+  statusId: 'holdScanStatus',
+  onToken: async (raw) => {
+    const parsed = parseTokenFromScan(raw);
+    if (!parsed || parsed.payload.typ !== 'spend') {
+      toast('Not a spend token', 'error');
+      return;
     }
-    const text = await res.text().catch(() => '');
-    return { type: 'text', body: text };
-  }
+
+    const holdId = parsed.payload.data?.holdId;
+    if (!holdId) {
+      toast('Hold id missing', 'error');
+      return;
+    }
+
+    const override = $('holdOverride').value;
+    try {
+      const res = await adminFetch(`/api/holds/${holdId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: parsed.token,
+          finalCost: override ? Number(override) : undefined
+        })
+      });
+
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : { error: await res.text() };
+      if (!res.ok) throw new Error(data.error || 'Approve failed');
+
+      toast(`Redeemed ${data.finalCost ?? '??'} points`);
+      $('holdOverride').value = '';
+      loadHolds();
+    } catch (err) {
+      toast(err.message || 'Redeem failed', 'error');
+    }
+  },   // ← IMPORTANT: comma ends the onToken property
+});     // ← IMPORTANT: closes setupScanner(...) call
+
+
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : { error: await res.text() };
+      if (!res.ok) throw new Error(data.error || 'Approve failed');
+
+      toast(`Redeemed ${data.finalCost ?? '??'} points`);
+      $('holdOverride').value = '';
+      loadHolds();
+    } catch (err) {
+      toast(err.message || 'Redeem failed', 'error');
+    }
+  },
+}); // <-- important: comma after onToken AND this call closer
+
 
   setupScanner({
     buttonId: 'btnEarnCamera',
@@ -747,3 +770,4 @@
   });
 
 })();
+  console.info('admin.js loaded ok');
