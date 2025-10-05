@@ -299,84 +299,96 @@
     m.appendChild(big); document.body.appendChild(m);
   }
 
-  $('btnLoadShop')?.addEventListener('click', loadShop);
-  async function loadShop() {
-    const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
-    setQR('Loading...');
-    $('shopList').innerHTML = '';
-    $('shopEmpty').style.display = 'none';
+  document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
+
+  async function loadRewards() {
+    const list = $('shopList');
+    if (list) list.innerHTML = '<div class="muted">Loading...</div>';
+    const empty = $('shopEmpty');
+    if (empty) empty.style.display = 'none';
     try {
-      const [balanceRes, rewardsRes] = await Promise.all([
-        fetch(`/summary/${encodeURIComponent(userId)}`),
-        fetch('/api/rewards')
-      ]);
-      const balanceData = await balanceRes.json();
-      const rewards = await rewardsRes.json();
-      if (!balanceRes.ok) throw new Error(balanceData.error || 'balance failed');
-      if (!rewardsRes.ok) throw new Error(rewards.error || 'rewards failed');
-      $('shopMsg').textContent = `Balance: ${balanceData.balance} points`;
-      setQR('');
-      renderShop(rewards, balanceData.balance);
+      const res = await fetch('/api/rewards?active=1');
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.error || 'Failed to load rewards');
+      renderRewards(Array.isArray(data) ? data : []);
     } catch (err) {
-      setQR(err.message || 'Failed to load shop');
+      renderError(err.message || String(err));
     }
   }
 
-  function renderShop(items, balance) {
+  function renderRewards(items){
     const list = $('shopList');
+    if (!list) return;
     list.innerHTML = '';
-    if (!items.length) {
+    const normalized = (Array.isArray(items) ? items : []).map(item => ({
+      id: item.id,
+      name: item.name || item.title || 'Reward',
+      cost: Number.isFinite(Number(item.cost ?? item.price)) ? Number(item.cost ?? item.price) : 0,
+      description: item.description || '',
+      image_url: item.image_url || item.imageUrl || '',
+    }));
+    if (!normalized.length){
       $('shopEmpty').style.display = 'block';
+      $('shopMsg').textContent = '';
+      setQR('');
       return;
     }
-    items.forEach((item, index) => {
-      const canAfford = balance >= item.price;
-      const row = document.createElement('div');
-      row.className = 'shop-item';
-      if (item.imageUrl) {
-        const img = document.createElement('img');
-        img.className = 'reward-thumb';
-        img.src = item.imageUrl;
-        img.alt = '';
-        img.loading = 'lazy';
-        img.setAttribute('width', '96');
-        img.setAttribute('height', '96');
-        img.setAttribute('style', 'object-fit:cover; aspect-ratio:1/1;');
-        img.onerror = () => img.remove();
-        row.appendChild(img);
-      } else {
-        const placeholder = document.createElement('div');
-        placeholder.style.width = '96px';
-        placeholder.style.height = '96px';
-        row.appendChild(placeholder);
-      }
-      row.appendChild(img);
+    $('shopEmpty').style.display = 'none';
+    $('shopMsg').textContent = getUserId() ? 'Tap Redeem to request a reward.' : 'Enter your user ID, then tap Redeem.';
+    setQR('');
+    normalized.forEach((item, index) => {
+      const card = document.createElement('div');
+      card.className = 'reward-card';
+
+      const thumb = document.createElement('img');
+      thumb.className = 'reward-thumb';
+      thumb.src = item.image_url || item.imageUrl || '';
+      thumb.loading = 'lazy';
+      thumb.width = 96; thumb.height = 96;
+      thumb.style.objectFit = 'cover';
+      thumb.style.aspectRatio = '1/1';
+      thumb.addEventListener('click', () => openImageModal(thumb.src));
+      card.appendChild(thumb);
 
       const info = document.createElement('div');
-      const title = document.createElement('div');
-      title.className = 'price';
-      title.textContent = `${index + 1}. ${item.title}`;
-      info.appendChild(title);
+      info.style.flex = '1 1 auto';
 
-      const price = document.createElement('div');
-      price.className = 'muted';
-      price.textContent = `${item.price} points`;
-      info.appendChild(price);
+      const titleEl = document.createElement('div');
+      titleEl.textContent = `${index + 1}. ${item.name}`;
+      info.appendChild(titleEl);
 
-      const description = document.createElement('div');
-      description.className = 'muted';
-      description.textContent = item.description || '';
-      info.appendChild(description);
-      row.appendChild(info);
+      const cost = document.createElement('div');
+      cost.className = 'muted';
+      cost.textContent = `${item.cost} points`;
+      info.appendChild(cost);
+
+      if (item.description){
+        const desc = document.createElement('div');
+        desc.className = 'muted';
+        desc.textContent = item.description;
+        info.appendChild(desc);
+      }
+
+      card.appendChild(info);
 
       const btn = document.createElement('button');
-      btn.textContent = canAfford ? 'Redeem' : 'Not enough';
-      btn.disabled = !canAfford;
-      if (canAfford) btn.addEventListener('click', () => createHold(item));
-      row.appendChild(btn);
-      list.appendChild(row);
+      btn.textContent = 'Redeem';
+      btn.style.marginLeft = 'auto';
+      btn.style.flex = '0 0 auto';
+      btn.addEventListener('click', () => createHold(item));
+      card.appendChild(btn);
+
+      list.appendChild(card);
     });
+  }
+
+  function renderError(message){
+    const list = $('shopList');
+    if (list) list.innerHTML = `<div class="muted">${message}</div>`;
+    const empty = $('shopEmpty');
+    if (empty) empty.style.display = 'none';
+    $('shopMsg').textContent = message;
+    setQR('');
   }
 
   async function createHold(item) {
