@@ -358,7 +358,8 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'hold failed');
-      $('shopMsg').textContent = `Show this QR to an adult to pick up ${item.title}.`;
+      const label = item.name || item.title || 'this item';
+      $('shopMsg').textContent = `Show this QR to an adult to pick up ${label}.`;
       renderQr('shopQrBox', data.qrText);
       checkBalance();
       loadHistory();
