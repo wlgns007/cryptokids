@@ -5,8 +5,8 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CryptoKids — Admin</title>
-  <link rel="icon" href="data:,">
-  <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__">
+  <!-- <link rel="icon" href="/favicon.ico"> -->
+  <!-- <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__"> -->
   <meta name="theme-color" content="#ffffff">
   <style>
     :root {
@@ -391,7 +391,7 @@
       <div class="admin-key">
         <label>
           Admin Key
-          <input id="adminKey" type="text" placeholder="enter admin key">
+          <input id="adminKey" type="text" placeholder="enter admin key (Mamapapa)">
         </label>
         <button id="saveAdminKey">Save</button>
       </div>
@@ -511,7 +511,7 @@
           </label>
         </div>
         <label>Description
-          <textarea id="rewardDescription" placeholder="optional details"></textarea>
+          <textarea id="rewardDesc" placeholder="optional details"></textarea>
         </label>
         <div class="row" style="align-items:center;">
           <div id="drop" class="drop" style="flex:1;">
@@ -633,6 +633,6 @@
 
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
-  <script src="/admin.js?v=__BUILD__"></script>
+  <script defer src="admin.js?v={{shortCommit}}"></script>
 </body>
 </html>

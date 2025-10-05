@@ -298,14 +298,21 @@
       $('shopEmpty').style.display = 'block';
       return;
     }
-    for (const item of items) {
-      const canAfford = balance >= item.price;
+    items.forEach((item, index) => {
+      item.name = item.name || item.title || '';
+      const cost = Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0);
+      const canAfford = balance >= cost;
       const row = document.createElement('div');
       row.className = 'shop-item';
       if (item.imageUrl) {
         const img = document.createElement('img');
-        img.src = item.imageUrl;
+        img.className = 'reward-thumb';
+        img.src = item.imageUrl || '';
         img.alt = '';
+        img.loading = 'lazy';
+        img.width = 96; img.height = 96;
+        img.style.objectFit = 'cover';
+        img.style.aspectRatio = '1 / 1';
         img.onerror = () => img.remove();
         row.appendChild(img);
       } else {
@@ -316,7 +323,20 @@
       }
 
       const info = document.createElement('div');
-      info.innerHTML = `<div class="price">${item.title}</div><div class="muted">${item.price} points</div><div class="muted">${item.description || ''}</div>`;
+      const titleEl = document.createElement('div');
+      titleEl.className = 'price';
+      titleEl.textContent = `${index + 1}. ${item.name}`;
+      info.appendChild(titleEl);
+
+      const price = document.createElement('div');
+      price.className = 'muted';
+      price.textContent = `${cost} points`;
+      info.appendChild(price);
+
+      const description = document.createElement('div');
+      description.className = 'muted';
+      description.textContent = item.description || '';
+      info.appendChild(description);
       row.appendChild(info);
 
       const btn = document.createElement('button');
@@ -325,7 +345,7 @@
       if (canAfford) btn.addEventListener('click', () => createHold(item));
       row.appendChild(btn);
       list.appendChild(row);
-    }
+    });
   }
 
   async function createHold(item) {
@@ -340,7 +360,8 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'hold failed');
-      $('shopMsg').textContent = `Show this QR to an adult to pick up ${item.title}.`;
+      const label = item.name || item.title || 'this item';
+      $('shopMsg').textContent = `Show this QR to an adult to pick up ${label}.`;
       renderQr('shopQrBox', data.qrText);
       checkBalance();
       loadHistory();

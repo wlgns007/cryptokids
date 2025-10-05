@@ -2,7 +2,16 @@
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
 
-  const $ = (id) => document.getElementById(id);
+  const ADMIN_KEY_DEFAULT = 'Mamapapa';
+  const $k = (id) => document.getElementById(id);
+  const $ = $k;
+  const keyInput = $k('adminKey'); // use current ID
+  if (keyInput) {
+    keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
+    const saved = localStorage.getItem('CK_ADMIN_KEY');
+    if (!saved) keyInput.value = ADMIN_KEY_DEFAULT;
+  }
+
   const toastHost = $('toastHost');
 
   function toast(msg, type = 'success', ms = 2400) {
@@ -18,33 +27,37 @@
     }, ms);
   }
 
-  const ADMIN_KEY_STORAGE = 'ck_admin_key';
+  const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
     return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
   }
   function saveAdminKey(value) {
     localStorage.setItem(ADMIN_KEY_STORAGE, value || '');
   }
-  function getAdminKey() {
-    return $('adminKey')?.value?.trim() || loadAdminKey();
-  }
 
   $('saveAdminKey')?.addEventListener('click', () => {
-    const value = $('adminKey').value.trim();
+    const value = (keyInput?.value || '').trim();
     saveAdminKey(value);
     toast('Admin key saved');
   });
 
   document.addEventListener('DOMContentLoaded', () => {
     const saved = loadAdminKey();
-    if (saved && $('adminKey')) $('adminKey').value = saved;
+    if (saved && keyInput) keyInput.value = saved;
   });
 
-  function adminFetch(path, init = {}) {
-    const headers = new Headers(init.headers || {});
-    const key = getAdminKey();
-    if (key) headers.set('x-admin-key', key);
-    return fetch(path, { ...init, headers });
+  // auth-aware fetch for admin endpoints
+  function getAdminKey() {
+    const el = document.getElementById('adminKey');
+    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
+  }
+  async function adminFetch(url, opts = {}) {
+    const headers = { ...(opts.headers || {}), 'x-admin-key': getAdminKey() };
+    const res = await fetch(url, { ...opts, headers });
+    const ctype = res.headers.get('content-type') || '';
+    const isJson = ctype.includes('application/json');
+    const body = await (isJson ? res.json().catch(() => ({})) : res.text().catch(() => ''));
+    return { res, body };
   }
 
   function renderQr(elId, text) {
@@ -85,16 +98,19 @@
     }
     $('issueStatus').textContent = 'Generating QR...';
     try {
-      const res = await adminFetch('/api/tokens/give', {
+      const { res, body } = await adminFetch('/api/tokens/give', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, amount, note: note || undefined })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'request failed');
+      const data = body && typeof body === 'object' ? body : {};
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'request failed');
+        throw new Error(msg);
+      }
       renderQr('qrIssue', data.qrText);
       $('issueLink').value = data.qrText || '';
-      $('issueStatus').textContent = `QR expires in 2 minutes. Amount ${data.amount} points.`;
+      $('issueStatus').textContent = `QR expires in 2 minutes. Amount ${data.amount ?? '?'} points.`;
       toast('QR ready');
     } catch (err) {
       console.error(err);
@@ -131,9 +147,12 @@
     $('holdsStatus').textContent = 'Loading...';
     holdsTable.innerHTML = '';
     try {
-      const res = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
-      const rows = await res.json();
-      if (!res.ok) throw new Error(rows.error || 'failed');
+      const { res, body } = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
+        throw new Error(msg);
+      }
+      const rows = Array.isArray(body) ? body : [];
       if (!rows.length) {
         holdsTable.innerHTML = '<tr><td colspan="6" class="muted">No holds</td></tr>';
         $('holdsStatus').textContent = '';
@@ -176,10 +195,10 @@
   async function cancelHold(id) {
     if (!confirm('Cancel this hold?')) return;
     try {
-      const res = await adminFetch(`/api/holds/${id}/cancel`, { method: 'POST' });
+      const { res, body } = await adminFetch(`/api/holds/${id}/cancel`, { method: 'POST' });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'failed');
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
+        throw new Error(msg);
       }
       toast('Hold canceled');
       loadHolds();
@@ -267,7 +286,6 @@
   }
 
 // Hold scanner — APPROVE spend token
-// Hold scanner — APPROVE spend token
 setupScanner({
   buttonId: 'btnHoldCamera',
   videoId: 'holdVideo',
@@ -288,7 +306,7 @@ setupScanner({
 
     const override = $('holdOverride').value;
     try {
-      const res = await adminFetch(`/api/holds/${holdId}/approve`, {
+      const { res, body } = await adminFetch(`/api/holds/${holdId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -297,58 +315,52 @@ setupScanner({
         })
       });
 
-      const isJson = res.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await res.json() : { error: await res.text() };
-      if (!res.ok) throw new Error(data.error || 'Approve failed');
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Approve failed');
+        throw new Error(msg);
+      }
 
+      const data = body && typeof body === 'object' ? body : {};
       toast(`Redeemed ${data.finalCost ?? '??'} points`);
       $('holdOverride').value = '';
       loadHolds();
     } catch (err) {
       toast(err.message || 'Redeem failed', 'error');
     }
-  },   // ← IMPORTANT: comma ends the onToken property
-});     // ← IMPORTANT: closes setupScanner(...) call
+  },  // ← keep this comma
+});   // ← and this closer
 
-
-      const isJson = res.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await res.json() : { error: await res.text() };
-      if (!res.ok) throw new Error(data.error || 'Approve failed');
-
-      toast(`Redeemed ${data.finalCost ?? '??'} points`);
-      $('holdOverride').value = '';
-      loadHolds();
+// Earn scanner — GENERATE earn/give token
+setupScanner({
+  buttonId: 'btnEarnCamera',
+  videoId: 'earnVideo',
+  canvasId: 'earnCanvas',
+  statusId: 'earnScanStatus',
+  onToken: async (raw) => {
+    const parsed = parseTokenFromScan(raw);
+    if (!parsed || !['earn', 'give'].includes(parsed.payload.typ)) {
+      toast('Unsupported token', 'error');
+      return;
+    }
+    try {
+      const { res, body } = await adminFetch('/api/earn/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: parsed.token })
+      });
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Scan failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
+      const amount = data.amount ?? '??';
+      const user = data.userId || 'unknown user';
+      toast(`Credited ${amount} to ${user}`);
     } catch (err) {
-      toast(err.message || 'Redeem failed', 'error');
+      toast(err.message || 'Scan failed', 'error');
     }
   },
-}); // <-- important: comma after onToken AND this call closer
-
-
-  setupScanner({
-    buttonId: 'btnEarnCamera',
-    videoId: 'earnVideo',
-    canvasId: 'earnCanvas',
-    statusId: 'earnScanStatus',
-    onToken: async (raw) => {
-      const parsed = parseTokenFromScan(raw);
-      if (!parsed || !['earn', 'give'].includes(parsed.payload.typ)) {
-        toast('Unsupported token', 'error');
-        return;
-      }
-      try {
-        const res = await adminFetch('/api/earn/scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: parsed.token })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Scan failed');
-        toast(`Credited ${data.amount} to ${data.userId}`);
-      } catch (err) {
-        toast(err.message || 'Scan failed', 'error');
-      }
-    }
+}); // must close the call
 
   // ===== Rewards =====
   function applyUrlToggle(show) {
@@ -437,14 +449,14 @@ setupScanner({
 
   async function updateReward(id, body) {
     try {
-      const res = await adminFetch(`/api/rewards/${id}`, {
+      const { res, body: respBody } = await adminFetch(`/api/rewards/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'update failed');
+        const msg = (respBody && respBody.error) || (typeof respBody === 'string' ? respBody : 'update failed');
+        throw new Error(msg);
       }
       toast('Reward updated');
       loadRewards();
@@ -455,27 +467,33 @@ setupScanner({
 
   async function createReward() {
     const name = $('rewardName').value.trim();
-    const price = Number($('rewardCost').value);
+    const cost = $('rewardCost').value;
     const imageUrl = $('rewardImage').value.trim();
-    const description = $('rewardDescription').value.trim();
-    if (!name || !Number.isFinite(price) || price <= 0) {
+    const description = $('rewardDesc')?.value.trim() || '';
+    const costValue = Number(cost);
+    if (!name || !Number.isFinite(costValue) || costValue <= 0) {
       toast('Enter name and positive price', 'error');
       return;
     }
     try {
-      const res = await adminFetch('/api/rewards', {
+      const payload = { name, cost: costValue, imageUrl, description };
+      const { res, body } = await adminFetch('/api/rewards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, price, imageUrl, description })
+        body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'create failed');
-      toast('Reward added');
-      $('rewardName').value = '';
-      $('rewardCost').value = '';
-      $('rewardImage').value = '';
-      $('rewardDescription').value = '';
-      loadRewards();
+      if (res.status === 401) { toast('Admin key invalid. Use "Mamapapa" → Save, then retry.', 'error'); return; }
+      if (!res.ok) {
+        console.warn('Create reward failed', res.status, body);
+        toast((body && body.error) || (typeof body === 'string' ? body : 'Create failed'), 'error');
+        return;
+      }
+      toast('Reward created');
+      document.getElementById('rewardName').value = '';
+      document.getElementById('rewardCost').value = '1';
+      document.getElementById('rewardImage').value = '';
+      document.getElementById('rewardDesc').value = '';
+      reloadRewards?.();
     } catch (err) {
       toast(err.message || 'Create failed', 'error');
     }
@@ -503,15 +521,18 @@ setupScanner({
     try {
       uploadStatus.textContent = 'Uploading...';
       const base64 = await fileToDataUrl(file);
-      const res = await adminFetch('/admin/upload-image64', {
+      const { res, body } = await adminFetch('/admin/upload-image64', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image64: base64 })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'upload failed');
-      $('rewardImage').value = data.url;
-      uploadStatus.textContent = `Uploaded: ${data.url}`;
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'upload failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
+      $('rewardImage').value = data.url || '';
+      uploadStatus.textContent = data.url ? `Uploaded: ${data.url}` : 'Uploaded';
     } catch (err) {
       uploadStatus.textContent = 'Upload failed';
       toast(err.message || 'Upload failed', 'error');
@@ -589,13 +610,15 @@ setupScanner({
     const youtube_url = prompt('YouTube URL (optional)') || null;
     const sort_order = Number(prompt('Sort order (optional)', '0')) || 0;
     try {
-      const res = await adminFetch('/api/earn-templates', {
+      const { res, body } = await adminFetch('/api/earn-templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, points, description, youtube_url, sort_order })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'create failed');
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'create failed');
+        throw new Error(msg);
+      }
       toast('Template added');
       loadTemplates();
     } catch (err) {
@@ -613,13 +636,15 @@ setupScanner({
     const youtube_url = prompt('YouTube URL', tpl.youtube_url || '') || null;
     const sort_order = Number(prompt('Sort order', tpl.sort_order));
     try {
-      const res = await adminFetch(`/api/earn-templates/${tpl.id}`, {
+      const { res, body } = await adminFetch(`/api/earn-templates/${tpl.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, points, description, youtube_url, sort_order })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'update failed');
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'update failed');
+        throw new Error(msg);
+      }
       toast('Template updated');
       loadTemplates();
     } catch (err) {
@@ -629,13 +654,15 @@ setupScanner({
 
   async function updateTemplate(id, body) {
     try {
-      const res = await adminFetch(`/api/earn-templates/${id}`, {
+      const { res, body: respBody } = await adminFetch(`/api/earn-templates/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'update failed');
+      if (!res.ok) {
+        const msg = (respBody && respBody.error) || (typeof respBody === 'string' ? respBody : 'update failed');
+        throw new Error(msg);
+      }
       toast('Template saved');
       loadTemplates();
     } catch (err) {
@@ -646,10 +673,10 @@ setupScanner({
   async function deleteTemplate(id) {
     if (!confirm('Delete this template?')) return;
     try {
-      const res = await adminFetch(`/api/earn-templates/${id}`, { method: 'DELETE' });
+      const { res, body } = await adminFetch(`/api/earn-templates/${id}`, { method: 'DELETE' });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'delete failed');
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'delete failed');
+        throw new Error(msg);
       }
       toast('Template deleted');
       loadTemplates();
@@ -675,14 +702,19 @@ setupScanner({
     const userId = $('quickUser').value.trim();
     if (!templateId || !userId) return toast('Select template and user', 'error');
     try {
-      const res = await adminFetch('/api/earn/quick', {
+      const { res, body } = await adminFetch('/api/earn/quick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ templateId, userId })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'quick failed');
-      toast(`Awarded ${data.amount} to ${data.userId}`);
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'quick failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
+      const amount = data.amount ?? '??';
+      const user = data.userId || userId;
+      toast(`Awarded ${amount} to ${user}`);
       $('quickUser').value = '';
     } catch (err) {
       toast(err.message || 'Quick award failed', 'error');
@@ -732,9 +764,12 @@ setupScanner({
     try {
       const params = buildHistoryParams();
       const qs = new URLSearchParams(params).toString();
-      const res = await adminFetch(`/api/history?${qs}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'history failed');
+      const { res, body } = await adminFetch(`/api/history?${qs}`);
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'history failed');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
       historyTable.innerHTML = '';
       for (const row of data.rows || []) {
         const tr = document.createElement('tr');
@@ -770,4 +805,5 @@ setupScanner({
   });
 
 })();
-  console.info('admin.js loaded ok');
+
+console.info('admin.js loaded ok');
