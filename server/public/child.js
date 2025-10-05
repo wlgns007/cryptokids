@@ -298,14 +298,19 @@
       $('shopEmpty').style.display = 'block';
       return;
     }
-    for (const item of items) {
+    items.forEach((item, index) => {
       const canAfford = balance >= item.price;
       const row = document.createElement('div');
       row.className = 'shop-item';
       if (item.imageUrl) {
         const img = document.createElement('img');
+        img.className = 'reward-thumb';
         img.src = item.imageUrl;
         img.alt = '';
+        img.loading = 'lazy';
+        img.width = 96; img.height = 96;
+        img.style.objectFit = 'cover';
+        img.style.aspectRatio = '1 / 1';
         img.onerror = () => img.remove();
         row.appendChild(img);
       } else {
@@ -316,7 +321,20 @@
       }
 
       const info = document.createElement('div');
-      info.innerHTML = `<div class="price">${item.title}</div><div class="muted">${item.price} points</div><div class="muted">${item.description || ''}</div>`;
+      const title = document.createElement('div');
+      title.className = 'price';
+      title.textContent = `${index + 1}. ${item.title}`;
+      info.appendChild(title);
+
+      const price = document.createElement('div');
+      price.className = 'muted';
+      price.textContent = `${item.price} points`;
+      info.appendChild(price);
+
+      const description = document.createElement('div');
+      description.className = 'muted';
+      description.textContent = item.description || '';
+      info.appendChild(description);
       row.appendChild(info);
 
       const btn = document.createElement('button');
@@ -325,7 +343,7 @@
       if (canAfford) btn.addEventListener('click', () => createHold(item));
       row.appendChild(btn);
       list.appendChild(row);
-    }
+    });
   }
 
   async function createHold(item) {
