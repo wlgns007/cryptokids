@@ -267,7 +267,6 @@
   }
 
 // Hold scanner — APPROVE spend token
-// Hold scanner — APPROVE spend token
 setupScanner({
   buttonId: 'btnHoldCamera',
   videoId: 'holdVideo',
@@ -307,48 +306,35 @@ setupScanner({
     } catch (err) {
       toast(err.message || 'Redeem failed', 'error');
     }
-  },   // ← IMPORTANT: comma ends the onToken property
-});     // ← IMPORTANT: closes setupScanner(...) call
+  },  // ← keep this comma
+});   // ← and this closer
 
-
-      const isJson = res.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await res.json() : { error: await res.text() };
-      if (!res.ok) throw new Error(data.error || 'Approve failed');
-
-      toast(`Redeemed ${data.finalCost ?? '??'} points`);
-      $('holdOverride').value = '';
-      loadHolds();
+// Earn scanner — GENERATE earn/give token
+setupScanner({
+  buttonId: 'btnEarnCamera',
+  videoId: 'earnVideo',
+  canvasId: 'earnCanvas',
+  statusId: 'earnScanStatus',
+  onToken: async (raw) => {
+    const parsed = parseTokenFromScan(raw);
+    if (!parsed || !['earn', 'give'].includes(parsed.payload.typ)) {
+      toast('Unsupported token', 'error');
+      return;
+    }
+    try {
+      const res = await adminFetch('/api/earn/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: parsed.token })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Scan failed');
+      toast(`Credited ${data.amount} to ${data.userId}`);
     } catch (err) {
-      toast(err.message || 'Redeem failed', 'error');
+      toast(err.message || 'Scan failed', 'error');
     }
   },
-}); // <-- important: comma after onToken AND this call closer
-
-
-  setupScanner({
-    buttonId: 'btnEarnCamera',
-    videoId: 'earnVideo',
-    canvasId: 'earnCanvas',
-    statusId: 'earnScanStatus',
-    onToken: async (raw) => {
-      const parsed = parseTokenFromScan(raw);
-      if (!parsed || !['earn', 'give'].includes(parsed.payload.typ)) {
-        toast('Unsupported token', 'error');
-        return;
-      }
-      try {
-        const res = await adminFetch('/api/earn/scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: parsed.token })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Scan failed');
-        toast(`Credited ${data.amount} to ${data.userId}`);
-      } catch (err) {
-        toast(err.message || 'Scan failed', 'error');
-      }
-    }
+}); // must close the call
 
   // ===== Rewards =====
   function applyUrlToggle(show) {
@@ -770,4 +756,5 @@ setupScanner({
   });
 
 })();
-  console.info('admin.js loaded ok');
+
+console.info('admin.js loaded ok');
