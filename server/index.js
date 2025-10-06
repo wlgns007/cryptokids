@@ -67,8 +67,27 @@ app.get(["/child", "/child.html"], (_req, res) => {
   sendVersioned(res, "child.html");
 });
 
-app.get(["/scan", "/scan.html"], (_req, res) => {
-  sendVersioned(res, "scan.html");
+app.get(["/scan", "/scan.html"], (req, res) => {
+  res.type("html");
+  res.set("Cache-Control", "no-store");
+  const token = (req.query?.t ?? req.query?.token ?? "").toString().trim();
+  if (!token) {
+    res.status(400).send(renderScanPage({ success: false, error: friendlyScanError("missing_token"), rawCode: "missing_token" }));
+    return;
+  }
+  try {
+    const result = redeemToken({
+      token,
+      req,
+      actor: typ => (typ === "earn" ? "link_earn" : "link_give"),
+      allowEarnWithoutAdmin: true
+    });
+    res.send(renderScanPage({ success: true, result }));
+  } catch (err) {
+    const message = err?.message || "scan_failed";
+    const status = err?.status || (message === "TOKEN_USED" ? 409 : 400);
+    res.status(status).send(renderScanPage({ success: false, error: friendlyScanError(message), rawCode: message }));
+  }
 });
 
 app.get("/manifest.webmanifest", (_req, res) => {
@@ -359,6 +378,193 @@ function encodeBase64Url(str) {
   return Buffer.from(str, "utf8").toString("base64url");
 }
 
+function createHttpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin = false }) {
+  if (!token) {
+    throw createHttpError(400, "missing_token");
+  }
+  const payload = verifyToken(token);
+  if (!payload || !["earn", "give"].includes(payload.typ)) {
+    throw createHttpError(400, "unsupported_token");
+  }
+  if (checkTokenStmt.get(payload.jti)) {
+    throw createHttpError(409, "TOKEN_USED");
+  }
+  const resolvedActor = typeof actor === "function" ? actor(payload.typ) : actor;
+  if (payload.typ === "earn") {
+    if (!isAdmin && !allowEarnWithoutAdmin) {
+      throw createHttpError(403, "ADMIN_REQUIRED");
+    }
+    const data = payload.data || {};
+    const userId = normId(data.userId);
+    if (!userId) {
+      throw createHttpError(400, "invalid_user");
+    }
+    const templateEntries = Array.isArray(data.templates) ? data.templates : [];
+    if (!templateEntries.length) {
+      throw createHttpError(400, "invalid_templates");
+    }
+    const ids = templateEntries.map(t => Number(t.id));
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT * FROM earn_templates WHERE id IN (${placeholders})`).all(...ids);
+    const byId = new Map(rows.map(r => [Number(r.id), r]));
+    let total = 0;
+    const normalized = templateEntries.map(entry => {
+      const tpl = byId.get(Number(entry.id));
+      if (!tpl) throw createHttpError(400, "TEMPLATE_MISSING");
+      const count = Math.max(1, Number(entry.count || 1));
+      total += tpl.points * count;
+      return { id: tpl.id, title: tpl.title, points: tpl.points, count };
+    });
+    const next = applyLedger({
+      userId,
+      delta: total,
+      action: "earn_qr",
+      note: data.note || null,
+      templates: normalized,
+      actor: resolvedActor || null,
+      req,
+      tokenInfo: { jti: payload.jti, typ: payload.typ }
+    });
+    return {
+      ok: true,
+      userId,
+      amount: total,
+      balance: next,
+      action: "earn_qr",
+      note: data.note || null,
+      templates: normalized,
+      tokenType: payload.typ
+    };
+  }
+
+  if (payload.typ === "give") {
+    const data = payload.data || {};
+    const userId = normId(data.userId);
+    const amount = Math.floor(Number(data.amount || 0));
+    if (!userId || amount <= 0) {
+      throw createHttpError(400, "invalid_payload");
+    }
+    const next = applyLedger({
+      userId,
+      delta: amount,
+      action: "earn_admin_give",
+      note: data.note || null,
+      actor: resolvedActor || null,
+      req,
+      tokenInfo: { jti: payload.jti, typ: payload.typ }
+    });
+    return {
+      ok: true,
+      userId,
+      amount,
+      balance: next,
+      action: "earn_admin_give",
+      note: data.note || null,
+      templates: null,
+      tokenType: payload.typ
+    };
+  }
+
+  throw createHttpError(400, "unsupported_token");
+}
+
+function friendlyScanError(code) {
+  switch (code) {
+    case "missing_token":
+      return "No QR token was included in this link.";
+    case "TOKEN_USED":
+      return "This QR code has already been used.";
+    case "EXPIRED":
+      return "This QR code expired. Please generate a new one.";
+    case "BAD_TOKEN":
+    case "BAD_SIGNATURE":
+      return "The QR code is invalid.";
+    case "invalid_user":
+      return "The QR code is missing a user.";
+    case "invalid_templates":
+    case "TEMPLATE_MISSING":
+      return "The QR code referenced tasks that are no longer available.";
+    case "invalid_payload":
+      return "The QR code is missing required information.";
+    default:
+      return "Unable to redeem this QR code.";
+  }
+}
+
+function renderScanPage({ success, result = null, error = null, rawCode = null }) {
+  const title = success ? "Points Added" : "Scan Failed";
+  const heading = success ? "Success!" : "Uh oh.";
+  const accent = success ? "#0a7" : "#c00";
+  const amountLine = success && result
+    ? `<p class="message">Added <strong>${escapeHtml(result.amount)}</strong> RT to <strong>${escapeHtml(result.userId)}</strong>.</p>`
+    : "";
+  const balanceLine = success && result
+    ? `<p class="muted">New balance: ${escapeHtml(result.balance)}</p>`
+    : "";
+  const noteLine = success && result?.note
+    ? `<p class="note">Note: ${escapeHtml(result.note)}</p>`
+    : "";
+  const templateList = success && Array.isArray(result?.templates) && result.templates.length
+    ? `<div class="tasks"><h2>Included tasks</h2><ul>${result.templates
+        .map(tpl => `<li><span class="points">+${escapeHtml(tpl.points)}</span> × ${escapeHtml(tpl.count)} — ${escapeHtml(tpl.title)}</li>`)
+        .join("")}</ul></div>`
+    : "";
+  const errorLine = !success && error
+    ? `<p class="message">${escapeHtml(error)}</p>`
+    : "";
+  const rawCodeLine = !success && rawCode
+    ? `<p class="muted">(${escapeHtml(rawCode)})</p>`
+    : "";
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f6f7f9; color: #111; }
+      main { max-width: 520px; margin: 40px auto; padding: 32px; background: #fff; border-radius: 16px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12); }
+      h1 { margin: 0 0 12px; font-size: 28px; color: ${accent}; }
+      p { line-height: 1.5; margin: 12px 0; }
+      .message { font-size: 18px; font-weight: 600; }
+      .muted { color: #586174; font-size: 14px; }
+      .note { background: rgba(10, 119, 92, 0.08); padding: 12px; border-radius: 12px; color: #0a7; font-size: 15px; }
+      .tasks h2 { margin: 24px 0 12px; font-size: 18px; }
+      .tasks ul { list-style: none; padding: 0; margin: 0; }
+      .tasks li { padding: 10px 0; border-bottom: 1px solid #e5e7eb; font-size: 15px; display: flex; gap: 8px; align-items: baseline; }
+      .tasks li:last-child { border-bottom: none; }
+      .points { font-weight: 600; color: #0a7; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(heading)}</h1>
+      ${amountLine || errorLine || ""}
+      ${balanceLine}
+      ${noteLine}
+      ${templateList}
+      ${rawCodeLine}
+    </main>
+  </body>
+</html>`;
+}
+
 function decodeBase64Url(str) {
   return Buffer.from(str, "base64url").toString("utf8");
 }
@@ -613,69 +819,27 @@ app.post("/api/tokens/give", requireAdminKey, (req, res) => {
 
 app.post("/api/earn/scan", (req, res) => {
   try {
-    const token = String(req.body?.token || "");
-    if (!token) return res.status(400).json({ error: "missing_token" });
-    const payload = verifyToken(token);
-    if (!["earn", "give"].includes(payload.typ)) {
-      return res.status(400).json({ error: "unsupported_token" });
-    }
-    if (checkTokenStmt.get(payload.jti)) {
-      return res.status(409).json({ error: "TOKEN_USED" });
-    }
     const isAdmin = (req.headers["x-admin-key"] || "").toString().trim() === ADMIN_KEY;
-    const actor = isAdmin ? "admin_scan" : "child_scan";
-    if (payload.typ === "earn") {
-      if (!isAdmin) return res.status(403).json({ error: "ADMIN_REQUIRED" });
-      const data = payload.data || {};
-      const userId = normId(data.userId);
-      if (!userId) throw new Error("invalid_user");
-      const templateEntries = Array.isArray(data.templates) ? data.templates : [];
-      if (!templateEntries.length) throw new Error("invalid_templates");
-      const ids = templateEntries.map(t => Number(t.id));
-      const placeholders = ids.map(() => "?").join(",");
-      const rows = db.prepare(`SELECT * FROM earn_templates WHERE id IN (${placeholders})`).all(...ids);
-      const byId = new Map(rows.map(r => [Number(r.id), r]));
-      let total = 0;
-      const normalized = templateEntries.map(entry => {
-        const tpl = byId.get(Number(entry.id));
-        if (!tpl) throw new Error("TEMPLATE_MISSING");
-        const count = Math.max(1, Number(entry.count || 1));
-        total += tpl.points * count;
-        return { id: tpl.id, title: tpl.title, points: tpl.points, count };
-      });
-      const next = applyLedger({
-        userId,
-        delta: total,
-        action: "earn_qr",
-        note: data.note || null,
-        templates: normalized,
-        actor,
-        req,
-        tokenInfo: { jti: payload.jti, typ: payload.typ }
-      });
-      res.json({ ok: true, userId, amount: total, balance: next, action: "earn_qr" });
-      return;
-    }
-    if (payload.typ === "give") {
-      const data = payload.data || {};
-      const userId = normId(data.userId);
-      const amount = Math.floor(Number(data.amount || 0));
-      if (!userId || amount <= 0) throw new Error("invalid_payload");
-      const next = applyLedger({
-        userId,
-        delta: amount,
-        action: "earn_admin_give",
-        note: data.note || null,
-        actor,
-        req,
-        tokenInfo: { jti: payload.jti, typ: payload.typ }
-      });
-      res.json({ ok: true, userId, amount, balance: next, action: "earn_admin_give" });
-      return;
-    }
+    const result = redeemToken({
+      token: (req.body?.token || "").toString(),
+      req,
+      actor: isAdmin ? "admin_scan" : "child_scan",
+      isAdmin,
+      allowEarnWithoutAdmin: isAdmin
+    });
+    res.json({
+      ok: true,
+      userId: result.userId,
+      amount: result.amount,
+      balance: result.balance,
+      action: result.action,
+      note: result.note ?? undefined,
+      templates: result.templates ?? undefined
+    });
   } catch (err) {
-    const code = err.message === "TOKEN_USED" ? 409 : 400;
-    res.status(code).json({ error: err.message || "scan_failed" });
+    const message = err?.message || "scan_failed";
+    const status = err?.status || (message === "TOKEN_USED" ? 409 : message === "ADMIN_REQUIRED" ? 403 : 400);
+    res.status(status).json({ error: message });
   }
 });
 
