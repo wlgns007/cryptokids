@@ -87,6 +87,30 @@
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
+  const memberListSection = $('memberListSection');
+  const memberRegisterContainer = $('memberRegisterContainer');
+  const memberRegisterFields = $('memberRegisterFields');
+  const memberRegisterToggle = $('toggleMemberRegister');
+  const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
+
+  function setMemberRegisterControlsDisabled(disabled) {
+    if (!memberRegisterFields) return;
+    const fields = memberRegisterFields.querySelectorAll('input, select, textarea, button');
+    fields.forEach((field) => {
+      field.disabled = disabled;
+    });
+  }
+
+  function onMemberRegisterTransitionEnd(event) {
+    if (!memberRegisterFields || event.target !== memberRegisterFields || event.propertyName !== 'max-height') return;
+    memberRegisterFields.removeEventListener('transitionend', onMemberRegisterTransitionEnd);
+    if (memberRegisterContainer?.dataset.expanded === 'true') {
+      memberRegisterFields.style.maxHeight = 'none';
+    } else {
+      memberRegisterFields.hidden = true;
+      memberRegisterFields.style.maxHeight = '';
+    }
+  }
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -125,6 +149,59 @@
     div.textContent = message;
     memberInfoDetails.appendChild(div);
   }
+
+  function setMemberRegisterExpanded(expanded, { animate = true } = {}) {
+    const isExpanded = !!expanded;
+    if (memberRegisterContainer) memberRegisterContainer.dataset.expanded = isExpanded ? 'true' : 'false';
+    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = isExpanded ? '▴' : '▾';
+    if (!memberRegisterFields) return;
+
+    setMemberRegisterControlsDisabled(!isExpanded);
+    memberRegisterFields.removeEventListener('transitionend', onMemberRegisterTransitionEnd);
+
+    if (!animate) {
+      if (isExpanded) {
+        memberRegisterFields.hidden = false;
+        memberRegisterFields.setAttribute('aria-hidden', 'false');
+        memberRegisterFields.style.maxHeight = 'none';
+      } else {
+        memberRegisterFields.setAttribute('aria-hidden', 'true');
+        memberRegisterFields.hidden = true;
+        memberRegisterFields.style.maxHeight = '';
+      }
+      return;
+    }
+
+    if (isExpanded) {
+      memberRegisterFields.hidden = false;
+      memberRegisterFields.setAttribute('aria-hidden', 'false');
+      const targetHeight = memberRegisterFields.scrollHeight;
+      memberRegisterFields.style.maxHeight = '0px';
+      memberRegisterFields.offsetHeight;
+      memberRegisterFields.style.maxHeight = `${targetHeight}px`;
+      memberRegisterFields.addEventListener('transitionend', onMemberRegisterTransitionEnd);
+    } else {
+      memberRegisterFields.setAttribute('aria-hidden', 'true');
+      const startHeight = memberRegisterFields.scrollHeight;
+      if (startHeight === 0) {
+        memberRegisterFields.hidden = true;
+        memberRegisterFields.style.maxHeight = '';
+        return;
+      }
+      memberRegisterFields.style.maxHeight = `${startHeight}px`;
+      memberRegisterFields.offsetHeight;
+      memberRegisterFields.style.maxHeight = '0px';
+      memberRegisterFields.addEventListener('transitionend', onMemberRegisterTransitionEnd);
+    }
+  }
+
+  setMemberRegisterExpanded(false, { animate: false });
+
+  memberRegisterToggle?.addEventListener('click', () => {
+    const currentlyExpanded = memberRegisterContainer?.dataset.expanded === 'true';
+    setMemberRegisterExpanded(!currentlyExpanded);
+  });
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
@@ -344,6 +421,13 @@
   async function loadMembersList() {
     if (!memberTableBody) return;
     const search = (memberSearchInput?.value || '').trim().toLowerCase();
+    if (!search) {
+      memberTableBody.innerHTML = '';
+      if (memberListStatus) memberListStatus.textContent = 'Search for a member to view results.';
+      if (memberListSection) memberListSection.hidden = true;
+      return;
+    }
+    if (memberListSection) memberListSection.hidden = false;
     memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
     if (memberListStatus) memberListStatus.textContent = '';
     try {
