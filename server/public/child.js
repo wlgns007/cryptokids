@@ -7,9 +7,6 @@
   let lastRedeemEntry = null;
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
-  let fullRedeemsLoading = false;
-  let fullRedeemsCache = null;
-  let fullRedeemsCacheUserId = null;
 
   function getUserId() {
     return $('childUserId').value.trim();
@@ -76,12 +73,6 @@
   function updateFullButton() {
     const btn = $('btnFullRedeems');
     if (!btn) return;
-    if (fullRedeemsLoading) {
-      btn.textContent = 'Loading Full Redeemed History…';
-      btn.disabled = true;
-      return;
-    }
-    btn.disabled = false;
     btn.textContent = fullRedeemsVisible ? 'Hide Full Redeemed History' : 'Show Full Redeemed History';
   }
 
@@ -216,32 +207,19 @@
     }
   }
 
-  async function loadFullRedeems({ force } = {}) {
+  async function loadFullRedeems() {
     const userId = getUserId();
     if (!userId) {
       alert('Enter user id');
       return;
     }
     const box = $('fullRedeems');
-    if (fullRedeemsCacheUserId !== userId) {
-      fullRedeemsCache = null;
-      fullRedeemsCacheUserId = null;
-    }
-    if (!force && Array.isArray(fullRedeemsCache)) {
-      setFullVisible(true);
-      renderRedeemList('fullRedeems', fullRedeemsCache);
-      return;
-    }
     setFullVisible(true);
     if (box) {
       box.innerHTML = '<div class="muted">Loading...</div>';
     }
-    fullRedeemsLoading = true;
-    updateFullButton();
     try {
       const redeems = await fetchRedeemHistory(userId, FULL_REDEEM_LIMIT);
-      fullRedeemsCache = redeems.slice();
-      fullRedeemsCacheUserId = userId;
       renderRedeemList('fullRedeems', redeems);
     } catch (err) {
       if (box) {
@@ -251,11 +229,7 @@
         msg.textContent = err?.message || 'Failed to load redeemed rewards.';
         box.appendChild(msg);
       }
-      fullRedeemsCache = null;
-      fullRedeemsCacheUserId = null;
     }
-    fullRedeemsLoading = false;
-    updateFullButton();
   }
 
   async function toggleRecentRedeems() {
