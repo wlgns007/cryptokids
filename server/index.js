@@ -398,6 +398,12 @@ const insertMemberStmt = db.prepare(`
   VALUES (@userId, @name, @dob, @sex, @createdAt, @updatedAt)
 `);
 
+const selectMemberExistsStmt = db.prepare(`
+  SELECT 1
+  FROM members
+  WHERE userId = ?
+`);
+
 const updateMemberStmt = db.prepare(`
   UPDATE members
   SET name = @name,
@@ -411,6 +417,32 @@ const deleteMemberStmt = db.prepare(`
   DELETE FROM members
   WHERE userId = ?
 `);
+
+function ensureDefaultMembers() {
+  const defaults = [
+    { userId: "leo", name: "Leo", dob: null, sex: null }
+  ];
+
+  const insertMissing = db.transaction(members => {
+    for (const member of members) {
+      if (!selectMemberExistsStmt.get(member.userId)) {
+        const ts = Date.now();
+        insertMemberStmt.run({
+          userId: member.userId,
+          name: member.name,
+          dob: member.dob,
+          sex: member.sex,
+          createdAt: ts,
+          updatedAt: ts
+        });
+      }
+    }
+  });
+
+  insertMissing(defaults);
+}
+
+ensureDefaultMembers();
 
 function getBalance(userId) {
   const row = selectBalanceStmt.get(userId);
