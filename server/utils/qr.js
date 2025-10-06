@@ -1,8 +1,15 @@
 // utils/qr.js (ESM)
 import crypto from 'node:crypto';
 
+function randomId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return crypto.randomBytes(16).toString('hex');
+}
+
 export function signQR(dataObj, key, ttlMs = 60_000) {
-  const jti = crypto.randomUUID();
+  const jti = randomId();
   const exp = Date.now() + ttlMs;
   const payload = { ...dataObj, jti, exp };        // e.g., {kind:'earn', user:'child:rio', amt:5, task:'brushteth'}
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
