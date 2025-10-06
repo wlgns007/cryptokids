@@ -1,6 +1,6 @@
-// eslint.config.mjs — ESLint v9 flat config
-import js from "@eslint/js";
-import globals from "globals";
+// eslint.config.mjs — ESLint configuration without external npm downloads
+import recommendedConfig from "./config/eslint/recommended.js";
+import { browserGlobals, nodeGlobals } from "./config/eslint/globals.js";
 
 export default [
   {
@@ -16,7 +16,7 @@ export default [
     ]
   },
 
-  js.configs.recommended,
+  recommendedConfig,
 
   // Server code (ESM)
   {
@@ -24,10 +24,11 @@ export default [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
-      globals: { ...globals.node }
+      globals: nodeGlobals
     },
     rules: {
       "no-empty": "off",
+      "no-undef": "error",
       "no-unused-vars": "warn"
     }
   },
@@ -38,7 +39,7 @@ export default [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
-      globals: { ...globals.browser }
+      globals: browserGlobals
     },
     rules: {
       "no-undef": "off",
