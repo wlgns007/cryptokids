@@ -1,6 +1,9 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const LS_FILTER = 'ck_child_filters';
+  const RECENT_REDEEM_LIMIT = 50;
+  const RECENT_REDEEM_DISPLAY = 8;
+  let lastRedeemEntry = null;
 
   function getUserId() {
     return $('childUserId').value.trim();
@@ -15,6 +18,171 @@
     } catch { return {}; }
   }
 
+  function formatDateTime(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '';
+    const date = new Date(num);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString();
+  }
+
+  function updateRedeemNotice(entry, { fallbackText } = {}) {
+    const box = $('redeemNotice');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!entry) {
+      box.classList.add('muted');
+      box.textContent = fallbackText || 'No redeemed rewards yet.';
+      return;
+    }
+    box.classList.remove('muted');
+    const title = document.createElement('div');
+    title.className = 'notice-title';
+    title.textContent = entry.note || 'Reward redeemed';
+
+    const whenText = formatDateTime(entry.at);
+    const whenLine = document.createElement('div');
+    whenLine.className = 'notice-meta';
+    whenLine.textContent = whenText ? `Redeemed on ${whenText}` : 'Redeemed reward';
+
+    const detailParts = [];
+    const spent = Math.abs(Number(entry.delta) || 0);
+    if (spent) detailParts.push(`Spent ${spent} points`);
+    const balanceAfter = Number(entry.balance_after);
+    if (Number.isFinite(balanceAfter)) detailParts.push(`Remaining balance: ${balanceAfter} points`);
+
+    box.appendChild(title);
+    box.appendChild(whenLine);
+    if (detailParts.length) {
+      const detailLine = document.createElement('div');
+      detailLine.className = 'notice-meta';
+      detailLine.textContent = detailParts.join(' • ');
+      box.appendChild(detailLine);
+    }
+  }
+
+  function renderRecentRedeemList(items) {
+    const box = $('recentRedeems');
+    if (!box) return;
+    box.innerHTML = '';
+    box.classList.add('active');
+    if (!Array.isArray(items) || !items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'No redeemed rewards yet.';
+      box.appendChild(empty);
+      return;
+    }
+    items.slice(0, RECENT_REDEEM_DISPLAY).forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = 'recent-row';
+      const name = document.createElement('div');
+      name.className = 'recent-name';
+      name.textContent = entry.note || 'Reward redeemed';
+      const meta = document.createElement('div');
+      meta.className = 'recent-meta';
+      const parts = [];
+      const when = formatDateTime(entry.at);
+      if (when) parts.push(when);
+      const spent = Math.abs(Number(entry.delta) || 0);
+      if (spent) parts.push(`Spent ${spent} points`);
+      const balanceAfter = Number(entry.balance_after);
+      if (Number.isFinite(balanceAfter)) parts.push(`Balance ${balanceAfter} points`);
+      if (!parts.length) parts.push('Reward redeemed');
+      meta.textContent = parts.join(' • ');
+      row.appendChild(name);
+      row.appendChild(meta);
+      box.appendChild(row);
+    });
+  }
+
+  async function fetchRedeemHistory(userId, limit = RECENT_REDEEM_LIMIT) {
+    const res = await fetch(`/api/history/user/${encodeURIComponent(userId)}?limit=${limit}`);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error ? String(data.error) : 'Unable to load redeemed rewards.');
+    }
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+    return rows.filter(row => row.action === 'spend_redeemed');
+  }
+
+  async function refreshRedeemNotice() {
+    const userId = getUserId();
+    if (!userId) {
+      lastRedeemEntry = null;
+      updateRedeemNotice(null, { fallbackText: 'Enter your user ID to see recent redeemed rewards.' });
+      return;
+    }
+    if (lastRedeemEntry) {
+      updateRedeemNotice(lastRedeemEntry);
+    } else {
+      updateRedeemNotice(null, { fallbackText: 'Checking for redeemed rewards...' });
+    }
+    try {
+      const redeems = await fetchRedeemHistory(userId, 20);
+      lastRedeemEntry = redeems[0] || null;
+      if (lastRedeemEntry) {
+        updateRedeemNotice(lastRedeemEntry);
+      } else {
+        updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
+      }
+    } catch (err) {
+      updateRedeemNotice(null, { fallbackText: err?.message || 'Unable to load redeemed rewards.' });
+    }
+  }
+
+  async function showRecentRedeems() {
+    const userId = getUserId();
+    if (!userId) {
+      alert('Enter user id');
+      return;
+    }
+    const box = $('recentRedeems');
+    if (!box) return;
+
+    const alreadyLoaded = box.dataset.loaded === '1' && box.dataset.user === userId;
+    if (box.classList.contains('active') && alreadyLoaded) {
+      box.classList.remove('active');
+      box.innerHTML = '';
+      delete box.dataset.loaded;
+      delete box.dataset.user;
+      const btn = $('btnRecentRedeems');
+      if (btn) btn.textContent = 'Recent Redeemed Rewards';
+      return;
+    }
+
+    box.dataset.user = userId;
+    box.dataset.loaded = '0';
+    box.classList.add('active');
+    box.innerHTML = '<div class="muted">Loading...</div>';
+    const btn = $('btnRecentRedeems');
+    if (btn) btn.textContent = 'Hide Recent Redeems';
+    try {
+      const redeems = await fetchRedeemHistory(userId);
+      lastRedeemEntry = redeems[0] || null;
+      if (lastRedeemEntry) {
+        updateRedeemNotice(lastRedeemEntry);
+      } else {
+        updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
+      }
+      renderRecentRedeemList(redeems);
+      box.dataset.loaded = '1';
+      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (err) {
+      if (box) {
+        box.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.className = 'muted';
+        msg.textContent = err?.message || 'Failed to load redeemed rewards.';
+        box.appendChild(msg);
+      }
+      delete box.dataset.loaded;
+      delete box.dataset.user;
+      const btn = $('btnRecentRedeems');
+      if (btn) btn.textContent = 'Recent Redeemed Rewards';
+    }
+  }
+
   // ===== Balance & history =====
   async function checkBalance() {
     const userId = getUserId();
@@ -24,6 +192,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'failed');
       $('balanceResult').textContent = `Balance: ${data.balance} points • Earned ${data.earned} • Spent ${data.spent}`;
+      refreshRedeemNotice();
     } catch (err) {
       $('balanceResult').textContent = err.message || 'Failed to load balance';
     }
@@ -40,7 +209,15 @@
       const res = await fetch(`/api/history/user/${encodeURIComponent(userId)}?limit=200`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'failed');
-      renderHistory(data.rows || [], filters);
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      renderHistory(rows, filters);
+      const latestRedeem = rows.find(row => row.action === 'spend_redeemed') || null;
+      lastRedeemEntry = latestRedeem;
+      if (latestRedeem) {
+        updateRedeemNotice(latestRedeem);
+      } else {
+        updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
+      }
     } catch (err) {
       list.innerHTML = `<div class="muted">${err.message || 'Failed to load history'}</div>`;
     }
@@ -300,6 +477,7 @@
   }
 
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
+  $('btnRecentRedeems')?.addEventListener('click', showRecentRedeems);
 
   async function loadRewards(){
     const list = $('shopList');

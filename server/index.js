@@ -120,7 +120,8 @@ app.get(["/scan", "/scan.html"], (req, res) => {
       cost,
       afterBalance,
       expiresAt,
-      tokenUsed
+      tokenUsed,
+      token
     }));
     return;
   }
@@ -569,7 +570,7 @@ function formatDateTime(ms) {
   }
 }
 
-function renderSpendApprovalPage({ hold = null, balance = null, cost = null, afterBalance = null, expiresAt = null, tokenUsed = false, message = null }) {
+function renderSpendApprovalPage({ hold = null, balance = null, cost = null, afterBalance = null, expiresAt = null, tokenUsed = false, message = null, token = "" }) {
   const hasHold = !!hold;
   const normalizedStatus = hasHold && hold.status ? String(hold.status).toLowerCase() : "pending";
   const title = hasHold
@@ -577,7 +578,7 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
     : "Reward approval";
 
   let statusLabel = "Pending approval";
-  let statusDescription = message || "Review the request details below, then approve it from the CryptoKids admin console.";
+  let statusDescription = message || "Review the request details below, then approve it to redeem the reward.";
   let statusColor = "#2563eb";
 
   if (!hasHold) {
@@ -600,15 +601,15 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
 
   const summaryRows = [];
   if (hasHold) {
-    summaryRows.push({ label: "Child", value: hold.userId || "Unknown" });
-    summaryRows.push({ label: "Reward", value: hold.itemName || "Reward" });
-    if (cost !== null) summaryRows.push({ label: "Points required", value: `${cost} RT` });
-    if (balance !== null) summaryRows.push({ label: "Current balance", value: `${balance} RT` });
-    if (normalizedStatus === "pending" && afterBalance !== null) summaryRows.push({ label: "Balance after approval", value: `${afterBalance} RT` });
+    summaryRows.push({ label: "Child", value: hold.userId || "Unknown", key: "child" });
+    summaryRows.push({ label: "Reward", value: hold.itemName || "Reward", key: "reward" });
+    if (cost !== null) summaryRows.push({ label: "Points required", value: `${cost} points`, key: "cost" });
+    if (balance !== null) summaryRows.push({ label: "Current balance", value: `${balance} points`, key: "balance" });
+    if (normalizedStatus === "pending" && afterBalance !== null) summaryRows.push({ label: "Balance after approval", value: `${afterBalance} points`, key: "after" });
     const statusTitle = tokenUsed && normalizedStatus === "pending"
       ? "Pending (token already used)"
       : normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
-    summaryRows.push({ label: "Status", value: statusTitle });
+    summaryRows.push({ label: "Status", value: statusTitle, key: "status" });
     const requestedAt = formatDateTime(hold.createdAt);
     if (requestedAt) summaryRows.push({ label: "Requested", value: requestedAt });
     const approvedAt = formatDateTime(hold.approvedAt);
@@ -619,7 +620,10 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
   }
 
   const summaryHtml = summaryRows.length
-    ? `<div class="summary">${summaryRows.map(row => `<div class="summary-row"><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`).join("")}</div>`
+    ? `<div class="summary">${summaryRows.map(row => {
+        const keyAttr = row.key ? ` data-key="${escapeHtml(row.key)}"` : "";
+        return `<div class="summary-row"${keyAttr}><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`;
+      }).join("")}</div>`
     : "";
 
   const noteHtml = hasHold && hold.note
@@ -630,9 +634,28 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
     ? `<img class="reward-image" src="${escapeHtml(hold.itemImage)}" alt="${escapeHtml(hold.itemName || "Reward image")}" onerror="this.style.display='none'" />`
     : "";
 
+  const canApprove = hasHold && normalizedStatus === "pending" && !tokenUsed && token;
+
   const adminHint = hasHold
-    ? `<p class="muted">Approve or cancel this reward in the <a href="/admin" target="_blank" rel="noopener">CryptoKids admin console</a>.</p>`
+    ? canApprove
+      ? ""
+      : `<p class="muted">Approve or cancel this reward in the <a href="/admin" target="_blank" rel="noopener">CryptoKids admin console</a>.</p>`
     : `<p class="muted">Ask the child to open the shop again and generate a fresh QR code.</p>`;
+
+  const actionCost = cost !== null ? `${cost} points` : "the required points";
+  const actionsHtml = canApprove
+    ? `<div class="actions" data-role="actions">
+        <h2>Approve &amp; redeem</h2>
+        <p>Confirm the child has received the reward, then approve to deduct the points.</p>
+        <div class="actions-row">
+          <input id="adminKeyInput" type="password" placeholder="Admin key" autocomplete="one-time-code" />
+          <button id="approveBtn" type="button">Approve reward</button>
+        </div>
+        <p class="actions-hint">Approving will deduct ${escapeHtml(actionCost)} from <strong>${escapeHtml(hold.userId || "the child")}</strong>.</p>
+        <p class="actions-hint">Need to cancel instead? Open the <a href="/admin" target="_blank" rel="noopener">admin console</a>.</p>
+        <div class="actions-status" id="approveStatus" role="status"></div>
+      </div>`
+    : "";
 
   const badgeStyle = `color:${statusColor}; background-color:${statusColor}20; border-color:${statusColor}40;`;
   const heading = hasHold ? "Reward approval" : "QR issue";
@@ -663,6 +686,21 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
       .note strong { font-weight: 600; }
       .muted { color: #64748b; font-size: 14px; margin-top: 24px; }
       .muted a { color: inherit; text-decoration: underline; }
+      button { font-family: inherit; font-size: 15px; padding: 10px 18px; border-radius: 10px; border: none; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; }
+      button[disabled] { opacity: 0.6; cursor: not-allowed; }
+      input[type="password"] { font-family: inherit; }
+      .actions { margin-top: 24px; padding: 20px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; display: grid; gap: 12px; }
+      .actions h2 { margin: 0; font-size: 18px; }
+      .actions p { margin: 0; font-size: 15px; color: #334155; }
+      .actions-row { display: flex; gap: 12px; flex-wrap: wrap; }
+      .actions-row input { flex: 1 1 220px; padding: 10px 12px; border-radius: 10px; border: 1px solid #cbd5f5; font-size: 15px; }
+      .actions-row button { flex: 0 0 auto; }
+      .actions-hint { font-size: 13px; color: #64748b; }
+      .actions-hint strong { font-weight: 600; color: #0f172a; }
+      .actions-hint a { color: inherit; text-decoration: underline; }
+      .actions-status { min-height: 20px; font-size: 14px; color: #334155; }
+      .actions-status.error { color: #b91c1c; }
+      .actions-status.success { color: #15803d; }
     </style>
   </head>
   <body>
@@ -670,14 +708,143 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
       <h1>${escapeHtml(heading)}</h1>
       <p class="intro">${escapeHtml(intro)}</p>
       <section class="card">
-        <span class="status-badge" style="${escapeHtml(badgeStyle)}">${escapeHtml(statusLabel)}</span>
-        <p class="status-text">${escapeHtml(statusDescription)}</p>
+        <span class="status-badge" id="statusBadge" style="${escapeHtml(badgeStyle)}">${escapeHtml(statusLabel)}</span>
+        <p class="status-text" id="statusText">${escapeHtml(statusDescription)}</p>
         ${imageHtml}
         ${summaryHtml}
         ${noteHtml}
+        ${actionsHtml}
         ${adminHint}
       </section>
     </main>
+    <script>
+    (() => {
+      const config = ${JSON.stringify({
+        holdId: hold?.id ?? null,
+        token,
+        cost,
+        balance,
+        afterBalance,
+        userId: hold?.userId ?? null
+      })};
+      const actions = document.querySelector('[data-role="actions"]');
+      if (!actions || !config.holdId || !config.token) return;
+      const adminInput = document.getElementById('adminKeyInput');
+      const approveBtn = document.getElementById('approveBtn');
+      const statusEl = document.getElementById('approveStatus');
+      const badge = document.getElementById('statusBadge');
+      const statusText = document.getElementById('statusText');
+      const summaryStatus = document.querySelector('.summary-row[data-key="status"] strong');
+      const summaryAfter = document.querySelector('.summary-row[data-key="after"] strong');
+      const summaryBalance = document.querySelector('.summary-row[data-key="balance"] strong');
+      const summaryCost = document.querySelector('.summary-row[data-key="cost"] strong');
+
+      function setStatus(message, tone) {
+        if (!statusEl) return;
+        statusEl.textContent = message || '';
+        statusEl.classList.remove('error', 'success');
+        if (tone === 'error') statusEl.classList.add('error');
+        else if (tone === 'success') statusEl.classList.add('success');
+      }
+
+      function friendlyError(code) {
+        switch (code) {
+          case 'UNAUTHORIZED':
+            return 'Admin key is incorrect.';
+          case 'TOKEN_USED':
+            return 'This QR code has already been used.';
+          case 'hold_not_pending':
+            return 'This reward request is no longer pending.';
+          case 'missing_token':
+            return 'The QR code token is missing or invalid.';
+          case 'approve_failed':
+            return 'Unable to approve reward.';
+          case 'Failed to fetch':
+          case 'TypeError: Failed to fetch':
+            return 'Network error. Check your connection and try again.';
+          default:
+            return typeof code === 'string' ? code.replace(/_/g, ' ') : 'Unable to approve reward.';
+        }
+      }
+
+      async function approve() {
+        if (!approveBtn || !adminInput) return;
+        const key = (adminInput.value || '').trim();
+        if (!key) {
+          setStatus('Enter the admin key to approve.', 'error');
+          adminInput.focus();
+          return;
+        }
+        approveBtn.disabled = true;
+        adminInput.disabled = true;
+        setStatus('Approving reward...');
+        try {
+          const res = await fetch('/api/holds/' + encodeURIComponent(config.holdId) + '/approve', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-admin-key': key
+            },
+            body: JSON.stringify({ token: config.token })
+          });
+          let data = {};
+          try { data = await res.json(); } catch { data = {}; }
+          if (!res.ok) {
+            const err = new Error(data?.error || 'approve_failed');
+            throw err;
+          }
+          setStatus('Reward redeemed successfully!', 'success');
+          if (badge) {
+            badge.textContent = 'Redeemed';
+            badge.style.color = '#15803d';
+            badge.style.backgroundColor = '#15803d20';
+            badge.style.borderColor = '#15803d40';
+          }
+          if (statusText) {
+            statusText.textContent = 'Points have been deducted and the reward is marked as redeemed.';
+          }
+          if (summaryStatus) summaryStatus.textContent = 'Redeemed';
+          const balanceValue = typeof data.balance === 'number' ? data.balance : null;
+          const finalCost = typeof data.finalCost === 'number' ? data.finalCost : null;
+          if (summaryCost && finalCost !== null) summaryCost.textContent = finalCost + ' points';
+          if (summaryBalance && balanceValue !== null) summaryBalance.textContent = balanceValue + ' points';
+          if (summaryAfter && balanceValue !== null) {
+            summaryAfter.textContent = balanceValue + ' points';
+          } else if (balanceValue !== null) {
+            const summary = document.querySelector('.summary');
+            if (summary) {
+              const row = document.createElement('div');
+              row.className = 'summary-row';
+              row.innerHTML = '<span>Balance after redemption</span><strong>' + balanceValue + ' points</strong>';
+              summary.appendChild(row);
+            }
+          }
+          approveBtn.textContent = 'Redeemed';
+        } catch (err) {
+          const code = err && err.message ? err.message : 'approve_failed';
+          const message = friendlyError(code);
+          setStatus(message, 'error');
+          if (code === 'UNAUTHORIZED') {
+            approveBtn.disabled = false;
+            adminInput.disabled = false;
+            adminInput.focus();
+            if (typeof adminInput.select === 'function') adminInput.select();
+          } else if (code !== 'TOKEN_USED' && code !== 'hold_not_pending') {
+            approveBtn.disabled = false;
+            adminInput.disabled = false;
+          }
+        }
+      }
+
+      approveBtn?.addEventListener('click', approve);
+      adminInput?.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          approve();
+        }
+      });
+    })();
+    </script>
   </body>
 </html>`;
 }
