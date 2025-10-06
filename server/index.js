@@ -75,6 +75,40 @@ app.get(["/scan", "/scan.html"], (req, res) => {
     res.status(400).send(renderScanPage({ success: false, error: friendlyScanError("missing_token"), rawCode: "missing_token" }));
     return;
   }
+
+  let payload;
+  try {
+    payload = verifyToken(token);
+  } catch (err) {
+    const message = err?.message || "scan_failed";
+    const status = err?.status || (message === "TOKEN_USED" ? 409 : 400);
+    res.status(status).send(renderScanPage({ success: false, error: friendlyScanError(message), rawCode: message }));
+    return;
+  }
+
+  if (payload?.typ === "spend") {
+    const holdId = payload?.data?.holdId ? String(payload.data.holdId) : "";
+    let message = "Show this QR code to an adult in the CryptoKids admin page so they can approve the reward.";
+    if (holdId) {
+      const hold = db.prepare("SELECT itemName, status, quotedCost, finalCost FROM holds WHERE id = ?").get(holdId);
+      const points = Number(hold?.finalCost ?? hold?.quotedCost ?? payload?.data?.cost ?? 0);
+      const hasPoints = Number.isFinite(points) && points > 0;
+      const pointStr = hasPoints ? `${points} point${points === 1 ? "" : "s"}` : "";
+      const rewardName = hold?.itemName || "the reward";
+      if (!hold) {
+        message = "We couldn't find this reward request. Please ask the child to generate a new QR code.";
+      } else if (hold.status === "redeemed") {
+        message = `This reward has already been redeemed${hasPoints ? ` (${pointStr})` : ""}. Reward: ${rewardName}.`;
+      } else if (hold.status === "canceled") {
+        message = `This reward request was canceled. Reward: ${rewardName}${hasPoints ? ` (${pointStr})` : ""}.`;
+      } else {
+        message = `Ask an adult to approve ${rewardName}${hasPoints ? ` (${pointStr})` : ""} in the admin page.`;
+      }
+    }
+    res.send(renderScanPage({ success: false, error: message }));
+    return;
+  }
+
   try {
     const result = redeemToken({
       token,
