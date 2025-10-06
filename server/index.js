@@ -67,6 +67,10 @@ app.get(["/child", "/child.html"], (_req, res) => {
   sendVersioned(res, "child.html");
 });
 
+app.get(["/scan", "/scan.html"], (_req, res) => {
+  sendVersioned(res, "scan.html");
+});
+
 app.get("/manifest.webmanifest", (_req, res) => {
   sendVersioned(res, "manifest.webmanifest", "application/manifest+json");
 });
