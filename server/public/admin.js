@@ -499,29 +499,15 @@
 
   // ===== Holds =====
   const holdsTable = $('holdsTable')?.querySelector('tbody');
-  const holdUserInput = $('holdUserId');
   async function loadHolds() {
     if (!holdsTable) return;
     const status = $('holdFilter')?.value || 'pending';
-    const rawUserId = holdUserInput?.value?.trim() || '';
-    const normalizedUser = rawUserId.toLowerCase();
+    const memberInfo = normalizeMemberInput() || {};
+    const rawUserId = (memberInfo.raw || '').trim();
+    const normalizedUser = (memberInfo.normalized || '').trim();
     holdsTable.innerHTML = '';
     if (!normalizedUser) {
-      const msg = 'Enter a user ID to view holds.';
-      $('holdsStatus').textContent = msg;
-      const row = document.createElement('tr');
-      const cell = document.createElement('td');
-      cell.colSpan = 6;
-      cell.className = 'muted';
-      cell.textContent = msg;
-      row.appendChild(cell);
-      holdsTable.appendChild(row);
-      return;
-    }
-    $('holdsStatus').textContent = 'Loading...';
-    holdsTable.innerHTML = '';
-    if (!normalizedUser) {
-      const msg = 'Enter a user ID above to view holds.';
+      const msg = 'Enter a user ID in Member Management to view holds.';
       $('holdsStatus').textContent = msg;
       const row = document.createElement('tr');
       const cell = document.createElement('td');
@@ -592,10 +578,6 @@
   }
   $('btnReloadHolds')?.addEventListener('click', loadHolds);
   $('holdFilter')?.addEventListener('change', loadHolds);
-  holdUserInput?.addEventListener('change', loadHolds);
-  holdUserInput?.addEventListener('keyup', (event) => {
-    if (event.key === 'Enter') loadHolds();
-  });
   document.addEventListener('DOMContentLoaded', loadHolds);
 
   async function cancelHold(id) {
