@@ -87,6 +87,11 @@
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
+  const memberListSection = $('memberListSection');
+  const memberRegisterContainer = $('memberRegisterContainer');
+  const memberRegisterFields = $('memberRegisterFields');
+  const memberRegisterToggle = $('toggleMemberRegister');
+  const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -125,6 +130,28 @@
     div.textContent = message;
     memberInfoDetails.appendChild(div);
   }
+
+  function setMemberRegisterExpanded(expanded) {
+    if (memberRegisterContainer) memberRegisterContainer.dataset.expanded = expanded ? 'true' : 'false';
+    if (memberRegisterFields) {
+      memberRegisterFields.toggleAttribute('hidden', !expanded);
+      memberRegisterFields.style.display = expanded ? '' : 'none';
+      if (expanded) {
+        memberRegisterFields.removeAttribute('aria-hidden');
+      } else {
+        memberRegisterFields.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = expanded ? '▲' : '▼';
+    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+
+  setMemberRegisterExpanded(false);
+
+  memberRegisterToggle?.addEventListener('click', () => {
+    const currentlyExpanded = memberRegisterContainer?.dataset.expanded === 'true';
+    setMemberRegisterExpanded(!currentlyExpanded);
+  });
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
@@ -344,6 +371,13 @@
   async function loadMembersList() {
     if (!memberTableBody) return;
     const search = (memberSearchInput?.value || '').trim().toLowerCase();
+    if (!search) {
+      memberTableBody.innerHTML = '';
+      if (memberListStatus) memberListStatus.textContent = 'Search for a member to view results.';
+      if (memberListSection) memberListSection.hidden = true;
+      return;
+    }
+    if (memberListSection) memberListSection.hidden = false;
     memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
     if (memberListStatus) memberListStatus.textContent = '';
     try {

@@ -195,6 +195,26 @@
       gap: 12px;
     }
 
+    .collapsible {
+      gap: 12px;
+    }
+
+    .collapsible-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .collapsible[data-expanded="false"] .collapsible-content {
+      display: none;
+    }
+
     .drop {
       border: 2px dashed var(--line);
       border-radius: 14px;
@@ -432,29 +452,38 @@
           </div>
           <small class="muted" id="memberStatus"></small>
         </div>
-        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;">
-          <h3 style="margin:0; font-size:18px;">Register New Member</h3>
-          <div class="row">
-            <label>User ID
-              <input id="memberRegisterId" type="text" placeholder="unique id">
-            </label>
-            <label>Name
-              <input id="memberRegisterName" type="text" placeholder="full name">
-            </label>
-          </div>
-          <div class="row">
-            <label>Date of Birth
-              <input id="memberRegisterDob" type="date">
-            </label>
-            <label>Sex
-              <input id="memberRegisterSex" type="text" placeholder="e.g., Female">
-            </label>
-          </div>
-          <div class="row compact" style="justify-content:flex-end;">
-            <button id="btnMemberRegister" class="primary">Register Member</button>
+        <div class="stack collapsible" style="border-top:1px solid var(--line); padding-top:16px;" id="memberRegisterContainer" data-expanded="false">
+          <button type="button" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false" class="collapsible-toggle">
+            <span>Register New Member</span>
+            <span aria-hidden="true" id="memberRegisterToggleArrow">▼</span>
+          </button>
+          <div class="stack collapsible-content" id="memberRegisterFields" hidden>
+            <div class="row">
+              <label>User ID
+                <input id="memberRegisterId" type="text" placeholder="unique id">
+              </label>
+              <label>Name
+                <input id="memberRegisterName" type="text" placeholder="full name">
+              </label>
+            </div>
+            <div class="row">
+              <label>Date of Birth
+                <input id="memberRegisterDob" type="date">
+              </label>
+              <label>Sex
+                <select id="memberRegisterSex">
+                  <option value="">Select sex</option>
+                  <option value="Boy">Boy</option>
+                  <option value="Girl">Girl</option>
+                </select>
+              </label>
+            </div>
+            <div class="row compact" style="justify-content:flex-end;">
+              <button id="btnMemberRegister" class="primary">Register Member</button>
+            </div>
           </div>
         </div>
-        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;">
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberListSection" hidden>
           <div class="flex-between" style="flex-wrap:wrap; gap:12px;">
             <h3 style="margin:0; font-size:18px;">Existing Members</h3>
             <div class="row compact" style="gap:10px; flex-wrap:wrap;">
