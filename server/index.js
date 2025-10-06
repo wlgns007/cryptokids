@@ -709,7 +709,8 @@ app.post("/api/holds", express.json(), (req, res) => {
     });
 
     const { token } = createToken("spend", { holdId: id, cost: reward.price });
-    res.status(201).json({ holdId: id, token });
+    const qrText = buildQrUrl(req, token);
+    res.status(201).json({ holdId: id, token, qrText });
   } catch (e) {
     console.error("create hold", e);
     res.status(500).json({ error: "create hold failed" });
