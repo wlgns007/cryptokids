@@ -499,12 +499,26 @@
 
   // ===== Holds =====
   const holdsTable = $('holdsTable')?.querySelector('tbody');
+  const holdUserInput = $('holdUserId');
   async function loadHolds() {
     if (!holdsTable) return;
     const status = $('holdFilter')?.value || 'pending';
-    const info = normalizeMemberInput();
-    const normalizedUser = info.normalized;
-    const displayUser = normalizedUser || info.raw;
+    const rawUserId = holdUserInput?.value?.trim() || '';
+    const normalizedUser = rawUserId.toLowerCase();
+    holdsTable.innerHTML = '';
+    if (!normalizedUser) {
+      const msg = 'Enter a user ID to view holds.';
+      $('holdsStatus').textContent = msg;
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 6;
+      cell.className = 'muted';
+      cell.textContent = msg;
+      row.appendChild(cell);
+      holdsTable.appendChild(row);
+      return;
+    }
+    $('holdsStatus').textContent = 'Loading...';
     holdsTable.innerHTML = '';
     if (!normalizedUser) {
       const msg = 'Enter a user ID above to view holds.';
@@ -538,10 +552,10 @@
         const cell = document.createElement('td');
         cell.colSpan = 6;
         cell.className = 'muted';
-        cell.textContent = `No holds for "${displayUser}".`;
+        cell.textContent = `No holds for "${rawUserId}".`;
         row.appendChild(cell);
         holdsTable.appendChild(row);
-        $('holdsStatus').textContent = `No holds for "${displayUser}".`;
+        $('holdsStatus').textContent = `No holds for "${rawUserId}".`;
         return;
       }
       const frag = document.createDocumentFragment();
@@ -570,7 +584,7 @@
       holdsTable.appendChild(frag);
       const count = filtered.length;
       const suffix = count === 1 ? '' : 's';
-      $('holdsStatus').textContent = `Showing ${count} hold${suffix} for "${displayUser}".`;
+      $('holdsStatus').textContent = `Showing ${count} hold${suffix} for "${rawUserId}".`;
     } catch (err) {
       console.error(err);
       $('holdsStatus').textContent = err.message || 'Failed to load holds';
@@ -578,10 +592,11 @@
   }
   $('btnReloadHolds')?.addEventListener('click', loadHolds);
   $('holdFilter')?.addEventListener('change', loadHolds);
-  document.addEventListener('DOMContentLoaded', () => {
-    loadMembersList();
-    loadHolds();
+  holdUserInput?.addEventListener('change', loadHolds);
+  holdUserInput?.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') loadHolds();
   });
+  document.addEventListener('DOMContentLoaded', loadHolds);
 
   async function cancelHold(id) {
     if (!confirm('Cancel this hold?')) return;
