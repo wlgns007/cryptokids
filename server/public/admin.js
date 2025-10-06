@@ -168,9 +168,25 @@
 
   // ===== Holds =====
   const holdsTable = $('holdsTable')?.querySelector('tbody');
+  const holdUserInput = $('holdUserId');
   async function loadHolds() {
     if (!holdsTable) return;
-    const status = $('holdFilter').value;
+    const status = $('holdFilter')?.value || 'pending';
+    const rawUserId = holdUserInput?.value?.trim() || '';
+    const normalizedUser = rawUserId.toLowerCase();
+    holdsTable.innerHTML = '';
+    if (!normalizedUser) {
+      const msg = 'Enter a user ID to view holds.';
+      $('holdsStatus').textContent = msg;
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 6;
+      cell.className = 'muted';
+      cell.textContent = msg;
+      row.appendChild(cell);
+      holdsTable.appendChild(row);
+      return;
+    }
     $('holdsStatus').textContent = 'Loading...';
     holdsTable.innerHTML = '';
     try {
@@ -186,13 +202,20 @@
         throw new Error(msg);
       }
       const rows = Array.isArray(body) ? body : [];
-      if (!rows.length) {
-        holdsTable.innerHTML = '<tr><td colspan="6" class="muted">No holds</td></tr>';
-        $('holdsStatus').textContent = '';
+      const filtered = rows.filter(row => String(row.userId || '').trim().toLowerCase() === normalizedUser);
+      if (!filtered.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.className = 'muted';
+        cell.textContent = `No holds for "${rawUserId}".`;
+        row.appendChild(cell);
+        holdsTable.appendChild(row);
+        $('holdsStatus').textContent = `No holds for "${rawUserId}".`;
         return;
       }
       const frag = document.createDocumentFragment();
-      for (const row of rows) {
+      for (const row of filtered) {
         const tr = document.createElement('tr');
         tr.dataset.holdId = row.id;
         tr.innerHTML = `
@@ -215,7 +238,9 @@
         frag.appendChild(tr);
       }
       holdsTable.appendChild(frag);
-      $('holdsStatus').textContent = '';
+      const count = filtered.length;
+      const suffix = count === 1 ? '' : 's';
+      $('holdsStatus').textContent = `Showing ${count} hold${suffix} for "${rawUserId}".`;
     } catch (err) {
       console.error(err);
       $('holdsStatus').textContent = err.message || 'Failed to load holds';
@@ -223,6 +248,10 @@
   }
   $('btnReloadHolds')?.addEventListener('click', loadHolds);
   $('holdFilter')?.addEventListener('change', loadHolds);
+  holdUserInput?.addEventListener('change', loadHolds);
+  holdUserInput?.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') loadHolds();
+  });
   document.addEventListener('DOMContentLoaded', loadHolds);
 
   async function cancelHold(id) {
