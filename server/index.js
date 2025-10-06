@@ -30,7 +30,7 @@ let BUILD = (process.env.BUILD_VERSION || process.env.RENDER_GIT_COMMIT || proce
 if (!BUILD) {
   try {
     BUILD = execSync("git rev-parse --short HEAD").toString().trim();
-  } catch (err) {
+  } catch {
     BUILD = "";
   }
 }
