@@ -85,16 +85,21 @@
     try {
       if (!data) return null;
       let token = data.trim();
+      let url = '';
       if (token.startsWith('http')) {
-        const url = new URL(token);
-        if (url.searchParams.get('t')) token = url.searchParams.get('t');
+        const urlObj = new URL(token);
+        if (urlObj.searchParams.get('t')) token = urlObj.searchParams.get('t');
+        url = urlObj.toString();
       }
       const part = token.split('.')[0];
       const padded = part.replace(/-/g, '+').replace(/_/g, '/');
       const mod = padded.length % 4;
       const base = mod ? padded + '='.repeat(4 - mod) : padded;
       const payload = JSON.parse(atob(base));
-      return { token, payload };
+      if (!url && typeof window !== 'undefined' && window.location) {
+        url = `${window.location.origin}/scan?t=${encodeURIComponent(token)}`;
+      }
+      return { token, payload, url };
     } catch (e) {
       console.error('parse token failed', e);
       return null;
@@ -333,29 +338,11 @@ setupScanner({
       return;
     }
 
-    const override = $('holdOverride').value;
-    try {
-      const { res, body } = await adminFetch(`/api/holds/${holdId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: parsed.token,
-          finalCost: override ? Number(override) : undefined
-        })
-      });
-
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Approve failed');
-        throw new Error(msg);
-      }
-
-      const data = body && typeof body === 'object' ? body : {};
-      toast(`Redeemed ${data.finalCost ?? '??'} points`);
-      $('holdOverride').value = '';
-      loadHolds();
-    } catch (err) {
-      toast(err.message || 'Redeem failed', 'error');
+    const targetUrl = parsed.url || `${window.location.origin}/scan?t=${encodeURIComponent(parsed.token)}`;
+    say('Opening approval page...');
+    const opened = window.open(targetUrl, '_blank', 'noopener');
+    if (!opened) {
+      window.location.href = targetUrl;
     }
   },  // ← keep this comma
 });   // ← and this closer
