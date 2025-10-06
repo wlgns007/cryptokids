@@ -88,7 +88,6 @@
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
   const memberListSection = $('memberListSection');
-  const memberRegisterContainer = $('memberRegisterContainer');
   const memberRegisterFields = $('memberRegisterFields');
   const memberRegisterToggle = $('toggleMemberRegister');
   const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
@@ -132,16 +131,7 @@
   }
 
   function setMemberRegisterExpanded(expanded) {
-    if (memberRegisterContainer) memberRegisterContainer.dataset.expanded = expanded ? 'true' : 'false';
-    if (memberRegisterFields) {
-      memberRegisterFields.toggleAttribute('hidden', !expanded);
-      memberRegisterFields.style.display = expanded ? '' : 'none';
-      if (expanded) {
-        memberRegisterFields.removeAttribute('aria-hidden');
-      } else {
-        memberRegisterFields.setAttribute('aria-hidden', 'true');
-      }
-    }
+    if (memberRegisterFields) memberRegisterFields.hidden = !expanded;
     if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = expanded ? '▲' : '▼';
     if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   }
@@ -149,8 +139,8 @@
   setMemberRegisterExpanded(false);
 
   memberRegisterToggle?.addEventListener('click', () => {
-    const currentlyExpanded = memberRegisterContainer?.dataset.expanded === 'true';
-    setMemberRegisterExpanded(!currentlyExpanded);
+    const nextExpanded = memberRegisterFields ? memberRegisterFields.hidden : true;
+    setMemberRegisterExpanded(nextExpanded);
   });
 
   function renderMemberInfo(member) {
