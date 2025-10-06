@@ -276,6 +276,12 @@
       if (!res.ok) throw new Error(data.error || 'failed');
       const rows = Array.isArray(data.rows) ? data.rows : [];
       renderHistory(rows, filters);
+      fullRedeemsCache = rows.filter(row => row.action === 'spend_redeemed');
+      fullRedeemsCacheUserId = userId;
+      if (fullRedeemsVisible && Array.isArray(fullRedeemsCache)) {
+        renderRedeemList('fullRedeems', fullRedeemsCache);
+        updateFullButton();
+      }
       const latestRedeem = rows.find(row => row.action === 'spend_redeemed') || null;
       lastRedeemEntry = latestRedeem;
       if (latestRedeem) {
