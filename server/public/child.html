@@ -131,6 +131,71 @@
       padding-bottom: 0;
     }
 
+    .notice-box {
+      background: #eff6ff;
+      border: 1px solid rgba(37, 99, 235, 0.2);
+      border-radius: 14px;
+      padding: 16px;
+      display: grid;
+      gap: 6px;
+      font-size: 14px;
+    }
+
+    .notice-box.muted {
+      background: #f8fafc;
+      border-color: rgba(148, 163, 184, 0.3);
+      color: var(--muted);
+    }
+
+    .notice-title {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--fg);
+    }
+
+    .notice-meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #recentRedeems {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #f8fafc;
+      padding: 16px;
+      display: none;
+      gap: 12px;
+    }
+
+    #recentRedeems.active {
+      display: grid;
+    }
+
+    .recent-row {
+      display: grid;
+      gap: 4px;
+      padding-bottom: 12px;
+      border-bottom: 1px dashed rgba(148, 163, 184, 0.4);
+    }
+
+    .recent-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .recent-name {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .recent-meta {
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
     .earn-list {
       display: grid;
       gap: 12px;
@@ -283,6 +348,7 @@
         <span id="summary" class="muted"></span>
       </div>
       <div id="balanceResult" class="muted"></div>
+      <div id="redeemNotice" class="notice-box muted">Enter your user ID to see recent redeemed rewards.</div>
       <div id="historyList"></div>
     </section>
 
@@ -310,10 +376,12 @@
       <h2>Rewards Menu</h2>
       <div class="row">
         <button id="btnLoadItems" class="primary" style="flex:0 0 auto;">Load Rewards</button>
+        <button id="btnRecentRedeems" type="button" style="flex:0 0 auto;">Recent Redeemed Rewards</button>
       </div>
       <div id="shopList"></div>
       <div id="shopEmpty" class="muted" style="display:none;">No rewards yet.</div>
       <div id="shopMsg" class="muted"></div>
+      <div id="recentRedeems"></div>
       <div id="shopQrBox"></div>
     </section>
   </main>
