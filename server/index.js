@@ -98,6 +98,14 @@ function normId(value) {
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
+let holdColumnNames = new Set();
+
+function refreshHoldColumnNames() {
+  holdColumnNames = new Set(
+    db.prepare("PRAGMA table_info('holds')").all().map(col => col.name)
+  );
+}
+
 function randomId() {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -258,6 +266,8 @@ function ensureSchema() {
       db.exec("UPDATE holds SET quotedCost = points WHERE quotedCost = 0");
     }
   }
+
+  refreshHoldColumnNames();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS consumed_tokens (
@@ -698,10 +708,37 @@ app.post("/api/holds", express.json(), (req, res) => {
 
     const id = randomId();
     const createdAt = Date.now();
-    db.prepare(`
-      INSERT INTO holds (id, userId, status, itemId, itemName, itemImage, quotedCost, createdAt)
-      VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
-    `).run(id, userId, String(reward.id), reward.name, reward.image_url || "", reward.price, createdAt);
+    if (!holdColumnNames.size) {
+      refreshHoldColumnNames();
+    }
+
+    const columns = [];
+    const values = [];
+
+    const pushIf = (name, value) => {
+      if (holdColumnNames.has(name)) {
+        columns.push(name);
+        values.push(value);
+      }
+    };
+
+    pushIf("id", id);
+    pushIf("userId", userId);
+    pushIf("status", "pending");
+    pushIf("itemId", String(reward.id));
+    pushIf("itemName", reward.name);
+    pushIf("itemImage", reward.image_url || "");
+    pushIf("quotedCost", reward.price);
+    pushIf("points", reward.price);
+    pushIf("createdAt", createdAt);
+
+    if (!columns.length) {
+      throw new Error("holds_table_invalid");
+    }
+
+    const placeholders = columns.map(() => "?").join(", ");
+    const sql = `INSERT INTO holds (${columns.join(", ")}) VALUES (${placeholders})`;
+    db.prepare(sql).run(...values);
 
     applyLedger({
       userId,
