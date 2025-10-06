@@ -88,18 +88,9 @@
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
   const memberListSection = $('memberListSection');
-  const memberRegisterContainer = $('memberRegisterContainer');
   const memberRegisterFields = $('memberRegisterFields');
   const memberRegisterToggle = $('toggleMemberRegister');
   const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
-
-  function setMemberRegisterControlsDisabled(disabled) {
-    if (!memberRegisterFields) return;
-    const fields = memberRegisterFields.querySelectorAll('input, select, textarea, button');
-    fields.forEach((field) => {
-      field.disabled = disabled;
-    });
-  }
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -140,21 +131,16 @@
   }
 
   function setMemberRegisterExpanded(expanded) {
-    const isExpanded = !!expanded;
-    if (memberRegisterContainer) memberRegisterContainer.dataset.expanded = isExpanded ? 'true' : 'false';
-    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = isExpanded ? '▴' : '▾';
-    if (!memberRegisterFields) return;
-
-    memberRegisterFields.setAttribute('aria-hidden', isExpanded ? 'false' : 'true');
-    setMemberRegisterControlsDisabled(!isExpanded);
+    if (memberRegisterFields) memberRegisterFields.hidden = !expanded;
+    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = expanded ? '▲' : '▼';
+    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   }
 
   setMemberRegisterExpanded(false);
 
   memberRegisterToggle?.addEventListener('click', () => {
-    const currentlyExpanded = memberRegisterContainer?.dataset.expanded === 'true';
-    setMemberRegisterExpanded(!currentlyExpanded);
+    const nextExpanded = memberRegisterFields ? memberRegisterFields.hidden : true;
+    setMemberRegisterExpanded(nextExpanded);
   });
 
   function renderMemberInfo(member) {
