@@ -107,6 +107,17 @@ function ensureSchema() {
     );
   `);
 
+  const balanceCols = db.prepare(`PRAGMA table_info('balances')`).all();
+  const hasUpdatedAt = balanceCols.some(c => c.name === "updated_at");
+  if (!hasUpdatedAt) {
+    db.exec("ALTER TABLE balances ADD COLUMN updated_at INTEGER DEFAULT 0");
+  }
+  db.exec(`
+    UPDATE balances
+    SET updated_at = strftime('%s','now')
+    WHERE updated_at IS NULL OR updated_at = 0;
+  `);
+
   const ledgerCols = db.prepare(`PRAGMA table_info(ledger)`).all();
   const requiredLedgerCols = new Set([
     "id", "at", "userId", "action", "delta", "balance_after",
