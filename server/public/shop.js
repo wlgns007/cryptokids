@@ -24,6 +24,11 @@ function setPendingUI(on) {
   const qr = document.getElementById('qr');
   if (!qr) return;
 
+  if (!on) {
+    const label = document.getElementById('qrRewardLabel');
+    if (label) { label.textContent = ''; label.style.display = 'none'; }
+  }
+
   let cancel = document.getElementById('cancelPending');
   if (!cancel) {
     cancel = document.createElement('button');
@@ -44,6 +49,8 @@ function setPendingUI(on) {
       if (a) a.style.display = 'none';
       const note = document.getElementById('watchNote');
       if (note) note.style.display = 'none';
+      const label = document.getElementById('qrRewardLabel');
+      if (label) { label.textContent = ''; label.style.display = 'none'; }
       setPendingUI(false);
     };
   }
@@ -74,6 +81,7 @@ function setPendingUI(on) {
     const shopEmpty = $('shopEmpty');
     const itemsWrap = $('items'); // grid
     const msg = $('msg');
+    const rewardLabel = $('qrRewardLabel');
 
     if (!userId) { alert('User ID required'); return; }
     if (msg) msg.textContent = 'Loading…';
@@ -109,6 +117,10 @@ function setPendingUI(on) {
     if (qrBox) {
       qrBox.innerHTML = '';
       qrBox.style.display = isEmpty ? 'none' : '';
+    }
+    if (rewardLabel) {
+      rewardLabel.textContent = '';
+      rewardLabel.style.display = 'none';
     }
     const approveLink = $('approveLink');
     if (approveLink) approveLink.style.display = isEmpty ? 'none' : '';
@@ -222,6 +234,12 @@ if (timerEl) {
       const box = $('qr'); box.innerHTML = ''; box.style.display = '';
       if (typeof QRCode !== 'function') { box.textContent = 'qrcode.min.js missing'; setPendingUI(false); return; }
       new QRCode(box, { text: data.url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+
+      const rewardLabelEl = $('qrRewardLabel');
+      if (rewardLabelEl) {
+        rewardLabelEl.textContent = `Reward: ${reward.name}`;
+        rewardLabelEl.style.display = 'block';
+      }
 
       say(`Ask your parent to scan to approve: ${data.payload.item} (−${data.payload.price} RT)`);
 

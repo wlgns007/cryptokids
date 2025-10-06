@@ -88,24 +88,40 @@ app.get(["/scan", "/scan.html"], (req, res) => {
 
   if (payload?.typ === "spend") {
     const holdId = payload?.data?.holdId ? String(payload.data.holdId) : "";
-    let message = "Show this QR code to an adult in the CryptoKids admin page so they can approve the reward.";
-    if (holdId) {
-      const hold = db.prepare("SELECT itemName, status, quotedCost, finalCost FROM holds WHERE id = ?").get(holdId);
-      const points = Number(hold?.finalCost ?? hold?.quotedCost ?? payload?.data?.cost ?? 0);
-      const hasPoints = Number.isFinite(points) && points > 0;
-      const pointStr = hasPoints ? `${points} point${points === 1 ? "" : "s"}` : "";
-      const rewardName = hold?.itemName || "the reward";
-      if (!hold) {
-        message = "We couldn't find this reward request. Please ask the child to generate a new QR code.";
-      } else if (hold.status === "redeemed") {
-        message = `This reward has already been redeemed${hasPoints ? ` (${pointStr})` : ""}. Reward: ${rewardName}.`;
-      } else if (hold.status === "canceled") {
-        message = `This reward request was canceled. Reward: ${rewardName}${hasPoints ? ` (${pointStr})` : ""}.`;
-      } else {
-        message = `Ask an adult to approve ${rewardName}${hasPoints ? ` (${pointStr})` : ""} in the admin page.`;
+    if (!holdId) {
+      res.status(400).send(renderSpendApprovalPage({ message: friendlyScanError("invalid_payload") }));
+      return;
+    }
+
+    const hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(holdId);
+    if (!hold) {
+      res.status(404).send(renderSpendApprovalPage({ message: "We couldn't find this reward request. Please ask the child to generate a new QR code." }));
+      return;
+    }
+
+    let balance = null;
+    if (hold.userId) {
+      const row = selectBalanceStmt.get(hold.userId);
+      if (row && row.balance !== undefined && row.balance !== null) {
+        const parsed = Number(row.balance);
+        if (Number.isFinite(parsed)) balance = parsed;
       }
     }
-    res.send(renderScanPage({ success: false, error: message }));
+
+    const costValue = Number(hold?.finalCost ?? hold?.quotedCost ?? payload?.data?.cost ?? 0);
+    const cost = Number.isFinite(costValue) ? costValue : null;
+    const afterBalance = balance !== null && cost !== null ? balance - cost : null;
+    const expiresAt = payload?.exp ? payload.exp * 1000 : null;
+    const tokenUsed = !!checkTokenStmt.get(payload.jti);
+
+    res.send(renderSpendApprovalPage({
+      hold,
+      balance,
+      cost,
+      afterBalance,
+      expiresAt,
+      tokenUsed
+    }));
     return;
   }
 
@@ -538,6 +554,132 @@ function friendlyScanError(code) {
     default:
       return "Unable to redeem this QR code.";
   }
+}
+
+function formatDateTime(ms) {
+  if (!ms) return "";
+  try {
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) {
+      return String(ms);
+    }
+    return date.toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
+function renderSpendApprovalPage({ hold = null, balance = null, cost = null, afterBalance = null, expiresAt = null, tokenUsed = false, message = null }) {
+  const hasHold = !!hold;
+  const normalizedStatus = hasHold && hold.status ? String(hold.status).toLowerCase() : "pending";
+  const title = hasHold
+    ? `Reward approval – ${hold.itemName || "Reward"}`
+    : "Reward approval";
+
+  let statusLabel = "Pending approval";
+  let statusDescription = message || "Review the request details below, then approve it from the CryptoKids admin console.";
+  let statusColor = "#2563eb";
+
+  if (!hasHold) {
+    statusLabel = "Not available";
+    statusDescription = message || "We couldn't find this reward request. Please ask the child to generate a new QR code.";
+    statusColor = "#b91c1c";
+  } else if (tokenUsed) {
+    statusLabel = "Already used";
+    statusDescription = message || "This QR code has already been used.";
+    statusColor = "#b91c1c";
+  } else if (normalizedStatus === "redeemed") {
+    statusLabel = "Already redeemed";
+    statusDescription = message || "This reward has already been redeemed.";
+    statusColor = "#15803d";
+  } else if (normalizedStatus === "canceled") {
+    statusLabel = "Canceled";
+    statusDescription = message || "This reward request was canceled. Ask the child to generate a new QR code if needed.";
+    statusColor = "#b91c1c";
+  }
+
+  const summaryRows = [];
+  if (hasHold) {
+    summaryRows.push({ label: "Child", value: hold.userId || "Unknown" });
+    summaryRows.push({ label: "Reward", value: hold.itemName || "Reward" });
+    if (cost !== null) summaryRows.push({ label: "Points required", value: `${cost} RT` });
+    if (balance !== null) summaryRows.push({ label: "Current balance", value: `${balance} RT` });
+    if (normalizedStatus === "pending" && afterBalance !== null) summaryRows.push({ label: "Balance after approval", value: `${afterBalance} RT` });
+    const statusTitle = tokenUsed && normalizedStatus === "pending"
+      ? "Pending (token already used)"
+      : normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
+    summaryRows.push({ label: "Status", value: statusTitle });
+    const requestedAt = formatDateTime(hold.createdAt);
+    if (requestedAt) summaryRows.push({ label: "Requested", value: requestedAt });
+    const approvedAt = formatDateTime(hold.approvedAt);
+    if (approvedAt) summaryRows.push({ label: "Approved", value: approvedAt });
+    const expiresText = formatDateTime(expiresAt);
+    if (expiresText) summaryRows.push({ label: "QR expires", value: expiresText });
+    summaryRows.push({ label: "Request ID", value: hold.id });
+  }
+
+  const summaryHtml = summaryRows.length
+    ? `<div class="summary">${summaryRows.map(row => `<div class="summary-row"><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`).join("")}</div>`
+    : "";
+
+  const noteHtml = hasHold && hold.note
+    ? `<p class="note"><strong>Note:</strong> ${escapeHtml(hold.note)}</p>`
+    : "";
+
+  const imageHtml = hasHold && hold.itemImage
+    ? `<img class="reward-image" src="${escapeHtml(hold.itemImage)}" alt="${escapeHtml(hold.itemName || "Reward image")}" onerror="this.style.display='none'" />`
+    : "";
+
+  const adminHint = hasHold
+    ? `<p class="muted">Approve or cancel this reward in the <a href="/admin" target="_blank" rel="noopener">CryptoKids admin console</a>.</p>`
+    : `<p class="muted">Ask the child to open the shop again and generate a fresh QR code.</p>`;
+
+  const badgeStyle = `color:${statusColor}; background-color:${statusColor}20; border-color:${statusColor}40;`;
+  const heading = hasHold ? "Reward approval" : "QR issue";
+  const intro = hasHold
+    ? "Scan complete! Review the request details below."
+    : "We couldn’t display this reward request.";
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f6f7f9; color: #0f172a; }
+      main { max-width: 640px; margin: 40px auto; }
+      h1 { font-size: 28px; margin: 0 0 8px; }
+      .intro { color: #475569; margin: 0 0 24px; font-size: 16px; }
+      .card { background: #fff; border-radius: 18px; padding: 28px; box-shadow: 0 20px 45px rgba(15, 23, 42, 0.12); }
+      .status-badge { display: inline-flex; align-items: center; font-weight: 600; font-size: 14px; padding: 6px 14px; border-radius: 999px; border: 1px solid; margin-bottom: 12px; }
+      .status-text { margin: 0 0 16px; font-size: 16px; line-height: 1.5; }
+      .reward-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 14px; border: 1px solid #e2e8f0; margin: 12px 0 20px; }
+      .summary { border-top: 1px solid #e2e8f0; margin-top: 16px; padding-top: 16px; display: grid; gap: 12px; }
+      .summary-row { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; flex-wrap: wrap; }
+      .summary-row span { color: #64748b; }
+      .summary-row strong { font-weight: 600; }
+      .note { margin-top: 20px; padding: 14px; background: #f1f5f9; border-radius: 12px; font-size: 15px; color: #1e293b; }
+      .note strong { font-weight: 600; }
+      .muted { color: #64748b; font-size: 14px; margin-top: 24px; }
+      .muted a { color: inherit; text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(heading)}</h1>
+      <p class="intro">${escapeHtml(intro)}</p>
+      <section class="card">
+        <span class="status-badge" style="${escapeHtml(badgeStyle)}">${escapeHtml(statusLabel)}</span>
+        <p class="status-text">${escapeHtml(statusDescription)}</p>
+        ${imageHtml}
+        ${summaryHtml}
+        ${noteHtml}
+        ${adminHint}
+      </section>
+    </main>
+  </body>
+</html>`;
 }
 
 function renderScanPage({ success, result = null, error = null, rawCode = null }) {
