@@ -98,6 +98,13 @@ function normId(value) {
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
+function randomId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return crypto.randomBytes(16).toString("hex");
+}
+
 function ensureSchema() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS balances (
@@ -350,7 +357,7 @@ function createToken(typ, data, ttl = TOKEN_TTL_SEC) {
   const now = nowSec();
   const payload = {
     typ,
-    jti: crypto.randomUUID(),
+    jti: randomId(),
     iat: now,
     exp: now + Math.max(10, ttl),
     data
@@ -689,7 +696,7 @@ app.post("/api/holds", express.json(), (req, res) => {
     const reward = db.prepare("SELECT id, name, price, image_url FROM rewards WHERE id = ? AND active = 1").get(itemId);
     if (!reward) return res.status(404).json({ error: "reward not found" });
 
-    const id = crypto.randomUUID();
+    const id = randomId();
     const createdAt = Date.now();
     db.prepare(`
       INSERT INTO holds (id, userId, status, itemId, itemName, itemImage, quotedCost, createdAt)
