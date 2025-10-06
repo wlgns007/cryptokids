@@ -9,11 +9,15 @@
   "format": "prettier -w .",
   "lint": "eslint . --config ./eslint.config.mjs",
   "lint:fix": "eslint . --fix --config ./eslint.config.mjs"
+   "lint": "eslint \"server/**/*.js\" \"server/public/**/*.js\" --max-warnings=0"
 },
   "dependencies": {
     "better-sqlite3": "^12.4.1",
     "express": "^4.19.2",
     "multer": "^1.4.5",
     "qrcode": "^1.5.3"
+     "eslint": "^9.11.0",
+    "@eslint/js": "^9.11.0",
+    "globals": "^15.9.0"
   }
 }
