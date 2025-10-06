@@ -404,6 +404,7 @@
 
     <nav aria-label="Section navigation">
       <ul class="jump-links">
+        <li><a href="#secMember">Member Management</a></li>
         <li><a href="#secIssue">Issue Points</a></li>
         <li><a href="#secHolds">Holding Rewards To Be Redeemed</a></li>
         <li><a href="#secRewards">Rewards Menu</a></li>
@@ -413,19 +414,81 @@
     </nav>
 
     <main>
-      <section class="card" id="secIssue">
+      <section class="card" id="secMember">
         <div class="flex-between">
-          <h2>Issue Points</h2>
+          <h2>Member Management</h2>
           <div class="row compact" style="gap:10px; justify-content:flex-end; flex-wrap:wrap;">
-            <button id="btnIssueGenerate" class="primary">Generate QR</button>
-            <button id="btnIssueBalance">Check Balance</button>
-            <button class="view-history" data-history-type="earn">View History</button>
+            <button id="btnMemberInfo">Member Info</button>
+            <button id="btnMemberBalance">Check Balance</button>
+            <button class="view-history" data-history-type="all" data-history-scope="member">View History</button>
           </div>
         </div>
         <div class="stack">
           <label>User ID
-            <input id="issueUserId" type="text" placeholder="e.g., leo">
+            <input id="memberUserId" type="text" placeholder="e.g., leo">
           </label>
+          <div id="memberInfoPanel" class="stack" style="border:1px solid var(--line); border-radius:12px; padding:12px; background:rgba(37,99,235,0.04);">
+            <div id="memberInfoDetails" class="muted">Enter a user ID and click Member Info to view details.</div>
+          </div>
+          <small class="muted" id="memberStatus"></small>
+        </div>
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;">
+          <h3 style="margin:0; font-size:18px;">Register New Member</h3>
+          <div class="row">
+            <label>User ID
+              <input id="memberRegisterId" type="text" placeholder="unique id">
+            </label>
+            <label>Name
+              <input id="memberRegisterName" type="text" placeholder="full name">
+            </label>
+          </div>
+          <div class="row">
+            <label>Date of Birth
+              <input id="memberRegisterDob" type="date">
+            </label>
+            <label>Sex
+              <input id="memberRegisterSex" type="text" placeholder="e.g., Female">
+            </label>
+          </div>
+          <div class="row compact" style="justify-content:flex-end;">
+            <button id="btnMemberRegister" class="primary">Register Member</button>
+          </div>
+        </div>
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;">
+          <div class="flex-between" style="flex-wrap:wrap; gap:12px;">
+            <h3 style="margin:0; font-size:18px;">Existing Members</h3>
+            <div class="row compact" style="gap:10px; flex-wrap:wrap;">
+              <label style="flex:1 1 180px;">
+                <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em;">Search</span>
+                <input id="memberSearch" type="text" placeholder="search id or name">
+              </label>
+              <button id="btnMemberReload">Reload</button>
+            </div>
+          </div>
+          <div style="overflow:auto;">
+            <table class="table" id="memberTable">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Name</th>
+                  <th>DOB</th>
+                  <th>Sex</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <small class="muted" id="memberListStatus"></small>
+        </div>
+      </section>
+
+      <section class="card" id="secIssue">
+        <div class="flex-between">
+          <h2>Issue Points</h2>
+          <button id="btnIssueGenerate" class="primary">Generate QR</button>
+        </div>
+        <div class="stack">
           <div class="row">
             <label>Amount
               <input id="issueAmount" type="number" min="1" step="1" placeholder="points">
@@ -446,7 +509,7 @@
       <section class="card" id="secHolds">
         <div class="flex-between">
           <h2>Holding Rewards To Be Redeemed</h2>
-          <button class="view-history" data-history-type="spend">View History</button>
+          <button class="view-history" data-history-type="spend" data-history-scope="member">View History</button>
         </div>
         <div class="row" style="align-items:flex-end;">
           <label>Status

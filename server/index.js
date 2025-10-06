@@ -340,6 +340,17 @@ function ensureSchema() {
   refreshHoldColumnNames();
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS members (
+      userId TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      dob TEXT,
+      sex TEXT,
+      createdAt INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS consumed_tokens (
       jti TEXT PRIMARY KEY,
       typ TEXT NOT NULL,
@@ -361,6 +372,46 @@ const upsertBalanceStmt = db.prepare(`
   ON CONFLICT(user_id) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
 `);
 
+const selectMemberStmt = db.prepare(`
+  SELECT userId, name, dob, sex, createdAt, updatedAt
+  FROM members
+  WHERE userId = ?
+`);
+
+const listMembersStmt = db.prepare(`
+  SELECT userId, name, dob, sex, createdAt, updatedAt
+  FROM members
+  ORDER BY userId ASC
+  LIMIT 200
+`);
+
+const searchMembersStmt = db.prepare(`
+  SELECT userId, name, dob, sex, createdAt, updatedAt
+  FROM members
+  WHERE userId LIKE @like OR LOWER(name) LIKE @like
+  ORDER BY userId ASC
+  LIMIT 200
+`);
+
+const insertMemberStmt = db.prepare(`
+  INSERT INTO members (userId, name, dob, sex, createdAt, updatedAt)
+  VALUES (@userId, @name, @dob, @sex, @createdAt, @updatedAt)
+`);
+
+const updateMemberStmt = db.prepare(`
+  UPDATE members
+  SET name = @name,
+      dob = @dob,
+      sex = @sex,
+      updatedAt = @updatedAt
+  WHERE userId = @userId
+`);
+
+const deleteMemberStmt = db.prepare(`
+  DELETE FROM members
+  WHERE userId = ?
+`);
+
 function getBalance(userId) {
   const row = selectBalanceStmt.get(userId);
   return row ? Number(row.balance || 0) : 0;
@@ -368,6 +419,31 @@ function getBalance(userId) {
 
 function setBalance(userId, balance) {
   upsertBalanceStmt.run({ user_id: userId, balance, updated_at: nowSec() });
+}
+
+function mapMember(row) {
+  if (!row) return null;
+  return {
+    userId: row.userId,
+    name: row.name,
+    dob: row.dob || null,
+    sex: row.sex || null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+function getMember(userId) {
+  const row = selectMemberStmt.get(userId);
+  return mapMember(row);
+}
+
+function listMembers(search) {
+  if (search) {
+    const like = `%${search}%`;
+    return searchMembersStmt.all({ like }).map(mapMember);
+  }
+  return listMembersStmt.all().map(mapMember);
 }
 
 const insertLedgerStmt = db.prepare(`
@@ -993,6 +1069,91 @@ app.get("/summary/:userId", (req, res) => {
     earned: Number(sums?.earned || 0),
     spent: Number(sums?.spent || 0)
   });
+});
+
+app.get("/api/members", requireAdminKey, (req, res) => {
+  const search = (req.query?.search || "").toString().trim().toLowerCase();
+  try {
+    res.json(listMembers(search));
+  } catch (err) {
+    console.error("listMembers failed", err);
+    res.status(500).json({ error: "FAILED" });
+  }
+});
+
+app.post("/api/members", requireAdminKey, (req, res) => {
+  const body = req.body || {};
+  const userId = normId(body.userId);
+  const name = (body.name || "").toString().trim();
+  const dob = (body.dob || "").toString().trim();
+  const sex = (body.sex || "").toString().trim();
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  if (!name) return res.status(400).json({ error: "name required" });
+  const now = Date.now();
+  try {
+    insertMemberStmt.run({
+      userId,
+      name,
+      dob: dob || null,
+      sex: sex || null,
+      createdAt: now,
+      updatedAt: now
+    });
+  } catch (err) {
+    if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+      return res.status(409).json({ error: "USER_EXISTS" });
+    }
+    console.error("insertMember failed", err);
+    return res.status(500).json({ error: "FAILED" });
+  }
+  res.status(201).json({ ok: true, member: getMember(userId) });
+});
+
+app.get("/api/members/:userId", requireAdminKey, (req, res) => {
+  const userId = normId(req.params.userId);
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  const member = getMember(userId);
+  if (!member) return res.status(404).json({ error: "NOT_FOUND" });
+  res.json(member);
+});
+
+app.patch("/api/members/:userId", requireAdminKey, (req, res) => {
+  const userId = normId(req.params.userId);
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  const existing = getMember(userId);
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND" });
+  const body = req.body || {};
+  const name = body.name !== undefined ? (body.name || "").toString().trim() : existing.name;
+  const dob = body.dob !== undefined ? (body.dob || "").toString().trim() : (existing.dob || "");
+  const sex = body.sex !== undefined ? (body.sex || "").toString().trim() : (existing.sex || "");
+  if (!name) return res.status(400).json({ error: "name required" });
+  try {
+    updateMemberStmt.run({
+      userId,
+      name,
+      dob: dob || null,
+      sex: sex || null,
+      updatedAt: Date.now()
+    });
+  } catch (err) {
+    console.error("updateMember failed", err);
+    return res.status(500).json({ error: "FAILED" });
+  }
+  res.json({ ok: true, member: getMember(userId) });
+});
+
+app.delete("/api/members/:userId", requireAdminKey, (req, res) => {
+  const userId = normId(req.params.userId);
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  const existing = getMember(userId);
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND" });
+  try {
+    deleteMemberStmt.run(userId);
+  } catch (err) {
+    console.error("deleteMember failed", err);
+    return res.status(500).json({ error: "FAILED" });
+  }
+  res.json({ ok: true });
 });
 
 app.get("/api/earn-templates", (req, res) => {

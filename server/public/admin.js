@@ -81,6 +81,353 @@
     new QRCode(el, { text, width: 200, height: 200 });
   }
 
+  const memberIdInput = $('memberUserId');
+  const memberStatusEl = $('memberStatus');
+  const memberInfoDetails = $('memberInfoDetails');
+  const memberTableBody = $('memberTable')?.querySelector('tbody');
+  const memberListStatus = $('memberListStatus');
+  const memberSearchInput = $('memberSearch');
+
+  function getMemberIdInfo() {
+    const raw = (memberIdInput?.value || '').trim();
+    return { raw, normalized: raw.toLowerCase() };
+  }
+
+  function normalizeMemberInput() {
+    if (!memberIdInput) return getMemberIdInfo();
+    const info = getMemberIdInfo();
+    if (info.raw && info.raw !== info.normalized) {
+      memberIdInput.value = info.normalized;
+      return { raw: info.normalized, normalized: info.normalized };
+    }
+    return info;
+  }
+
+  function requireMemberId({ silent = false } = {}) {
+    const info = normalizeMemberInput();
+    if (!info.normalized) {
+      if (!silent) toast('Enter user id', 'error');
+      memberIdInput?.focus();
+      return null;
+    }
+    return info.normalized;
+  }
+
+  function setMemberStatus(message) {
+    if (memberStatusEl) memberStatusEl.textContent = message || '';
+  }
+
+  function setMemberInfoMessage(message) {
+    if (!memberInfoDetails) return;
+    memberInfoDetails.innerHTML = '';
+    const div = document.createElement('div');
+    div.className = 'muted';
+    div.textContent = message;
+    memberInfoDetails.appendChild(div);
+  }
+
+  function renderMemberInfo(member) {
+    if (!memberInfoDetails) return;
+    memberInfoDetails.innerHTML = '';
+    if (!member) {
+      setMemberInfoMessage('No member found.');
+      return;
+    }
+    const nameEl = document.createElement('div');
+    nameEl.style.fontWeight = '600';
+    nameEl.textContent = member.name || member.userId;
+    memberInfoDetails.appendChild(nameEl);
+
+    const idEl = document.createElement('div');
+    idEl.className = 'muted mono';
+    idEl.textContent = `ID: ${member.userId}`;
+    memberInfoDetails.appendChild(idEl);
+
+    const dobEl = document.createElement('div');
+    dobEl.className = 'muted';
+    dobEl.textContent = `DOB: ${member.dob || '—'}`;
+    memberInfoDetails.appendChild(dobEl);
+
+    const sexEl = document.createElement('div');
+    sexEl.className = 'muted';
+    sexEl.textContent = `Sex: ${member.sex || '—'}`;
+    memberInfoDetails.appendChild(sexEl);
+  }
+
+  function memberIdChanged() {
+    normalizeMemberInput();
+    setMemberStatus('');
+    setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
+    loadHolds();
+  }
+
+  memberIdInput?.addEventListener('change', memberIdChanged);
+  memberIdInput?.addEventListener('blur', normalizeMemberInput);
+  memberIdInput?.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') memberIdChanged();
+  });
+
+  $('btnMemberInfo')?.addEventListener('click', async () => {
+    const userId = requireMemberId();
+    if (!userId) return;
+    setMemberStatus('');
+    setMemberInfoMessage('Loading member info...');
+    try {
+      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`);
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        setMemberInfoMessage('Admin key invalid.');
+        return;
+      }
+      if (res.status === 404) {
+        setMemberInfoMessage(`No profile found for "${userId}".`);
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to load member');
+        throw new Error(msg);
+      }
+      const member = body && typeof body === 'object' ? body : null;
+      renderMemberInfo(member);
+      if (member) setMemberStatus(`Loaded member ${member.userId}.`);
+    } catch (err) {
+      console.error(err);
+      setMemberInfoMessage(err.message || 'Failed to load member.');
+      toast(err.message || 'Failed to load member', 'error');
+    }
+  });
+
+  $('btnMemberBalance')?.addEventListener('click', async () => {
+    const userId = requireMemberId();
+    if (!userId) return;
+    setMemberStatus('Fetching balance...');
+    try {
+      const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to fetch balance');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
+      const balance = Number.isFinite(Number(data.balance)) ? Number(data.balance) : data.balance;
+      setMemberStatus(`Balance: ${balance ?? 0} points.`);
+    } catch (err) {
+      console.error(err);
+      setMemberStatus(err.message || 'Failed to fetch balance.');
+      toast(err.message || 'Failed to fetch balance', 'error');
+    }
+  });
+
+  async function submitMemberRegistration() {
+    const idEl = $('memberRegisterId');
+    const nameEl = $('memberRegisterName');
+    const dobEl = $('memberRegisterDob');
+    const sexEl = $('memberRegisterSex');
+    const userId = (idEl?.value || '').trim().toLowerCase();
+    const name = (nameEl?.value || '').trim();
+    const dob = (dobEl?.value || '').trim();
+    const sex = (sexEl?.value || '').trim();
+    if (!userId || !name) {
+      toast('User ID and name required', 'error');
+      return;
+    }
+    setMemberStatus('Registering member...');
+    try {
+      const { res, body } = await adminFetch('/api/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, name, dob: dob || undefined, sex: sex || undefined })
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        setMemberStatus('Admin key invalid.');
+        return;
+      }
+      if (res.status === 409) {
+        throw new Error('User ID already exists');
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to register');
+        throw new Error(msg);
+      }
+      toast('Member registered');
+      setMemberStatus(`Registered member ${userId}.`);
+      if (idEl) idEl.value = '';
+      if (nameEl) nameEl.value = '';
+      if (dobEl) dobEl.value = '';
+      if (sexEl) sexEl.value = '';
+      if (memberIdInput) {
+        memberIdInput.value = userId;
+        memberIdChanged();
+      }
+      await loadMembersList();
+    } catch (err) {
+      console.error(err);
+      setMemberStatus(err.message || 'Failed to register member.');
+      toast(err.message || 'Failed to register member', 'error');
+    }
+  }
+
+  $('btnMemberRegister')?.addEventListener('click', submitMemberRegistration);
+
+  async function editMember(member) {
+    if (!member) return;
+    const namePrompt = prompt('Member name', member.name || '');
+    if (namePrompt === null) return;
+    const name = namePrompt.trim();
+    if (!name) {
+      toast('Name required', 'error');
+      return;
+    }
+    const dobPrompt = prompt('Date of birth (YYYY-MM-DD)', member.dob || '');
+    if (dobPrompt === null) return;
+    const dob = dobPrompt.trim();
+    const sexPrompt = prompt('Sex', member.sex || '');
+    if (sexPrompt === null) return;
+    const sex = sexPrompt.trim();
+    try {
+      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(member.userId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, dob: dob || undefined, sex: sex || undefined })
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to update member');
+        throw new Error(msg);
+      }
+      toast('Member updated');
+      await loadMembersList();
+      const updated = body && typeof body === 'object' ? body.member || body : null;
+      if (updated && memberIdInput?.value === updated.userId) {
+        renderMemberInfo(updated);
+      }
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Failed to update member', 'error');
+    }
+  }
+
+  async function deleteMember(member) {
+    if (!member) return;
+    if (!confirm(`Delete member "${member.userId}"? This cannot be undone.`)) return;
+    try {
+      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(member.userId)}`, {
+        method: 'DELETE'
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (res.status === 404) {
+        toast('Member already removed', 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to delete member');
+        throw new Error(msg);
+      }
+      toast('Member deleted');
+      if (memberIdInput?.value === member.userId) {
+        memberIdInput.value = '';
+        memberIdChanged();
+      }
+      await loadMembersList();
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Failed to delete member', 'error');
+    }
+  }
+
+  async function loadMembersList() {
+    if (!memberTableBody) return;
+    const search = (memberSearchInput?.value || '').trim().toLowerCase();
+    memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
+    if (memberListStatus) memberListStatus.textContent = '';
+    try {
+      const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+      const { res, body } = await adminFetch(`/api/members${qs}`);
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Admin key invalid.</td></tr>';
+        if (memberListStatus) memberListStatus.textContent = 'Admin key invalid.';
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to load members');
+        throw new Error(msg);
+      }
+      const rows = Array.isArray(body) ? body : [];
+      memberTableBody.innerHTML = '';
+      if (!rows.length) {
+        memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">No members found.</td></tr>';
+        if (memberListStatus) memberListStatus.textContent = 'No members found.';
+        return;
+      }
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        const idCell = document.createElement('td');
+        idCell.textContent = row.userId;
+        tr.appendChild(idCell);
+        const nameCell = document.createElement('td');
+        nameCell.textContent = row.name || '';
+        tr.appendChild(nameCell);
+        const dobCell = document.createElement('td');
+        dobCell.textContent = row.dob || '';
+        tr.appendChild(dobCell);
+        const sexCell = document.createElement('td');
+        sexCell.textContent = row.sex || '';
+        tr.appendChild(sexCell);
+        const actions = document.createElement('td');
+        actions.style.display = 'flex';
+        actions.style.flexWrap = 'wrap';
+        actions.style.gap = '6px';
+        actions.style.alignItems = 'center';
+
+        const selectBtn = document.createElement('button');
+        selectBtn.textContent = 'Select';
+        selectBtn.addEventListener('click', () => {
+          if (memberIdInput) {
+            memberIdInput.value = row.userId;
+            memberIdChanged();
+          }
+        });
+        actions.appendChild(selectBtn);
+
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => editMember(row));
+        actions.appendChild(editBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteMember(row));
+        actions.appendChild(deleteBtn);
+
+        tr.appendChild(actions);
+        memberTableBody.appendChild(tr);
+      }
+      if (memberListStatus) {
+        const count = rows.length;
+        memberListStatus.textContent = `Showing ${count} member${count === 1 ? '' : 's'}.`;
+      }
+    } catch (err) {
+      console.error(err);
+      memberTableBody.innerHTML = `<tr><td colspan="5" class="muted">${err.message || 'Failed to load members.'}</td></tr>`;
+      if (memberListStatus) memberListStatus.textContent = err.message || 'Failed to load members.';
+    }
+  }
+
+  $('btnMemberReload')?.addEventListener('click', loadMembersList);
+
+  let memberSearchTimer = null;
+  memberSearchInput?.addEventListener('input', () => {
+    clearTimeout(memberSearchTimer);
+    memberSearchTimer = setTimeout(loadMembersList, 250);
+  });
+
   function parseTokenFromScan(data) {
     try {
       if (!data) return null;
@@ -107,11 +454,12 @@
   }
 
   async function generateIssueQr() {
-    const userId = $('issueUserId').value.trim();
+    const userId = requireMemberId();
+    if (!userId) return;
     const amount = Number($('issueAmount').value);
     const note = $('issueNote').value.trim();
-    if (!userId || !Number.isFinite(amount) || amount <= 0) {
-      toast('Enter user and positive amount', 'error');
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast('Enter a positive amount', 'error');
       return;
     }
     $('issueStatus').textContent = 'Generating QR...';
@@ -143,23 +491,6 @@
   }
   $('btnIssueGenerate')?.addEventListener('click', generateIssueQr);
 
-  $('btnIssueBalance')?.addEventListener('click', async () => {
-    const userId = $('issueUserId').value.trim();
-    if (!userId) return toast('Enter user id', 'error');
-    try {
-      const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
-      if (!res.ok){
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed');
-        throw new Error(msg);
-      }
-      const data = body && typeof body === 'object' ? body : {};
-      $('issueStatus').textContent = `Balance: ${data.balance} points`;
-    } catch (err) {
-      toast(err.message || 'Balance failed', 'error');
-    }
-  });
-
   $('btnIssueCopy')?.addEventListener('click', () => {
     const text = $('issueLink').value;
     if (!text) return toast('Nothing to copy', 'error');
@@ -189,9 +520,22 @@
     }
     $('holdsStatus').textContent = 'Loading...';
     holdsTable.innerHTML = '';
+    if (!normalizedUser) {
+      const msg = 'Enter a user ID above to view holds.';
+      $('holdsStatus').textContent = msg;
+      const row = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 6;
+      cell.className = 'muted';
+      cell.textContent = msg;
+      row.appendChild(cell);
+      holdsTable.appendChild(row);
+      return;
+    }
+    $('holdsStatus').textContent = 'Loading...';
     try {
       const { res, body } = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
-      if (res.status === 401){
+      if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         $('holdsStatus').textContent = 'Admin key invalid.';
         holdsTable.innerHTML = '<tr><td colspan="6" class="muted">Admin key invalid.</td></tr>';
@@ -946,9 +1290,20 @@ setupScanner({
 
   document.querySelectorAll('.view-history').forEach(btn => {
     btn.addEventListener('click', () => {
+      const preset = {};
       const type = btn.dataset.historyType;
-      if (type === 'spend') openHistory({ type: 'spend' });
-      else openHistory({ type: 'earn' });
+      if (type && type !== 'all') {
+        preset.type = type;
+      }
+      const scope = btn.dataset.historyScope;
+      if (scope === 'member') {
+        const userId = requireMemberId();
+        if (!userId) return;
+        preset.userId = userId;
+      } else if (btn.dataset.historyUser) {
+        preset.userId = btn.dataset.historyUser;
+      }
+      openHistory(preset);
     });
   });
 
