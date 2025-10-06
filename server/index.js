@@ -139,17 +139,52 @@ function ensureSchema() {
     `);
   }
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS rewards (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      price INTEGER NOT NULL,
-      description TEXT DEFAULT '',
-      image_url TEXT DEFAULT '',
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-  `);
+  const rewardsCols = db.prepare(`PRAGMA table_info('rewards')`).all();
+  if (!rewardsCols.length) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS rewards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        description TEXT DEFAULT '',
+        image_url TEXT DEFAULT '',
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+    `);
+  } else {
+    const hasCreatedAt = rewardsCols.some(c => c.name === "created_at");
+    const hasCreatedAtCamel = rewardsCols.some(c => c.name === "createdAt");
+    if (!hasCreatedAt) {
+      db.exec(`ALTER TABLE rewards ADD COLUMN created_at INTEGER DEFAULT 0`);
+    }
+
+    const rowsNeedingBackfill = db
+      .prepare("SELECT COUNT(*) as cnt FROM rewards WHERE created_at IS NULL OR created_at = 0")
+      .get().cnt;
+    if (rowsNeedingBackfill) {
+      if (hasCreatedAtCamel) {
+        db.exec(`
+          UPDATE rewards
+          SET created_at = CASE
+            WHEN created_at IS NOT NULL AND created_at != 0 THEN created_at
+            WHEN createdAt IS NOT NULL THEN createdAt
+            ELSE strftime('%s','now')
+          END
+          WHERE created_at IS NULL OR created_at = 0;
+        `);
+      } else {
+        db.exec(`
+          UPDATE rewards
+          SET created_at = CASE
+            WHEN created_at IS NOT NULL AND created_at != 0 THEN created_at
+            ELSE strftime('%s','now')
+          END
+          WHERE created_at IS NULL OR created_at = 0;
+        `);
+      }
+    }
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS earn_templates (
