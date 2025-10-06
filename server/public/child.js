@@ -138,25 +138,10 @@
       return;
     }
     const box = $('recentRedeems');
-    if (!box) return;
-
-    const alreadyLoaded = box.dataset.loaded === '1' && box.dataset.user === userId;
-    if (box.classList.contains('active') && alreadyLoaded) {
-      box.classList.remove('active');
-      box.innerHTML = '';
-      delete box.dataset.loaded;
-      delete box.dataset.user;
-      const btn = $('btnRecentRedeems');
-      if (btn) btn.textContent = 'Recent Redeemed Rewards';
-      return;
+    if (box) {
+      box.classList.add('active');
+      box.innerHTML = '<div class="muted">Loading...</div>';
     }
-
-    box.dataset.user = userId;
-    box.dataset.loaded = '0';
-    box.classList.add('active');
-    box.innerHTML = '<div class="muted">Loading...</div>';
-    const btn = $('btnRecentRedeems');
-    if (btn) btn.textContent = 'Hide Recent Redeems';
     try {
       const redeems = await fetchRedeemHistory(userId);
       lastRedeemEntry = redeems[0] || null;
@@ -166,8 +151,6 @@
         updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
       }
       renderRecentRedeemList(redeems);
-      box.dataset.loaded = '1';
-      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
       if (box) {
         box.innerHTML = '';
@@ -176,10 +159,6 @@
         msg.textContent = err?.message || 'Failed to load redeemed rewards.';
         box.appendChild(msg);
       }
-      delete box.dataset.loaded;
-      delete box.dataset.user;
-      const btn = $('btnRecentRedeems');
-      if (btn) btn.textContent = 'Recent Redeemed Rewards';
     }
   }
 
