@@ -397,6 +397,36 @@ setupScanner({
     });
   })();
 
+  function editReward(item) {
+    const nameInput = prompt('Reward name', item.name || '');
+    if (nameInput === null) return;
+    const name = nameInput.trim();
+    if (!name) {
+      toast('Reward name required', 'error');
+      return;
+    }
+
+    const costPrompt = prompt('Cost (points)', Number.isFinite(item.cost) ? String(item.cost) : '');
+    if (costPrompt === null) return;
+    const cost = Number(costPrompt.trim());
+    if (!Number.isFinite(cost) || cost < 0) {
+      toast('Cost must be a non-negative number', 'error');
+      return;
+    }
+
+    const imagePrompt = prompt('Image URL (optional)', item.imageUrl || '');
+    if (imagePrompt === null) return;
+    const imageUrl = imagePrompt.trim();
+
+    const descPrompt = prompt('Description (optional)', item.description || '');
+    if (descPrompt === null) return;
+    const description = descPrompt.trim();
+
+    const payload = { name, cost, description };
+    payload.imageUrl = imageUrl || null;
+    updateReward(item.id, payload);
+  }
+
   async function loadRewards() {
     const list = $('rewardsList');
     if (!list) return;
@@ -423,7 +453,8 @@ setupScanner({
         cost: Number.isFinite(Number(item.cost)) ? Number(item.cost) : Number(item.price || 0),
         description: item.description || '',
         imageUrl: item.imageUrl || item.image_url || '',
-        image_url: item.image_url || item.imageUrl || ''
+        image_url: item.image_url || item.imageUrl || '',
+        active: Number(item.active ?? 1) ? 1 : 0
       }));
       const filtered = normalized.filter(it => !filterValue || it.name.toLowerCase().includes(filterValue));
       const showUrls = document.getElementById('adminShowUrls')?.checked;
@@ -477,6 +508,14 @@ setupScanner({
           info.appendChild(desc);
         }
 
+        if (!item.active) {
+          const badge = document.createElement('div');
+          badge.className = 'muted';
+          badge.textContent = 'Inactive';
+          info.appendChild(badge);
+          card.style.opacity = '0.6';
+        }
+
         card.appendChild(info);
 
         if (showUrls && item.image_url){
@@ -492,10 +531,17 @@ setupScanner({
         actions.style.gap = '6px';
         actions.style.flex = '0 0 auto';
         actions.style.marginLeft = 'auto';
-        const deactivate = document.createElement('button');
-        deactivate.textContent = 'Deactivate';
-        deactivate.addEventListener('click', () => updateReward(item.id, { active: 0 }));
-        actions.appendChild(deactivate);
+
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => editReward(item));
+        actions.appendChild(editBtn);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.textContent = item.active ? 'Deactivate' : 'Activate';
+        toggleBtn.addEventListener('click', () => updateReward(item.id, { active: item.active ? 0 : 1 }));
+        actions.appendChild(toggleBtn);
+
         card.appendChild(actions);
 
         list.appendChild(card);
