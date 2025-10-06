@@ -131,39 +131,17 @@
     }
   }
 
-  function hideRecentRedeems() {
-    const box = $('recentRedeems');
-    if (!box) return;
-    box.classList.remove('active');
-    box.innerHTML = '';
-    delete box.dataset.loaded;
-    delete box.dataset.user;
-    const btn = $('btnRecentRedeems');
-    if (btn) btn.textContent = 'Recent Redeemed Rewards';
-  }
-
   async function showRecentRedeems() {
-    const box = $('recentRedeems');
-    if (!box) return;
-    if (box.classList.contains('active')) {
-      hideRecentRedeems();
-      return;
-    }
-
-    const btn = $('btnRecentRedeems');
-    if (btn) btn.textContent = 'Hide Recent Redeemed Rewards';
-
-    box.classList.add('active');
-
     const userId = getUserId();
     if (!userId) {
-      box.innerHTML = '<div class="muted">Enter your user ID above to load redeemed rewards.</div>';
+      alert('Enter user id');
       return;
     }
-
-    box.dataset.user = userId;
-    box.dataset.loaded = '0';
-    box.innerHTML = '<div class="muted">Loading...</div>';
+    const box = $('recentRedeems');
+    if (box) {
+      box.classList.add('active');
+      box.innerHTML = '<div class="muted">Loading...</div>';
+    }
     try {
       const redeems = await fetchRedeemHistory(userId);
       lastRedeemEntry = redeems[0] || null;
@@ -173,8 +151,6 @@
         updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
       }
       renderRecentRedeemList(redeems);
-      box.dataset.loaded = '1';
-      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } catch (err) {
       if (box) {
         box.innerHTML = '';
@@ -183,8 +159,6 @@
         msg.textContent = err?.message || 'Failed to load redeemed rewards.';
         box.appendChild(msg);
       }
-      delete box.dataset.loaded;
-      delete box.dataset.user;
     }
   }
 
