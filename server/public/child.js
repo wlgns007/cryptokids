@@ -2,8 +2,11 @@
   const $ = (id) => document.getElementById(id);
   const LS_FILTER = 'ck_child_filters';
   const RECENT_REDEEM_LIMIT = 50;
-  const RECENT_REDEEM_DISPLAY = 8;
+  const RECENT_REDEEM_DISPLAY = 5;
+  const FULL_REDEEM_LIMIT = 200;
   let lastRedeemEntry = null;
+  let recentRedeemsVisible = false;
+  let fullRedeemsVisible = false;
 
   function getUserId() {
     return $('childUserId').value.trim();
@@ -61,19 +64,58 @@
     }
   }
 
-  function renderRecentRedeemList(items) {
+  function updateRecentButton() {
+    const btn = $('btnRecentRedeems');
+    if (!btn) return;
+    btn.textContent = recentRedeemsVisible ? 'Hide Recent Redeemed' : 'Show Recent Redeemed';
+  }
+
+  function updateFullButton() {
+    const btn = $('btnFullRedeems');
+    if (!btn) return;
+    btn.textContent = fullRedeemsVisible ? 'Hide Full Redeemed History' : 'Show Full Redeemed History';
+  }
+
+  function setRecentVisible(visible) {
     const box = $('recentRedeems');
+    recentRedeemsVisible = visible;
+    if (box) {
+      box.classList.toggle('active', visible);
+      if (!visible) {
+        box.innerHTML = '';
+      }
+    }
+    updateRecentButton();
+  }
+
+  function setFullVisible(visible) {
+    const box = $('fullRedeems');
+    fullRedeemsVisible = visible;
+    if (box) {
+      box.classList.toggle('active', visible);
+      if (!visible) {
+        box.innerHTML = '';
+      } else {
+        box.scrollTop = 0;
+      }
+    }
+    updateFullButton();
+  }
+
+  function renderRedeemList(targetId, items, limit) {
+    const box = $(targetId);
     if (!box) return;
     box.innerHTML = '';
-    box.classList.add('active');
-    if (!Array.isArray(items) || !items.length) {
+    const list = Array.isArray(items) ? (typeof limit === 'number' ? items.slice(0, limit) : items.slice()) : [];
+    if (!list.length) {
       const empty = document.createElement('div');
       empty.className = 'muted';
       empty.textContent = 'No redeemed rewards yet.';
       box.appendChild(empty);
       return;
     }
-    items.slice(0, RECENT_REDEEM_DISPLAY).forEach((entry) => {
+    const frag = document.createDocumentFragment();
+    for (const entry of list) {
       const row = document.createElement('div');
       row.className = 'recent-row';
       const name = document.createElement('div');
@@ -92,8 +134,9 @@
       meta.textContent = parts.join(' • ');
       row.appendChild(name);
       row.appendChild(meta);
-      box.appendChild(row);
-    });
+      frag.appendChild(row);
+    }
+    box.appendChild(frag);
   }
 
   async function fetchRedeemHistory(userId, limit = RECENT_REDEEM_LIMIT) {
@@ -111,6 +154,8 @@
     if (!userId) {
       lastRedeemEntry = null;
       updateRedeemNotice(null, { fallbackText: 'Enter your user ID to see recent redeemed rewards.' });
+      setRecentVisible(false);
+      setFullVisible(false);
       return;
     }
     if (lastRedeemEntry) {
@@ -131,15 +176,15 @@
     }
   }
 
-  async function showRecentRedeems() {
+  async function loadRecentRedeems() {
     const userId = getUserId();
     if (!userId) {
       alert('Enter user id');
       return;
     }
     const box = $('recentRedeems');
+    setRecentVisible(true);
     if (box) {
-      box.classList.add('active');
       box.innerHTML = '<div class="muted">Loading...</div>';
     }
     try {
@@ -150,7 +195,7 @@
       } else {
         updateRedeemNotice(null, { fallbackText: 'No redeemed rewards yet.' });
       }
-      renderRecentRedeemList(redeems);
+      renderRedeemList('recentRedeems', redeems, RECENT_REDEEM_DISPLAY);
     } catch (err) {
       if (box) {
         box.innerHTML = '';
@@ -160,6 +205,47 @@
         box.appendChild(msg);
       }
     }
+  }
+
+  async function loadFullRedeems() {
+    const userId = getUserId();
+    if (!userId) {
+      alert('Enter user id');
+      return;
+    }
+    const box = $('fullRedeems');
+    setFullVisible(true);
+    if (box) {
+      box.innerHTML = '<div class="muted">Loading...</div>';
+    }
+    try {
+      const redeems = await fetchRedeemHistory(userId, FULL_REDEEM_LIMIT);
+      renderRedeemList('fullRedeems', redeems);
+    } catch (err) {
+      if (box) {
+        box.innerHTML = '';
+        const msg = document.createElement('div');
+        msg.className = 'muted';
+        msg.textContent = err?.message || 'Failed to load redeemed rewards.';
+        box.appendChild(msg);
+      }
+    }
+  }
+
+  async function toggleRecentRedeems() {
+    if (recentRedeemsVisible) {
+      setRecentVisible(false);
+      return;
+    }
+    await loadRecentRedeems();
+  }
+
+  async function toggleFullRedeems() {
+    if (fullRedeemsVisible) {
+      setFullVisible(false);
+      return;
+    }
+    await loadFullRedeems();
   }
 
   // ===== Balance & history =====
@@ -456,7 +542,10 @@
   }
 
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
-  $('btnRecentRedeems')?.addEventListener('click', showRecentRedeems);
+  $('btnRecentRedeems')?.addEventListener('click', toggleRecentRedeems);
+  $('btnFullRedeems')?.addEventListener('click', toggleFullRedeems);
+  updateRecentButton();
+  updateFullButton();
 
   async function loadRewards(){
     const list = $('shopList');
