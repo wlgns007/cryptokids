@@ -87,6 +87,10 @@
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
+  const memberListSection = $('memberListSection');
+  const memberRegisterFields = $('memberRegisterFields');
+  const memberRegisterToggle = $('toggleMemberRegister');
+  const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -125,6 +129,19 @@
     div.textContent = message;
     memberInfoDetails.appendChild(div);
   }
+
+  function setMemberRegisterExpanded(expanded) {
+    if (memberRegisterFields) memberRegisterFields.hidden = !expanded;
+    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = expanded ? '▲' : '▼';
+    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+
+  setMemberRegisterExpanded(false);
+
+  memberRegisterToggle?.addEventListener('click', () => {
+    const nextExpanded = memberRegisterFields ? memberRegisterFields.hidden : true;
+    setMemberRegisterExpanded(nextExpanded);
+  });
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
@@ -344,6 +361,13 @@
   async function loadMembersList() {
     if (!memberTableBody) return;
     const search = (memberSearchInput?.value || '').trim().toLowerCase();
+    if (!search) {
+      memberTableBody.innerHTML = '';
+      if (memberListStatus) memberListStatus.textContent = 'Search for a member to view results.';
+      if (memberListSection) memberListSection.hidden = true;
+      return;
+    }
+    if (memberListSection) memberListSection.hidden = false;
     memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
     if (memberListStatus) memberListStatus.textContent = '';
     try {
