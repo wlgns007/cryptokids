@@ -695,47 +695,54 @@
       </section>
 
       <section class="card" id="secEarnMenu">
-        <h2>Edit Earn Points Menu</h2>
-        <div class="row">
-          <button id="btnAddTemplate" class="primary">Add Template</button>
-          <button id="btnReloadTemplates">Reload</button>
-          <label style="flex:1;">Search
-            <input id="templateSearch" type="text" placeholder="search templates">
-          </label>
-        </div>
-        <div style="overflow:auto;">
-          <table class="table" id="earnTable">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Points</th>
-                <th>Description</th>
-                <th>YouTube</th>
-                <th>Active</th>
-                <th>Sort</th>
-                <th>Updated</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="scanner">
-          <h3 style="margin:0; font-size:16px;">Scan Earn QR</h3>
-          <button id="btnEarnCamera">Start Camera</button>
-          <video id="earnVideo" playsinline></video>
-          <canvas id="earnCanvas"></canvas>
-          <small class="muted" id="earnScanStatus"></small>
-        </div>
-        <div class="row" style="align-items:flex-end;">
-          <label style="flex:2;">Quick award template
-            <select id="quickTemplate"></select>
-          </label>
-          <label style="flex:1;">User ID
-            <input id="quickUser" type="text" placeholder="user id">
-          </label>
-          <button id="btnQuickAward">Quick award</button>
+        <div class="collapsible" id="earnMenuSection">
+          <button type="button" class="card-toggle" id="toggleEarnMenu" aria-controls="earnMenuFields" aria-expanded="false">
+            <span class="card-toggle-title">Edit Earn Points Menu</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="earnMenuFields" hidden>
+            <div class="row">
+              <button id="btnAddTemplate" class="primary">Add Template</button>
+              <button id="btnReloadTemplates">Reload</button>
+              <label style="flex:1;">Search
+                <input id="templateSearch" type="text" placeholder="search templates">
+              </label>
+            </div>
+            <div style="overflow:auto;">
+              <table class="table" id="earnTable">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Points</th>
+                    <th>Description</th>
+                    <th>YouTube</th>
+                    <th>Active</th>
+                    <th>Sort</th>
+                    <th>Updated</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="scanner">
+              <h3 style="margin:0; font-size:16px;">Scan Earn QR</h3>
+              <button id="btnEarnCamera">Start Camera</button>
+              <video id="earnVideo" playsinline></video>
+              <canvas id="earnCanvas"></canvas>
+              <small class="muted" id="earnScanStatus"></small>
+            </div>
+            <div class="row" style="align-items:flex-end;">
+              <label style="flex:2;">Quick award template
+                <select id="quickTemplate"></select>
+              </label>
+              <label style="flex:1;">User ID
+                <input id="quickUser" type="text" placeholder="user id">
+              </label>
+              <button id="btnQuickAward">Quick award</button>
+            </div>
+          </div>
         </div>
       </section>
     </main>
