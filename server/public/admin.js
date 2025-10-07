@@ -132,17 +132,13 @@
     const content = $(contentId);
     if (!button || !content) return;
     const arrow = button.querySelector('[data-arrow]');
-    let isExpanded = !!expanded;
     const setExpanded = (state) => {
-      isExpanded = !!state;
-      content.hidden = !isExpanded;
-      button.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-      if (arrow) arrow.textContent = isExpanded ? '▲' : '▼';
-      const container = button.closest('.collapsible');
-      if (container) container.dataset.expanded = isExpanded ? 'true' : 'false';
+      content.hidden = !state;
+      button.setAttribute('aria-expanded', state ? 'true' : 'false');
+      if (arrow) arrow.textContent = state ? '▲' : '▼';
     };
-    setExpanded(isExpanded);
-    button.addEventListener('click', () => setExpanded(!isExpanded));
+    setExpanded(expanded);
+    button.addEventListener('click', () => setExpanded(content.hidden));
   }
 
   setupCollapsibleToggle('toggleMemberRegister', 'memberRegisterFields');
@@ -151,7 +147,6 @@
   setupCollapsibleToggle('toggleHoldSection', 'holdSectionFields');
   setupCollapsibleToggle('toggleRewardsSection', 'rewardsSectionFields');
   setupCollapsibleToggle('toggleRegisterReward', 'registerRewardFields');
-  setupCollapsibleToggle('toggleEarnMenu', 'earnMenuFields');
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
