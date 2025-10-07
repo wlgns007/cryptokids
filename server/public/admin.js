@@ -363,8 +363,8 @@
     const search = (memberSearchInput?.value || '').trim().toLowerCase();
     if (!search) {
       memberTableBody.innerHTML = '';
-      if (memberListStatus) memberListStatus.textContent = 'Search for a member to view results.';
-      if (memberListSection) memberListSection.hidden = true;
+      if (memberListStatus) memberListStatus.textContent = 'Type in the search box to list members.';
+      if (memberListSection) memberListSection.hidden = false;
       return;
     }
     if (memberListSection) memberListSection.hidden = false;
