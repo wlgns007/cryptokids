@@ -736,6 +736,21 @@
         card.appendChild(spacer);
       }
 
+      const youtubeThumbUrl = getYouTubeThumbnail(item.youtube_url || item.youtubeUrl);
+      if (youtubeThumbUrl) {
+        const ytThumb = document.createElement('img');
+        ytThumb.className = 'youtube-thumb';
+        ytThumb.src = youtubeThumbUrl;
+        ytThumb.alt = 'YouTube preview';
+        ytThumb.loading = 'lazy';
+        ytThumb.width = 72;
+        ytThumb.height = 54;
+        ytThumb.title = 'Play video';
+        ytThumb.addEventListener('click', () => openYouTubeModal(item.youtube_url || item.youtubeUrl));
+        ytThumb.addEventListener('error', () => ytThumb.remove());
+        card.appendChild(ytThumb);
+      }
+
       const info = document.createElement('div');
       info.style.flex = '1 1 auto';
 
