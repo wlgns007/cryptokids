@@ -42,25 +42,35 @@
     document.body.appendChild(m);
   }
 
-  const sanitizeYouTubeId = (value) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '');
-
   function extractYouTubeId(u) {
-    if (!u) return '';
+    if (!u) return "";
     try {
-      const parsed = new URL(String(u).trim());
-      const host = parsed.hostname.toLowerCase();
-      if (host.includes('youtu.be')) {
-        return sanitizeYouTubeId(parsed.pathname.slice(1));
+      // Allow raw IDs
+      if (/^[\w-]{11}$/.test(u)) return u;
+
+      const x = new URL(u);
+      // youtu.be/<id>
+      if (x.hostname.includes("youtu.be")) {
+        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
       }
-      if (host.includes('youtube')) {
-        const queryId = parsed.searchParams.get('v');
-        if (queryId) return sanitizeYouTubeId(queryId);
-        const match = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/);
-        if (match) return sanitizeYouTubeId(match[1]);
-      }
-      return '';
+      // youtube.com/watch?v=<id>
+      const v = x.searchParams.get("v");
+      if (v) return v.split("&")[0];
+
+      // youtube.com/shorts/<id>
+      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+      if (mShorts) return mShorts[1];
+
+      // youtube.com/embed/<id>
+      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+      if (mEmbed) return mEmbed[1];
+
+      // Last resort: first 11-char token
+      const m = u.match(/([\w-]{11})/);
+      return m ? m[1] : "";
     } catch {
-      return sanitizeYouTubeId(typeof u === 'string' ? u : '');
+      const m = String(u).match(/([\w-]{11})/);
+      return m ? m[1] : "";
     }
   }
 
@@ -69,78 +79,58 @@
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  function openVideoModal(url) {
-    if (!url) return;
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
+  (function setupVideoModal() {
+    const modal = document.getElementById("videoModal");
+    const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
-    const id = extractYouTubeId(url);
-    if (!id) {
-      frame.src = '';
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
+
+    let fallbackTimer = null;
+
+    function buildEmbed(id, host) {
+      const h = host || "www.youtube-nocookie.com";
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
     }
-    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-    frame.src = embed;
-    modal.hidden = false;
-  }
 
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    frame.src = '';
-    modal.hidden = true;
-  }
+    window.openVideoModal = function (url) {
+      const id = extractYouTubeId(url);
+      if (!id) return window.open(url, "_blank", "noopener");
 
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
+      // try nocookie, fallback to regular if it doesn't load quickly
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      modal.hidden = false;
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
+      let loaded = false;
+      const onload = () => { loaded = true; cleanupListeners(); };
+      frame.addEventListener("load", onload, { once: true });
 
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
+      fallbackTimer = setTimeout(() => {
+        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
+      }, 1500);
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
+      function cleanupListeners() {
+        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      }
+    };
 
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    clearVideoListeners();
-    frame.onload = null;
-    frame.src = '';
-    modal.hidden = true;
-  }
+    window.closeVideoModal = function () {
+      // stop video + hide
+      frame.src = "";
+      modal.hidden = true;
+    };
 
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
+    // Close on backdrop or [data-close]
+    modal.addEventListener("click", (e) => {
+      if (e.target.matches("[data-close]") || e.target === modal.querySelector(".modal-backdrop")) {
+        e.preventDefault();
+        closeVideoModal();
+      }
+    });
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
+    // Close on Esc
+    window.addEventListener("keydown", (e) => {
+      if (!modal.hidden && e.key === "Escape") closeVideoModal();
+    });
+  })();
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
