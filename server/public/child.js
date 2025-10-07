@@ -376,6 +376,13 @@
           <span class="muted">Include</span>
         </div>
       `;
+      const videoLink = card.querySelector('.video');
+      if (videoLink) {
+        videoLink.addEventListener('click', (event) => {
+          event.preventDefault();
+          openYouTubeModal(videoLink.href);
+        });
+      }
       box.appendChild(card);
     }
     box.querySelectorAll('input[type="checkbox"]').forEach(chk => chk.addEventListener('change', updateEarnSummary));
@@ -547,6 +554,122 @@
     m.appendChild(big); document.body.appendChild(m);
   }
 
+  function extractYouTubeId(url) {
+    if (!url) return '';
+    let parsed;
+    try {
+      parsed = new URL(url.trim());
+    } catch (_err) {
+      return '';
+    }
+    const host = parsed.hostname.toLowerCase();
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let id = '';
+    if (host.includes('youtu.be')) {
+      id = segments[0] || '';
+    } else if (host.includes('youtube.com')) {
+      id = parsed.searchParams.get('v') || '';
+      if (!id && segments[0] === 'embed' && segments[1]) {
+        id = segments[1];
+      }
+      if (!id && segments[0] === 'shorts' && segments[1]) {
+        id = segments[1];
+      }
+    }
+    if (!id) return '';
+    id = id.replace(/[^a-zA-Z0-9_-]/g, '');
+    return id;
+  }
+
+  function getYouTubeEmbedUrl(url) {
+    const id = extractYouTubeId(url);
+    return id ? `https://www.youtube.com/embed/${id}?autoplay=1` : '';
+  }
+
+  function openYouTubeModal(url) {
+    if (!url) return;
+    const embedUrl = getYouTubeEmbedUrl(url);
+    if (!embedUrl) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    document.querySelectorAll('[data-youtube-modal]').forEach(el => el.remove());
+    const overlay = document.createElement('div');
+    overlay.dataset.youtubeModal = 'true';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.8)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: '24px',
+      zIndex: 10000
+    });
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    const frameWrap = document.createElement('div');
+    Object.assign(frameWrap.style, {
+      position: 'relative',
+      width: 'min(90vw, 960px)',
+      maxWidth: '960px',
+      aspectRatio: '16 / 9',
+      background: '#000',
+      borderRadius: '12px',
+      overflow: 'hidden',
+      boxShadow: '0 24px 60px rgba(0,0,0,0.45)'
+    });
+
+    const iframe = document.createElement('iframe');
+    iframe.src = embedUrl;
+    iframe.title = 'YouTube video player';
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+    iframe.allowFullscreen = true;
+    Object.assign(iframe.style, {
+      width: '100%',
+      height: '100%',
+      border: '0'
+    });
+    frameWrap.appendChild(iframe);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close video');
+    closeBtn.textContent = '×';
+    Object.assign(closeBtn.style, {
+      position: 'absolute',
+      top: '8px',
+      right: '8px',
+      width: '32px',
+      height: '32px',
+      borderRadius: '999px',
+      border: 'none',
+      background: 'rgba(0,0,0,0.65)',
+      color: '#fff',
+      fontSize: '24px',
+      lineHeight: '28px',
+      cursor: 'pointer'
+    });
+    closeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      close();
+    });
+    frameWrap.appendChild(closeBtn);
+
+    overlay.appendChild(frameWrap);
+    document.body.appendChild(overlay);
+  }
+
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
   $('btnRecentRedeems')?.addEventListener('click', toggleRecentRedeems);
   $('btnFullRedeems')?.addEventListener('click', toggleFullRedeems);
@@ -578,6 +701,8 @@
       cost: Number.isFinite(Number(item.cost ?? item.price)) ? Number(item.cost ?? item.price) : 0,
       description: item.description || '',
       image_url: item.image_url || item.imageUrl || '',
+      youtube_url: item.youtube_url || item.youtubeUrl || '',
+      youtubeUrl: item.youtubeUrl || item.youtube_url || '',
     }));
     if (!normalized.length){
       $('shopEmpty').style.display = 'block';

@@ -42,6 +42,127 @@
     document.body.appendChild(m);
   }
 
+  function extractYouTubeId(url) {
+    if (!url) return '';
+    let parsed;
+    try {
+      parsed = new URL(url.trim());
+    } catch (_err) {
+      return '';
+    }
+    const host = parsed.hostname.toLowerCase();
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let id = '';
+    if (host.includes('youtu.be')) {
+      id = segments[0] || '';
+    } else if (host.includes('youtube.com')) {
+      id = parsed.searchParams.get('v') || '';
+      if (!id && segments[0] === 'embed' && segments[1]) {
+        id = segments[1];
+      }
+      if (!id && segments[0] === 'shorts' && segments[1]) {
+        id = segments[1];
+      }
+    }
+    if (!id) return '';
+    id = id.replace(/[^a-zA-Z0-9_-]/g, '');
+    return id;
+  }
+
+  function getYouTubeThumbnail(url) {
+    const id = extractYouTubeId(url);
+    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+  }
+
+  function getYouTubeEmbedUrl(url) {
+    const id = extractYouTubeId(url);
+    return id ? `https://www.youtube.com/embed/${id}?autoplay=1` : '';
+  }
+
+  function openYouTubeModal(url) {
+    if (!url) return;
+    const embedUrl = getYouTubeEmbedUrl(url);
+    if (!embedUrl) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    document.querySelectorAll('[data-youtube-modal]').forEach(el => el.remove());
+    const overlay = document.createElement('div');
+    overlay.dataset.youtubeModal = 'true';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.8)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: '24px',
+      zIndex: 10000
+    });
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    const frameWrap = document.createElement('div');
+    Object.assign(frameWrap.style, {
+      position: 'relative',
+      width: 'min(90vw, 960px)',
+      maxWidth: '960px',
+      aspectRatio: '16 / 9',
+      background: '#000',
+      borderRadius: '12px',
+      overflow: 'hidden',
+      boxShadow: '0 24px 60px rgba(0,0,0,0.45)'
+    });
+
+    const iframe = document.createElement('iframe');
+    iframe.src = embedUrl;
+    iframe.title = 'YouTube video player';
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+    iframe.allowFullscreen = true;
+    Object.assign(iframe.style, {
+      width: '100%',
+      height: '100%',
+      border: '0'
+    });
+    frameWrap.appendChild(iframe);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close video');
+    closeBtn.textContent = '×';
+    Object.assign(closeBtn.style, {
+      position: 'absolute',
+      top: '8px',
+      right: '8px',
+      width: '32px',
+      height: '32px',
+      borderRadius: '999px',
+      border: 'none',
+      background: 'rgba(0,0,0,0.65)',
+      color: '#fff',
+      fontSize: '24px',
+      lineHeight: '28px',
+      cursor: 'pointer'
+    });
+    closeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      close();
+    });
+    frameWrap.appendChild(closeBtn);
+
+    overlay.appendChild(frameWrap);
+    document.body.appendChild(overlay);
+  }
+
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
     return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
@@ -774,6 +895,32 @@ setupScanner({
   function applyUrlToggle(show) {
     document.body.classList.toggle('hide-urls', !show);
   }
+
+  function appendMediaUrl(container, label, url) {
+    if (!container || !url) return;
+    const row = document.createElement('div');
+    row.className = 'muted mono media-url';
+    row.style.flex = '1 1 100%';
+    row.style.minWidth = '0';
+    row.style.display = 'flex';
+    row.style.alignItems = 'baseline';
+    row.style.gap = '4px';
+    const strong = document.createElement('strong');
+    strong.textContent = `${label}:`;
+    row.appendChild(strong);
+    const value = document.createElement('span');
+    value.textContent = url;
+    value.style.flex = '1';
+    value.style.minWidth = '0';
+    value.style.wordBreak = 'break-all';
+    if (label && label.toLowerCase() === 'youtube') {
+      value.style.cursor = 'pointer';
+      value.style.textDecoration = 'underline';
+      value.addEventListener('click', () => openYouTubeModal(url));
+    }
+    row.appendChild(value);
+    container.appendChild(row);
+  }
   const SHOW_URLS_KEY = 'ck_show_urls';
   (function initToggle() {
     const toggle = $('adminShowUrls');
@@ -810,12 +957,17 @@ setupScanner({
     if (imagePrompt === null) return;
     const imageUrl = imagePrompt.trim();
 
+    const youtubePrompt = prompt('YouTube URL (optional)', item.youtubeUrl || '');
+    if (youtubePrompt === null) return;
+    const youtubeUrl = youtubePrompt.trim();
+
     const descPrompt = prompt('Description (optional)', item.description || '');
     if (descPrompt === null) return;
     const description = descPrompt.trim();
 
     const payload = { name, cost, description };
     payload.imageUrl = imageUrl || null;
+    payload.youtubeUrl = youtubeUrl || null;
     updateReward(item.id, payload);
   }
 
@@ -846,6 +998,8 @@ setupScanner({
         description: item.description || '',
         imageUrl: item.imageUrl || item.image_url || '',
         image_url: item.image_url || item.imageUrl || '',
+        youtubeUrl: item.youtubeUrl || item.youtube_url || '',
+        youtube_url: item.youtube_url || item.youtubeUrl || '',
         active: Number(item.active ?? 1) ? 1 : 0
       }));
       const filtered = normalized.filter(it => !filterValue || it.name.toLowerCase().includes(filterValue));
@@ -881,6 +1035,30 @@ setupScanner({
           card.appendChild(spacer);
         }
 
+        const youtubeThumbUrl = getYouTubeThumbnail(item.youtubeUrl);
+        if (youtubeThumbUrl) {
+          const ytThumb = document.createElement('img');
+          ytThumb.src = youtubeThumbUrl;
+          ytThumb.alt = 'YouTube preview';
+          ytThumb.loading = 'lazy';
+          ytThumb.width = 72;
+          ytThumb.height = 54;
+          ytThumb.style.objectFit = 'cover';
+          ytThumb.style.aspectRatio = '4 / 3';
+          ytThumb.style.borderRadius = '8px';
+          ytThumb.style.flex = '0 0 auto';
+          ytThumb.style.cursor = 'pointer';
+          ytThumb.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+          ytThumb.title = 'Open YouTube video';
+          ytThumb.addEventListener('click', () => {
+            if (item.youtubeUrl) {
+              openYouTubeModal(item.youtubeUrl);
+            }
+          });
+          ytThumb.addEventListener('error', () => ytThumb.remove());
+          card.appendChild(ytThumb);
+        }
+
         const info = document.createElement('div');
         info.style.flex = '1 1 auto';
         const title = document.createElement('div');
@@ -910,11 +1088,9 @@ setupScanner({
 
         card.appendChild(info);
 
-        if (showUrls && item.image_url){
-          const div = document.createElement('div');
-          div.className = 'muted mono';
-          div.textContent = item.image_url;
-          card.appendChild(div);
+        if (showUrls){
+          if (item.imageUrl) appendMediaUrl(card, 'Image', item.imageUrl);
+          if (item.youtubeUrl) appendMediaUrl(card, 'YouTube', item.youtubeUrl);
         }
 
         const actions = document.createElement('div');
@@ -972,18 +1148,20 @@ setupScanner({
     const nameEl = document.getElementById('rewardName');
     const costEl = document.getElementById('rewardCost');
     const imageEl = document.getElementById('rewardImage');
+    const youtubeEl = document.getElementById('rewardYoutube');
     const descEl = document.getElementById('rewardDesc');
 
     const name = nameEl?.value?.trim() || '';
     const cost = Number(costEl?.value || NaN);
     const imageUrl = imageEl?.value?.trim() || null;
+    const youtubeUrl = youtubeEl?.value?.trim() || null;
     const description = descEl?.value?.trim() || '';
     if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
     const { res, body } = await adminFetch('/api/rewards', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, cost, imageUrl, description }),
+      body: JSON.stringify({ name, cost, imageUrl, youtubeUrl, description }),
     });
 
     if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
@@ -993,6 +1171,7 @@ setupScanner({
     if (nameEl) nameEl.value = '';
     if (costEl) costEl.value = '1';
     if (imageEl) imageEl.value = '';
+    if (youtubeEl) youtubeEl.value = '';
     if (descEl) descEl.value = '';
     loadRewards?.(); // refresh the list if available
   });
@@ -1092,6 +1271,13 @@ setupScanner({
         <td>${formatTime(tpl.updated_at * 1000)}</td>
         <td class="actions"></td>
       `;
+      const videoLink = tr.querySelector('a[href]');
+      if (videoLink) {
+        videoLink.addEventListener('click', (event) => {
+          event.preventDefault();
+          openYouTubeModal(videoLink.href);
+        });
+      }
       const actions = tr.querySelector('.actions');
       const editBtn = document.createElement('button');
       editBtn.textContent = 'Edit';
@@ -1125,6 +1311,13 @@ setupScanner({
         <td>${formatTime(tpl.updated_at * 1000)}</td>
         <td class="actions"></td>
       `;
+      const videoLink = tr.querySelector('a[href]');
+      if (videoLink) {
+        videoLink.addEventListener('click', (event) => {
+          event.preventDefault();
+          openYouTubeModal(videoLink.href);
+        });
+      }
       const actions = tr.querySelector('.actions');
       if (actions) {
         const reactivateBtn = document.createElement('button');

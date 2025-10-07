@@ -221,6 +221,15 @@
       font-size: 13px;
     }
 
+    .reward-card .media-url {
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .reward-card .media-url strong {
+      font-weight: 600;
+    }
+
     .mono {
       font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
       word-break: break-all;
@@ -657,7 +666,7 @@
               </label>
               <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
                 <input type="checkbox" id="adminShowUrls">
-                <span>Show image URLs</span>
+                <span>Show URLs</span>
               </label>
             </div>
             <div id="rewardsList" class="stack"></div>
@@ -682,6 +691,9 @@
               </label>
               <label>Image URL (optional)
                 <input id="rewardImage" type="text" placeholder="https://...">
+              </label>
+              <label>YouTube URL (optional)
+                <input id="rewardYoutube" type="text" placeholder="https://www.youtube.com/watch?v=...">
               </label>
             </div>
             <label>Description
