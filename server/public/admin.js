@@ -88,9 +88,6 @@
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
   const memberListSection = $('memberListSection');
-  const memberRegisterFields = $('memberRegisterFields');
-  const memberRegisterToggle = $('toggleMemberRegister');
-  const memberRegisterToggleArrow = $('memberRegisterToggleArrow');
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -130,18 +127,27 @@
     memberInfoDetails.appendChild(div);
   }
 
-  function setMemberRegisterExpanded(expanded) {
-    if (memberRegisterFields) memberRegisterFields.hidden = !expanded;
-    if (memberRegisterToggleArrow) memberRegisterToggleArrow.textContent = expanded ? '▲' : '▼';
-    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  function setupCollapsibleToggle(buttonId, contentId, { expanded = false } = {}) {
+    const button = $(buttonId);
+    const content = $(contentId);
+    if (!button || !content) return;
+    const arrow = button.querySelector('[data-arrow]');
+    const setExpanded = (state) => {
+      content.hidden = !state;
+      button.setAttribute('aria-expanded', state ? 'true' : 'false');
+      if (arrow) arrow.textContent = state ? '▲' : '▼';
+    };
+    setExpanded(expanded);
+    button.addEventListener('click', () => setExpanded(content.hidden));
   }
 
-  setMemberRegisterExpanded(false);
-
-  memberRegisterToggle?.addEventListener('click', () => {
-    const nextExpanded = memberRegisterFields ? memberRegisterFields.hidden : true;
-    setMemberRegisterExpanded(nextExpanded);
-  });
+  setupCollapsibleToggle('toggleMemberRegister', 'memberRegisterFields');
+  setupCollapsibleToggle('toggleMemberList', 'memberListSection');
+  setupCollapsibleToggle('toggleIssueSection', 'issueSectionFields');
+  setupCollapsibleToggle('toggleHoldSection', 'holdSectionFields');
+  setupCollapsibleToggle('toggleRewardsSection', 'rewardsSectionFields');
+  setupCollapsibleToggle('toggleRegisterReward', 'registerRewardFields');
+  setupCollapsibleToggle('toggleEarnMenu', 'earnMenuFields');
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
