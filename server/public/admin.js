@@ -896,6 +896,34 @@ setupScanner({
     document.body.classList.toggle('hide-urls', !show);
   }
 
+  function getYouTubeThumbnail(url) {
+    if (!url) return '';
+    let parsed;
+    try {
+      parsed = new URL(url.trim());
+    } catch (_err) {
+      return '';
+    }
+    const host = parsed.hostname.toLowerCase();
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let id = '';
+    if (host.includes('youtu.be')) {
+      id = segments[0] || '';
+    } else if (host.includes('youtube.com')) {
+      id = parsed.searchParams.get('v') || '';
+      if (!id && segments[0] === 'embed' && segments[1]) {
+        id = segments[1];
+      }
+      if (!id && segments[0] === 'shorts' && segments[1]) {
+        id = segments[1];
+      }
+    }
+    if (!id) return '';
+    id = id.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!id) return '';
+    return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+  }
+
   function appendMediaUrl(container, label, url) {
     if (!container || !url) return;
     const row = document.createElement('div');
@@ -913,11 +941,6 @@ setupScanner({
     value.style.flex = '1';
     value.style.minWidth = '0';
     value.style.wordBreak = 'break-all';
-    if (label && label.toLowerCase() === 'youtube') {
-      value.style.cursor = 'pointer';
-      value.style.textDecoration = 'underline';
-      value.addEventListener('click', () => openYouTubeModal(url));
-    }
     row.appendChild(value);
     container.appendChild(row);
   }
@@ -1052,7 +1075,7 @@ setupScanner({
           ytThumb.title = 'Open YouTube video';
           ytThumb.addEventListener('click', () => {
             if (item.youtubeUrl) {
-              openYouTubeModal(item.youtubeUrl);
+              window.open(item.youtubeUrl, '_blank', 'noopener,noreferrer');
             }
           });
           ytThumb.addEventListener('error', () => ytThumb.remove());
