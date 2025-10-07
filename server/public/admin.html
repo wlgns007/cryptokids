@@ -330,7 +330,8 @@
       display: none;
     }
 
-    #historyModal {
+    #historyModal,
+    #inactiveTemplatesModal {
       position: fixed;
       inset: 0;
       background: rgba(15, 23, 42, 0.45);
@@ -341,11 +342,13 @@
       z-index: 1000;
     }
 
-    #historyModal.open {
+    #historyModal.open,
+    #inactiveTemplatesModal.open {
       display: flex;
     }
 
-    #historyModal .panel {
+    #historyModal .panel,
+    #inactiveTemplatesModal .panel {
       background: var(--card);
       border-radius: 18px;
       width: min(920px, 100%);
@@ -355,7 +358,8 @@
       overflow: hidden;
     }
 
-    #historyModal header {
+    #historyModal header,
+    #inactiveTemplatesModal header {
       padding: 18px 24px;
       display: flex;
       align-items: center;
@@ -364,11 +368,13 @@
       border-bottom: 1px solid var(--line);
     }
 
-    #historyModal header h3 {
+    #historyModal header h3,
+    #inactiveTemplatesModal header h3 {
       margin: 0;
     }
 
-    #historyModal .body {
+    #historyModal .body,
+    #inactiveTemplatesModal .body {
       padding: 16px 24px 24px;
       display: grid;
       gap: 16px;
@@ -704,6 +710,7 @@
             <div class="row">
               <button id="btnAddTemplate" class="primary">Add Template</button>
               <button id="btnReloadTemplates">Reload</button>
+              <button id="btnShowInactiveTemplates">View Deactivated</button>
               <label style="flex:1;">Search
                 <input id="templateSearch" type="text" placeholder="search templates">
               </label>
@@ -746,6 +753,34 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="inactiveTemplatesModal" aria-hidden="true">
+    <div class="panel">
+      <header>
+        <h3>Deactivated Templates</h3>
+        <button id="btnInactiveTemplatesClose">Close</button>
+      </header>
+      <div class="body">
+        <p class="muted" id="inactiveTemplatesEmpty" hidden>No deactivated templates.</p>
+        <div style="overflow:auto; max-height:60vh;">
+          <table class="table" id="inactiveTemplatesTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Points</th>
+                <th>Description</th>
+                <th>Sort</th>
+                <th>Updated</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="historyModal">

@@ -1048,6 +1048,9 @@ setupScanner({
 
   // ===== Earn templates =====
   const earnTableBody = $('earnTable')?.querySelector('tbody');
+  const inactiveModal = $('inactiveTemplatesModal');
+  const inactiveTableBody = $('inactiveTemplatesTable')?.querySelector('tbody');
+  const inactiveEmpty = $('inactiveTemplatesEmpty');
   let earnTemplates = [];
 
   async function loadTemplates() {
@@ -1062,6 +1065,7 @@ setupScanner({
       earnTemplates = data;
       renderTemplates();
       populateQuickTemplates();
+      renderInactiveTemplates();
     } catch (err) {
       toast(err.message || 'Load templates failed', 'error');
     }
@@ -1103,6 +1107,61 @@ setupScanner({
     }
   }
   $('templateSearch')?.addEventListener('input', renderTemplates);
+
+  function renderInactiveTemplates() {
+    if (!inactiveTableBody) return;
+    const rows = earnTemplates.filter(t => !t.active);
+    inactiveTableBody.innerHTML = '';
+    if (inactiveEmpty) inactiveEmpty.hidden = rows.length !== 0;
+    if (!rows.length) return;
+    for (const tpl of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${tpl.id}</td>
+        <td>${tpl.title}</td>
+        <td>${tpl.points}</td>
+        <td>${tpl.description || ''}</td>
+        <td>${tpl.sort_order}</td>
+        <td>${formatTime(tpl.updated_at * 1000)}</td>
+        <td class="actions"></td>
+      `;
+      const actions = tr.querySelector('.actions');
+      if (actions) {
+        const reactivateBtn = document.createElement('button');
+        reactivateBtn.textContent = 'Reactivate';
+        reactivateBtn.addEventListener('click', async () => {
+          await updateTemplate(tpl.id, { active: 1 });
+          renderInactiveTemplates();
+        });
+        actions.appendChild(reactivateBtn);
+      }
+      inactiveTableBody.appendChild(tr);
+    }
+  }
+
+  function openInactiveTemplatesModal() {
+    if (!inactiveModal) return;
+    renderInactiveTemplates();
+    inactiveModal.classList.add('open');
+    inactiveModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeInactiveTemplatesModal() {
+    if (!inactiveModal) return;
+    inactiveModal.classList.remove('open');
+    inactiveModal.setAttribute('aria-hidden', 'true');
+  }
+
+  $('btnShowInactiveTemplates')?.addEventListener('click', openInactiveTemplatesModal);
+  $('btnInactiveTemplatesClose')?.addEventListener('click', closeInactiveTemplatesModal);
+  inactiveModal?.addEventListener('click', (event) => {
+    if (event.target === inactiveModal) closeInactiveTemplatesModal();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && inactiveModal?.classList.contains('open')) {
+      closeInactiveTemplatesModal();
+    }
+  });
 
   async function addTemplate() {
     const title = prompt('Template title');
@@ -1163,12 +1222,13 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
+      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (respBody && respBody.error) || (typeof respBody === 'string' ? respBody : 'update failed');
         throw new Error(msg);
       }
       toast('Template saved');
-      loadTemplates();
+      await loadTemplates();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
     }
