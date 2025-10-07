@@ -8,6 +8,105 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
+  const sanitizeYouTubeId = (value) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '');
+
+  function extractYouTubeId(u) {
+    if (!u) return '';
+    try {
+      const parsed = new URL(String(u).trim());
+      const host = parsed.hostname.toLowerCase();
+      if (host.includes('youtu.be')) {
+        return sanitizeYouTubeId(parsed.pathname.slice(1));
+      }
+      if (host.includes('youtube')) {
+        const queryId = parsed.searchParams.get('v');
+        if (queryId) return sanitizeYouTubeId(queryId);
+        const match = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/);
+        if (match) return sanitizeYouTubeId(match[1]);
+      }
+      return '';
+    } catch {
+      return sanitizeYouTubeId(typeof u === 'string' ? u : '');
+    }
+  }
+
+  function getYouTubeThumbnail(url) {
+    const id = extractYouTubeId(url);
+    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+  }
+
+  function openVideoModal(url) {
+    if (!url) return;
+    const modal = document.getElementById('videoModal');
+    const frame = document.getElementById('videoFrame');
+    if (!modal || !frame) return;
+
+    const id = extractYouTubeId(url);
+    if (!id) {
+      frame.src = '';
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    const nocookie = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    const regular = `https://www.youtube.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+
+    if (frame.dataset.fallbackTimer) {
+      clearTimeout(Number(frame.dataset.fallbackTimer));
+      delete frame.dataset.fallbackTimer;
+    }
+
+    let loaded = false;
+    frame.onload = () => {
+      loaded = true;
+      if (frame.dataset.fallbackTimer) {
+        clearTimeout(Number(frame.dataset.fallbackTimer));
+        delete frame.dataset.fallbackTimer;
+      }
+    };
+
+    frame.src = nocookie;
+    modal.hidden = false;
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (!loaded && frame.src === nocookie) {
+        frame.src = regular;
+      }
+      if (frame.dataset.fallbackTimer) {
+        clearTimeout(Number(frame.dataset.fallbackTimer));
+        delete frame.dataset.fallbackTimer;
+      }
+    }, 1500);
+
+    frame.dataset.fallbackTimer = String(fallbackTimer);
+  }
+
+  function closeVideoModal() {
+    const modal = document.getElementById('videoModal');
+    const frame = document.getElementById('videoFrame');
+    if (!modal || !frame) return;
+    if (frame.dataset.fallbackTimer) {
+      clearTimeout(Number(frame.dataset.fallbackTimer));
+      delete frame.dataset.fallbackTimer;
+    }
+    frame.onload = null;
+    frame.src = '';
+    modal.hidden = true;
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-close]')) {
+      event.preventDefault();
+      closeVideoModal();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeVideoModal();
+    }
+  });
+
   function getUserId() {
     return $('childUserId').value.trim();
   }
@@ -370,18 +469,26 @@
           <span>+${tpl.points}</span>
         </header>
         <div class="desc">${tpl.description || ''}</div>
-        ${tpl.youtube_url ? `<a class="video" target="_blank" href="${tpl.youtube_url}">Watch video</a>` : ''}
+        <div class="video-slot"></div>
         <div style="display:flex; align-items:center; gap:8px;">
           <input type="checkbox" data-id="${tpl.id}" data-points="${tpl.points}">
           <span class="muted">Include</span>
         </div>
       `;
-      const videoLink = card.querySelector('.video');
-      if (videoLink) {
-        videoLink.addEventListener('click', (event) => {
+      const videoSlot = card.querySelector('.video-slot');
+      if (videoSlot && tpl.youtube_url) {
+        const watchBtn = document.createElement('button');
+        watchBtn.type = 'button';
+        watchBtn.className = 'btn btn-sm';
+        watchBtn.textContent = 'Watch clip';
+        watchBtn.addEventListener('click', (event) => {
           event.preventDefault();
-          openYouTubeModal(videoLink.href);
+          event.stopPropagation();
+          openVideoModal(tpl.youtube_url);
         });
+        videoSlot.appendChild(watchBtn);
+      } else if (videoSlot) {
+        videoSlot.remove();
       }
       box.appendChild(card);
     }
@@ -554,122 +661,6 @@
     m.appendChild(big); document.body.appendChild(m);
   }
 
-  function extractYouTubeId(url) {
-    if (!url) return '';
-    let parsed;
-    try {
-      parsed = new URL(url.trim());
-    } catch (_err) {
-      return '';
-    }
-    const host = parsed.hostname.toLowerCase();
-    const segments = parsed.pathname.split('/').filter(Boolean);
-    let id = '';
-    if (host.includes('youtu.be')) {
-      id = segments[0] || '';
-    } else if (host.includes('youtube.com')) {
-      id = parsed.searchParams.get('v') || '';
-      if (!id && segments[0] === 'embed' && segments[1]) {
-        id = segments[1];
-      }
-      if (!id && segments[0] === 'shorts' && segments[1]) {
-        id = segments[1];
-      }
-    }
-    if (!id) return '';
-    id = id.replace(/[^a-zA-Z0-9_-]/g, '');
-    return id;
-  }
-
-  function getYouTubeEmbedUrl(url) {
-    const id = extractYouTubeId(url);
-    return id ? `https://www.youtube.com/embed/${id}?autoplay=1` : '';
-  }
-
-  function openYouTubeModal(url) {
-    if (!url) return;
-    const embedUrl = getYouTubeEmbedUrl(url);
-    if (!embedUrl) {
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    document.querySelectorAll('[data-youtube-modal]').forEach(el => el.remove());
-    const overlay = document.createElement('div');
-    overlay.dataset.youtubeModal = 'true';
-    Object.assign(overlay.style, {
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0,0,0,0.8)',
-      display: 'grid',
-      placeItems: 'center',
-      padding: '24px',
-      zIndex: 10000
-    });
-
-    const close = () => {
-      overlay.remove();
-      document.removeEventListener('keydown', onKeyDown);
-    };
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') close();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) close();
-    });
-
-    const frameWrap = document.createElement('div');
-    Object.assign(frameWrap.style, {
-      position: 'relative',
-      width: 'min(90vw, 960px)',
-      maxWidth: '960px',
-      aspectRatio: '16 / 9',
-      background: '#000',
-      borderRadius: '12px',
-      overflow: 'hidden',
-      boxShadow: '0 24px 60px rgba(0,0,0,0.45)'
-    });
-
-    const iframe = document.createElement('iframe');
-    iframe.src = embedUrl;
-    iframe.title = 'YouTube video player';
-    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-    iframe.allowFullscreen = true;
-    Object.assign(iframe.style, {
-      width: '100%',
-      height: '100%',
-      border: '0'
-    });
-    frameWrap.appendChild(iframe);
-
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.setAttribute('aria-label', 'Close video');
-    closeBtn.textContent = '×';
-    Object.assign(closeBtn.style, {
-      position: 'absolute',
-      top: '8px',
-      right: '8px',
-      width: '32px',
-      height: '32px',
-      borderRadius: '999px',
-      border: 'none',
-      background: 'rgba(0,0,0,0.65)',
-      color: '#fff',
-      fontSize: '24px',
-      lineHeight: '28px',
-      cursor: 'pointer'
-    });
-    closeBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      close();
-    });
-    frameWrap.appendChild(closeBtn);
-
-    overlay.appendChild(frameWrap);
-    document.body.appendChild(overlay);
-  }
-
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
   $('btnRecentRedeems')?.addEventListener('click', toggleRecentRedeems);
   $('btnFullRedeems')?.addEventListener('click', toggleFullRedeems);
@@ -736,7 +727,8 @@
         card.appendChild(spacer);
       }
 
-      const youtubeThumbUrl = getYouTubeThumbnail(item.youtube_url || item.youtubeUrl);
+      const youtubeUrl = item.youtube_url || item.youtubeUrl;
+      const youtubeThumbUrl = getYouTubeThumbnail(youtubeUrl);
       if (youtubeThumbUrl) {
         const ytThumb = document.createElement('img');
         ytThumb.className = 'youtube-thumb';
@@ -746,7 +738,7 @@
         ytThumb.width = 72;
         ytThumb.height = 54;
         ytThumb.title = 'Play video';
-        ytThumb.addEventListener('click', () => openYouTubeModal(item.youtube_url || item.youtubeUrl));
+        ytThumb.addEventListener('click', () => openVideoModal(youtubeUrl));
         ytThumb.addEventListener('error', () => ytThumb.remove());
         card.appendChild(ytThumb);
       }
@@ -772,12 +764,29 @@
 
       card.appendChild(info);
 
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.flexDirection = 'column';
+      actions.style.gap = '6px';
+      actions.style.marginLeft = 'auto';
+      actions.style.flex = '0 0 auto';
+
+      if (youtubeUrl) {
+        const watchBtn = document.createElement('button');
+        watchBtn.type = 'button';
+        watchBtn.className = 'btn btn-sm';
+        watchBtn.textContent = 'Watch clip';
+        watchBtn.addEventListener('click', () => openVideoModal(youtubeUrl));
+        actions.appendChild(watchBtn);
+      }
+
       const btn = document.createElement('button');
       btn.textContent = 'Redeem';
-      btn.style.marginLeft = 'auto';
       btn.style.flex = '0 0 auto';
       btn.addEventListener('click', () => createHold(item));
-      card.appendChild(btn);
+      actions.appendChild(btn);
+
+      card.appendChild(actions);
 
       list.appendChild(card);
     });
