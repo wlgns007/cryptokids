@@ -195,45 +195,23 @@
       gap: 12px;
     }
 
-    details.collapsible {
-      gap: 0;
-    }
-
-    details.collapsible summary {
-      list-style: none;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font-size: 20px;
-      font-weight: 600;
-      padding: 4px 0;
-      cursor: pointer;
-    }
-
-    details.collapsible summary::-webkit-details-marker {
-      display: none;
-    }
-
-    details.collapsible summary::after {
-      content: '▾';
-      font-size: 18px;
-      line-height: 1;
-    }
-
-    details.collapsible[open] summary::after {
-      content: '▴';
-    }
-
-    details.collapsible .collapsible-content {
-      margin-top: 12px;
-      padding-top: 16px;
-      border-top: 1px solid var(--line);
-      display: grid;
+    .collapsible {
       gap: 12px;
     }
 
-    details.collapsible:not([open]) .collapsible-content {
+    .collapsible-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .collapsible[data-expanded="false"] .collapsible-content {
       display: none;
     }
 
@@ -476,14 +454,12 @@
           </div>
           <small class="muted" id="memberStatus"></small>
         </div>
-      </section>
-
-      <section class="card" id="secRegisterMember">
-        <details class="stack collapsible" id="memberRegisterContainer">
-          <summary class="collapsible-toggle" id="toggleMemberRegister">
-            Register New Member
-          </summary>
-          <div class="stack collapsible-content" id="memberRegisterFields" aria-hidden="true">
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberRegisterContainer">
+          <button type="button" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false" style="display:flex; align-items:center; gap:8px; background:none; border:none; padding:0; font:inherit; font-size:18px; cursor:pointer;">
+            <span>Register New Member</span>
+            <span aria-hidden="true" id="memberRegisterToggleArrow">▼</span>
+          </button>
+          <div class="stack" id="memberRegisterFields" hidden>
             <div class="row">
               <label>User ID
                 <input id="memberRegisterId" type="text" placeholder="unique id">
@@ -508,11 +484,8 @@
               <button id="btnMemberRegister" class="primary">Register Member</button>
             </div>
           </div>
-        </details>
-      </section>
-
-      <section class="card" id="secMemberList" hidden>
-        <div class="stack" id="memberListSection" hidden>
+        </div>
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberListSection" hidden>
           <div class="flex-between" style="flex-wrap:wrap; gap:12px;">
             <h2 style="margin:0; font-size:20px;">Existing Members</h2>
             <div class="row compact" style="gap:10px; flex-wrap:wrap;">
