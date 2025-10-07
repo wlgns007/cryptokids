@@ -586,11 +586,6 @@
     return id ? `https://www.youtube.com/embed/${id}?autoplay=1` : '';
   }
 
-  function getYouTubeThumbnail(url) {
-    const id = extractYouTubeId(url);
-    return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '';
-  }
-
   function openYouTubeModal(url) {
     if (!url) return;
     const embedUrl = getYouTubeEmbedUrl(url);
