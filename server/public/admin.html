@@ -114,6 +114,38 @@
     h2 {
       margin: 0;
       font-size: 22px;
+      font-weight: 700;
+    }
+
+    .collapsible {
+      border-top: 1px solid var(--line);
+      padding-top: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .card-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0;
+      background: none;
+      border: none;
+      font: inherit;
+      font-size: 18px;
+      cursor: pointer;
+      color: inherit;
+      width: 100%;
+      text-align: left;
+    }
+
+    .card-toggle-title {
+      font-weight: 700;
+    }
+
+    .card-toggle-arrow {
+      font-size: 14px;
     }
 
     label {
@@ -461,10 +493,10 @@
       </section>
 
       <section class="card" id="secRegisterMember">
-        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberRegisterContainer">
-          <button type="button" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false" style="display:flex; align-items:center; gap:8px; background:none; border:none; padding:0; font:inherit; font-size:18px; cursor:pointer;">
-            <span>Register New Member</span>
-            <span aria-hidden="true" id="memberRegisterToggleArrow">▼</span>
+        <div class="collapsible" id="memberRegisterContainer">
+          <button type="button" class="card-toggle" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false">
+            <span class="card-toggle-title">Register New Member</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
           </button>
           <div class="stack" id="memberRegisterFields" hidden>
             <div class="row">
@@ -495,142 +527,171 @@
       </section>
 
       <section class="card" id="secMemberList">
-        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberListSection">
-          <div class="flex-between" style="flex-wrap:wrap; gap:12px;">
-            <h2 style="margin:0; font-size:20px;">Existing Members</h2>
-            <div class="row compact" style="gap:10px; flex-wrap:wrap;">
+        <div class="collapsible" id="memberListContainer">
+          <button type="button" class="card-toggle" id="toggleMemberList" aria-controls="memberListSection" aria-expanded="false">
+            <span class="card-toggle-title">Existing Members</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="memberListSection" hidden>
+            <div class="row compact" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
               <label style="flex:1 1 180px;">
                 <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em;">Search</span>
                 <input id="memberSearch" type="text" placeholder="search id or name">
               </label>
               <button id="btnMemberReload">Reload</button>
             </div>
+            <div style="overflow:auto;">
+              <table class="table" id="memberTable">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Name</th>
+                    <th>DOB</th>
+                    <th>Sex</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <small class="muted" id="memberListStatus"></small>
           </div>
-          <div style="overflow:auto;">
-            <table class="table" id="memberTable">
-              <thead>
-                <tr>
-                  <th>User ID</th>
-                  <th>Name</th>
-                  <th>DOB</th>
-                  <th>Sex</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <small class="muted" id="memberListStatus"></small>
         </div>
       </section>
 
       <section class="card" id="secIssue">
-        <div class="flex-between">
-          <h2>Issue Points</h2>
-          <button id="btnIssueGenerate" class="primary">Generate QR</button>
-        </div>
-        <div class="stack">
-          <div class="row">
-            <label>Amount
-              <input id="issueAmount" type="number" min="1" step="1" placeholder="points">
-            </label>
-            <label>Note (optional)
-              <input id="issueNote" type="text" placeholder="reason or note">
-            </label>
+        <div class="collapsible" id="issueSection">
+          <button type="button" class="card-toggle" id="toggleIssueSection" aria-controls="issueSectionFields" aria-expanded="false">
+            <span class="card-toggle-title">Issue Points</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="issueSectionFields" hidden>
+            <div class="row compact" style="justify-content:flex-end;">
+              <button id="btnIssueGenerate" class="primary">Generate QR</button>
+            </div>
+            <div class="row">
+              <label>Amount
+                <input id="issueAmount" type="number" min="1" step="1" placeholder="points">
+              </label>
+              <label>Note (optional)
+                <input id="issueNote" type="text" placeholder="reason or note">
+              </label>
+            </div>
+            <div class="qr-box">
+              <div id="qrIssue"></div>
+              <input id="issueLink" type="text" readonly placeholder="shareable link">
+              <button id="btnIssueCopy">Copy Link</button>
+              <small class="muted" id="issueStatus"></small>
+            </div>
           </div>
-        </div>
-        <div class="qr-box">
-          <div id="qrIssue"></div>
-          <input id="issueLink" type="text" readonly placeholder="shareable link">
-          <button id="btnIssueCopy">Copy Link</button>
-          <small class="muted" id="issueStatus"></small>
         </div>
       </section>
 
       <section class="card" id="secHolds">
-        <div class="flex-between">
-          <h2>Holding Rewards To Be Redeemed</h2>
-          <button class="view-history" data-history-type="spend" data-history-scope="member">View History</button>
+        <div class="collapsible" id="holdSection">
+          <button type="button" class="card-toggle" id="toggleHoldSection" aria-controls="holdSectionFields" aria-expanded="false">
+            <span class="card-toggle-title">Holding Rewards To Be Redeemed</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="holdSectionFields" hidden>
+            <div class="row compact" style="justify-content:flex-end; gap:10px; flex-wrap:wrap;">
+              <button class="view-history" data-history-type="spend" data-history-scope="member">View History</button>
+            </div>
+            <div class="row" style="align-items:flex-end;">
+              <label>Status
+                <select id="holdFilter">
+                  <option value="pending">Pending</option>
+                  <option value="redeemed">Redeemed</option>
+                  <option value="canceled">Canceled</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+              <button id="btnReloadHolds">Reload</button>
+            </div>
+            <div style="overflow:auto;">
+              <table class="table" id="holdsTable">
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>User</th>
+                    <th>Item</th>
+                    <th>Quoted</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="scanner">
+              <button id="btnHoldCamera">Start Camera</button>
+              <video id="holdVideo" playsinline></video>
+              <canvas id="holdCanvas"></canvas>
+              <small class="muted" id="holdScanStatus"></small>
+              <label>Override Price (optional)
+                <input id="holdOverride" type="number" min="0" step="1" placeholder="use quoted if empty">
+              </label>
+            </div>
+            <small class="muted" id="holdsStatus"></small>
+          </div>
         </div>
-        <div class="row" style="align-items:flex-end;">
-          <label>Status
-            <select id="holdFilter">
-              <option value="pending">Pending</option>
-              <option value="redeemed">Redeemed</option>
-              <option value="canceled">Canceled</option>
-              <option value="all">All</option>
-            </select>
-          </label>
-          <button id="btnReloadHolds">Reload</button>
-        </div>
-        <div style="overflow:auto;">
-          <table class="table" id="holdsTable">
-            <thead>
-              <tr>
-                <th>Created</th>
-                <th>User</th>
-                <th>Item</th>
-                <th>Quoted</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div class="scanner">
-          <button id="btnHoldCamera">Start Camera</button>
-          <video id="holdVideo" playsinline></video>
-          <canvas id="holdCanvas"></canvas>
-          <small class="muted" id="holdScanStatus"></small>
-          <label>Override Price (optional)
-            <input id="holdOverride" type="number" min="0" step="1" placeholder="use quoted if empty">
-          </label>
-        </div>
-        <small class="muted" id="holdsStatus"></small>
       </section>
 
       <section class="card" id="secRewards">
-        <h2>Rewards Menu</h2>
-        <div class="row" style="align-items:flex-end;">
-          <button id="btnLoadRewards">Load Rewards</button>
-          <label style="flex:1;">Search
-            <input id="filterRewards" type="text" placeholder="Search rewards">
-          </label>
-          <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
-            <input type="checkbox" id="adminShowUrls">
-            <span>Show image URLs</span>
-          </label>
+        <div class="collapsible" id="rewardsSection">
+          <button type="button" class="card-toggle" id="toggleRewardsSection" aria-controls="rewardsSectionFields" aria-expanded="false">
+            <span class="card-toggle-title">Rewards Menu</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="rewardsSectionFields" hidden>
+            <div class="row" style="align-items:flex-end;">
+              <button id="btnLoadRewards">Load Rewards</button>
+              <label style="flex:1;">Search
+                <input id="filterRewards" type="text" placeholder="Search rewards">
+              </label>
+              <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
+                <input type="checkbox" id="adminShowUrls">
+                <span>Show image URLs</span>
+              </label>
+            </div>
+            <div id="rewardsList" class="stack"></div>
+            <small class="muted" id="rewardsStatus"></small>
+          </div>
         </div>
-        <div id="rewardsList" class="stack"></div>
-        <small class="muted" id="rewardsStatus"></small>
       </section>
 
       <section class="card" id="secRegisterReward">
-        <h2>Register New Reward</h2>
-        <label>Name
-          <input id="rewardName" type="text" placeholder="Reward name">
-        </label>
-        <div class="row">
-          <label>Cost
-            <input id="rewardCost" type="number" min="1" step="1" placeholder="points">
-          </label>
-          <label>Image URL (optional)
-            <input id="rewardImage" type="text" placeholder="https://...">
-          </label>
-        </div>
-        <label>Description
-          <textarea id="rewardDesc" placeholder="optional details"></textarea>
-        </label>
-        <div class="row" style="align-items:center;">
-          <div id="drop" class="drop" style="flex:1;">
-            <div><strong>Drop image here</strong> or click to upload</div>
-            <div class="muted">jpg, png, webp, gif</div>
-            <input id="file" type="file" accept="image/*" style="display:none;">
+        <div class="collapsible" id="registerRewardSection">
+          <button type="button" class="card-toggle" id="toggleRegisterReward" aria-controls="registerRewardFields" aria-expanded="false">
+            <span class="card-toggle-title">Register New Reward</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="registerRewardFields" hidden>
+            <label>Name
+              <input id="rewardName" type="text" placeholder="Reward name">
+            </label>
+            <div class="row">
+              <label>Cost
+                <input id="rewardCost" type="number" min="1" step="1" placeholder="points">
+              </label>
+              <label>Image URL (optional)
+                <input id="rewardImage" type="text" placeholder="https://...">
+              </label>
+            </div>
+            <label>Description
+              <textarea id="rewardDesc" placeholder="optional details"></textarea>
+            </label>
+            <div class="row" style="align-items:center;">
+              <div id="drop" class="drop" style="flex:1;">
+                <div><strong>Drop image here</strong> or click to upload</div>
+                <div class="muted">jpg, png, webp, gif</div>
+                <input id="file" type="file" accept="image/*" style="display:none;">
+              </div>
+              <button id="btnCreateReward" class="primary">Create Reward</button>
+            </div>
+            <small class="muted" id="uploadStatus"></small>
           </div>
-          <button id="btnCreateReward" class="primary">Create Reward</button>
         </div>
-        <small class="muted" id="uploadStatus"></small>
       </section>
 
       <section class="card" id="secEarnMenu">
