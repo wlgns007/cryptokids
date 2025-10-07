@@ -578,6 +578,8 @@
       cost: Number.isFinite(Number(item.cost ?? item.price)) ? Number(item.cost ?? item.price) : 0,
       description: item.description || '',
       image_url: item.image_url || item.imageUrl || '',
+      youtube_url: item.youtube_url || item.youtubeUrl || '',
+      youtubeUrl: item.youtubeUrl || item.youtube_url || '',
     }));
     if (!normalized.length){
       $('shopEmpty').style.display = 'block';
