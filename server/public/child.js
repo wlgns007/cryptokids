@@ -35,114 +35,26 @@
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  const YT_ALLOWED_ORIGINS = new Set(['https://www.youtube.com', 'https://www.youtube-nocookie.com']);
-  let ytMessageHandler = null;
-  let ytFallbackTimer = null;
-
-  function clearVideoListeners() {
-    if (ytFallbackTimer) {
-      clearTimeout(ytFallbackTimer);
-      ytFallbackTimer = null;
-    }
-    if (ytMessageHandler) {
-      window.removeEventListener('message', ytMessageHandler);
-      ytMessageHandler = null;
-    }
-  }
-
   function openVideoModal(url) {
     if (!url) return;
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-
     const id = extractYouTubeId(url);
     if (!id) {
       frame.src = '';
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-
-    clearVideoListeners();
-    frame.onload = null;
-    frame.src = '';
-
-    const origin = window.location?.origin;
-    const originParam = origin && origin !== 'null' ? `&origin=${encodeURIComponent(origin)}` : '';
-    const baseParams = `autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1${originParam}`;
-    const nocookie = `https://www.youtube-nocookie.com/embed/${id}?${baseParams}`;
-    const regular = `https://www.youtube.com/embed/${id}?${baseParams}`;
-    const watchUrl = `https://www.youtube.com/watch?v=${id}`;
-    const sources = [nocookie, regular];
-    let attempt = 0;
-
-    function tryNext() {
-      clearVideoListeners();
-      const src = sources[attempt++];
-      if (!src) {
-        closeVideoModal();
-        window.open(watchUrl, '_blank', 'noopener,noreferrer');
-        return;
-      }
-
-      let ready = false;
-
-      const markReady = () => {
-        if (ready) return;
-        ready = true;
-        clearVideoListeners();
-      };
-
-      ytMessageHandler = (event) => {
-        if (!YT_ALLOWED_ORIGINS.has(event.origin)) return;
-        let payload = event.data;
-        if (typeof payload === 'string') {
-          const trimmed = payload.trim();
-          if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return;
-          try { payload = JSON.parse(trimmed); } catch { return; }
-        }
-        const evt = payload?.event;
-        if (evt === 'onReady') {
-          markReady();
-          return;
-        }
-        if (evt === 'infoDelivery' && payload?.info && Object.keys(payload.info).length) {
-          markReady();
-        }
-      };
-
-      window.addEventListener('message', ytMessageHandler);
-
-      frame.onload = () => {
-        if (ready) return;
-        if (ytFallbackTimer) {
-          clearTimeout(ytFallbackTimer);
-        }
-        ytFallbackTimer = window.setTimeout(() => {
-          if (!ready) tryNext();
-        }, 2200);
-      };
-
-      frame.src = src;
-      modal.hidden = false;
-
-      if (ytFallbackTimer) {
-        clearTimeout(ytFallbackTimer);
-      }
-      ytFallbackTimer = window.setTimeout(() => {
-        if (!ready) tryNext();
-      }, 3000);
-    }
-
-    tryNext();
+    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    frame.src = embed;
+    modal.hidden = false;
   }
 
   function closeVideoModal() {
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-    clearVideoListeners();
-    frame.onload = null;
     frame.src = '';
     modal.hidden = true;
   }
