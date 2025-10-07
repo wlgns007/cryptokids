@@ -79,49 +79,54 @@
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  // --- Video modal (admin) — robust close + fallback ---
-  (function () {
-    const modal  = document.getElementById("videoModal");
-    const frame  = document.getElementById("videoFrame");
+  (function setupVideoModal() {
+    const modal = document.getElementById("videoModal");
+    const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let timer = null;
+    let fallbackTimer = null;
 
-    function embedUrl(id, host) {
-      return `https://${host}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    function buildEmbed(id, host) {
+      const h = host || "www.youtube-nocookie.com";
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
     }
 
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
+      // try nocookie, fallback to regular if it doesn't load quickly
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
       modal.hidden = false;
-      frame.src = embedUrl(id, "www.youtube-nocookie.com");
 
       let loaded = false;
-      const onload = () => { loaded = true; frame.removeEventListener("load", onload); };
+      const onload = () => { loaded = true; cleanupListeners(); };
       frame.addEventListener("load", onload, { once: true });
 
-      // simple 1.5s fallback to regular youtube if nocookie is blocked
-      timer = setTimeout(() => { if (!loaded) frame.src = embedUrl(id, "www.youtube.com"); }, 1500);
+      fallbackTimer = setTimeout(() => {
+        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
+      }, 1500);
+
+      function cleanupListeners() {
+        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      }
     };
 
     window.closeVideoModal = function () {
-      if (timer) { clearTimeout(timer); timer = null; }
-      frame.src = "";            // stop playback
+      // stop video + hide
+      frame.src = "";
       modal.hidden = true;
     };
 
-    // CLOSE: backdrop or any [data-close] (capture = true to beat other handlers)
-    document.addEventListener("click", (e) => {
-      if (modal.hidden) return;
-      if (e.target.closest("[data-close]") || e.target.matches("#videoModal .modal-backdrop")) {
+    // Close on backdrop or [data-close]
+    modal.addEventListener("click", (e) => {
+      if (e.target.matches("[data-close]") || e.target === modal.querySelector(".modal-backdrop")) {
         e.preventDefault();
         closeVideoModal();
       }
-    }, true);
+    });
 
-    // CLOSE: Escape
+    // Close on Esc
     window.addEventListener("keydown", (e) => {
       if (!modal.hidden && e.key === "Escape") closeVideoModal();
     });
