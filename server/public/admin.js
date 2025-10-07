@@ -87,6 +87,19 @@
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
+  const memberListSection = $('memberListSection');
+  const memberListCard = $('secMemberList');
+  const memberRegisterContainer = $('memberRegisterContainer');
+  const memberRegisterFields = $('memberRegisterFields');
+  const memberRegisterToggle = $('toggleMemberRegister');
+
+  function setMemberRegisterControlsDisabled(disabled) {
+    if (!memberRegisterFields) return;
+    const fields = memberRegisterFields.querySelectorAll('input, select, textarea, button');
+    fields.forEach((field) => {
+      field.disabled = disabled;
+    });
+  }
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -125,6 +138,29 @@
     div.textContent = message;
     memberInfoDetails.appendChild(div);
   }
+
+  function syncMemberRegisterExpanded(expanded) {
+    const isExpanded = !!expanded;
+    if (memberRegisterToggle) memberRegisterToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    if (memberRegisterFields) {
+      memberRegisterFields.setAttribute('aria-hidden', isExpanded ? 'false' : 'true');
+      memberRegisterFields.hidden = !isExpanded;
+      memberRegisterFields.style.display = isExpanded ? 'grid' : 'none';
+    }
+    setMemberRegisterControlsDisabled(!isExpanded);
+  }
+
+  function setMemberRegisterExpanded(expanded) {
+    const isExpanded = !!expanded;
+    if (memberRegisterContainer) memberRegisterContainer.open = isExpanded;
+    syncMemberRegisterExpanded(isExpanded);
+  }
+
+  syncMemberRegisterExpanded(memberRegisterContainer?.open ?? false);
+
+  memberRegisterContainer?.addEventListener('toggle', () => {
+    syncMemberRegisterExpanded(memberRegisterContainer.open);
+  });
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
@@ -344,6 +380,15 @@
   async function loadMembersList() {
     if (!memberTableBody) return;
     const search = (memberSearchInput?.value || '').trim().toLowerCase();
+    if (!search) {
+      memberTableBody.innerHTML = '';
+      if (memberListStatus) memberListStatus.textContent = 'Search for a member to view results.';
+      if (memberListSection) memberListSection.hidden = true;
+      if (memberListCard) memberListCard.hidden = true;
+      return;
+    }
+    if (memberListSection) memberListSection.hidden = false;
+    if (memberListCard) memberListCard.hidden = false;
     memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
     if (memberListStatus) memberListStatus.textContent = '';
     try {
