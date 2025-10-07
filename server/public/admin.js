@@ -132,48 +132,13 @@
     const content = $(contentId);
     if (!button || !content) return;
     const arrow = button.querySelector('[data-arrow]');
-    const container = button.closest('.collapsible');
-    content.classList.add('collapsible-content');
-
-    const ensureDisplayValue = () => {
-      if (content.dataset.collapsibleDisplay) return content.dataset.collapsibleDisplay;
-      const wasHidden = content.hidden;
-      if (wasHidden) content.hidden = false;
-      let display = content.style.display;
-      if (!display || display === 'none') {
-        const computed = window.getComputedStyle(content);
-        display = computed?.display && computed.display !== 'none' ? computed.display : '';
-      }
-      if (!display || display === 'none') {
-        if (content.classList.contains('row')) display = 'flex';
-        else if (content.classList.contains('stack')) display = 'grid';
-        else display = 'block';
-      }
-      content.dataset.collapsibleDisplay = display;
-      if (wasHidden) {
-        content.hidden = true;
-        content.style.display = 'none';
-      }
-      return display;
-    };
-
-    const baseDisplay = ensureDisplayValue();
-
     const setExpanded = (state) => {
-      const isExpanded = !!state;
-      button.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-      button.dataset.expanded = isExpanded ? 'true' : 'false';
-      if (container) container.dataset.expanded = isExpanded ? 'true' : 'false';
-      if (arrow) arrow.textContent = isExpanded ? '▲' : '▼';
-      content.hidden = !isExpanded;
-      content.style.display = isExpanded ? baseDisplay : 'none';
+      content.hidden = !state;
+      button.setAttribute('aria-expanded', state ? 'true' : 'false');
+      if (arrow) arrow.textContent = state ? '▲' : '▼';
     };
-
-    setExpanded(!!expanded);
-    button.addEventListener('click', () => {
-      const next = button.getAttribute('aria-expanded') !== 'true';
-      setExpanded(next);
-    });
+    setExpanded(expanded);
+    button.addEventListener('click', () => setExpanded(content.hidden));
   }
 
   setupCollapsibleToggle('toggleMemberRegister', 'memberRegisterFields');
@@ -182,7 +147,6 @@
   setupCollapsibleToggle('toggleHoldSection', 'holdSectionFields');
   setupCollapsibleToggle('toggleRewardsSection', 'rewardsSectionFields');
   setupCollapsibleToggle('toggleRegisterReward', 'registerRewardFields');
-  setupCollapsibleToggle('toggleEarnMenu', 'earnMenuFields');
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
