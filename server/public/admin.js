@@ -147,7 +147,6 @@
   setupCollapsibleToggle('toggleHoldSection', 'holdSectionFields');
   setupCollapsibleToggle('toggleRewardsSection', 'rewardsSectionFields');
   setupCollapsibleToggle('toggleRegisterReward', 'registerRewardFields');
-  setupCollapsibleToggle('toggleEarnMenu', 'earnMenuFields');
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
