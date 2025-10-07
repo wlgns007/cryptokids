@@ -196,62 +196,23 @@
     }
 
     .collapsible {
-      display: grid;
-      gap: 0;
-    }
-
-    .collapsible-toggle {
-      appearance: none;
-      border: none;
-      background: none;
-      padding: 4px 0;
-      margin: 0;
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font: inherit;
-      font-size: 20px;
-      font-weight: 600;
-      color: inherit;
-      cursor: pointer;
-    }
-
-    .collapsible-toggle:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 4px;
-    }
-
-    .collapsible-toggle .chevron {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 24px;
-      height: 24px;
-      transition: transform 0.2s ease;
-    }
-
-    .collapsible-toggle .chevron::before {
-      content: '▾';
-      font-size: 18px;
-      line-height: 1;
-    }
-
-    .collapsible.expanded .collapsible-toggle .chevron {
-      transform: rotate(180deg);
-    }
-
-    .collapsible-content {
-      margin-top: 12px;
-      padding-top: 16px;
-      border-top: 1px solid var(--line);
-      display: none;
       gap: 12px;
     }
 
-    .collapsible.expanded .collapsible-content {
-      display: grid;
+    .collapsible-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .collapsible[data-expanded="false"] .collapsible-content {
+      display: none;
     }
 
     .drop {
@@ -493,15 +454,12 @@
           </div>
           <small class="muted" id="memberStatus"></small>
         </div>
-      </section>
-
-      <section class="card" id="secRegisterMember">
-        <div class="stack collapsible" id="memberRegisterContainer">
-          <button type="button" class="collapsible-toggle" id="toggleMemberRegister" aria-expanded="false">
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberRegisterContainer">
+          <button type="button" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false" style="display:flex; align-items:center; gap:8px; background:none; border:none; padding:0; font:inherit; font-size:18px; cursor:pointer;">
             <span>Register New Member</span>
-            <span class="chevron" aria-hidden="true"></span>
+            <span aria-hidden="true" id="memberRegisterToggleArrow">▼</span>
           </button>
-          <div class="stack collapsible-content" id="memberRegisterFields" aria-hidden="true">
+          <div class="stack" id="memberRegisterFields" hidden>
             <div class="row">
               <label>User ID
                 <input id="memberRegisterId" type="text" placeholder="unique id">
@@ -527,10 +485,7 @@
             </div>
           </div>
         </div>
-      </section>
-
-      <section class="card" id="secMemberList" hidden>
-        <div class="stack" id="memberListSection" hidden>
+        <div class="stack" style="border-top:1px solid var(--line); padding-top:16px;" id="memberListSection" hidden>
           <div class="flex-between" style="flex-wrap:wrap; gap:12px;">
             <h2 style="margin:0; font-size:20px;">Existing Members</h2>
             <div class="row compact" style="gap:10px; flex-wrap:wrap;">
