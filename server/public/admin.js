@@ -119,6 +119,29 @@
     }
   });
 
+  function closeVideoModal() {
+    const modal = document.getElementById('videoModal');
+    const frame = document.getElementById('videoFrame');
+    if (!modal || !frame) return;
+    clearVideoListeners();
+    frame.onload = null;
+    frame.src = '';
+    modal.hidden = true;
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-close]')) {
+      event.preventDefault();
+      closeVideoModal();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeVideoModal();
+    }
+  });
+
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
     return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
