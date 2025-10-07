@@ -35,83 +35,26 @@
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  let ytFallbackTimer = null;
-
-  function clearVideoTimers() {
-    if (ytFallbackTimer) {
-      clearTimeout(ytFallbackTimer);
-      ytFallbackTimer = null;
-    }
-  }
-
   function openVideoModal(url) {
     if (!url) return;
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-
     const id = extractYouTubeId(url);
     if (!id) {
       frame.src = '';
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-
-    clearVideoTimers();
-    frame.onload = null;
-    frame.onerror = null;
-    frame.src = '';
-
-    const baseParams = 'autoplay=1&modestbranding=1&rel=0&playsinline=1';
-    const nocookie = `https://www.youtube-nocookie.com/embed/${id}?${baseParams}`;
-    const regular = `https://www.youtube.com/embed/${id}?${baseParams}`;
-    const watchUrl = `https://www.youtube.com/watch?v=${id}`;
-    let loaded = false;
-    let triedRegular = false;
-
-    const fallbackToRegular = () => {
-      if (loaded || triedRegular) return;
-      triedRegular = true;
-      frame.src = regular;
-      clearVideoTimers();
-      ytFallbackTimer = window.setTimeout(() => {
-        if (!loaded) {
-          closeVideoModal();
-          window.open(watchUrl, '_blank', 'noopener,noreferrer');
-        }
-      }, 2000);
-    };
-
-    frame.onload = () => {
-      loaded = true;
-      clearVideoTimers();
-    };
-
-    frame.onerror = () => {
-      if (!triedRegular) {
-        fallbackToRegular();
-      } else {
-        clearVideoTimers();
-        closeVideoModal();
-        window.open(watchUrl, '_blank', 'noopener,noreferrer');
-      }
-    };
-
-    frame.src = nocookie;
+    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    frame.src = embed;
     modal.hidden = false;
-
-    ytFallbackTimer = window.setTimeout(() => {
-      if (!loaded) fallbackToRegular();
-    }, 1500);
   }
 
   function closeVideoModal() {
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-    clearVideoTimers();
-    frame.onload = null;
-    frame.onerror = null;
     frame.src = '';
     modal.hidden = true;
   }
