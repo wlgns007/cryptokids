@@ -244,6 +244,7 @@ function ensureSchema() {
         price INTEGER NOT NULL,
         description TEXT DEFAULT '',
         image_url TEXT DEFAULT '',
+        youtube_url TEXT,
         active INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
       );
@@ -253,6 +254,10 @@ function ensureSchema() {
     const hasCreatedAtCamel = rewardsCols.some(c => c.name === "createdAt");
     if (!hasCreatedAt) {
       db.exec(`ALTER TABLE rewards ADD COLUMN created_at INTEGER DEFAULT 0`);
+    }
+
+    if (!rewardsCols.some(c => c.name === "youtube_url")) {
+      db.exec(`ALTER TABLE rewards ADD COLUMN youtube_url TEXT`);
     }
 
     const rowsNeedingBackfill = db
@@ -1257,7 +1262,7 @@ app.delete("/api/earn-templates/:id", requireAdminKey, (req, res) => {
 });
 
 app.get("/api/rewards", (_req, res) => {
-  const rows = db.prepare("SELECT id, name, price, description, image_url, active FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
+  const rows = db.prepare("SELECT id, name, price, description, image_url, youtube_url, active FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
   res.json(rows.map(r => ({
     id: r.id,
     name: r.name,
@@ -1267,22 +1272,37 @@ app.get("/api/rewards", (_req, res) => {
     description: r.description || "",
     image_url: r.image_url || "",
     imageUrl: r.image_url || "",
+    youtube_url: r.youtube_url || "",
+    youtubeUrl: r.youtube_url || "",
     active: r.active
   })));
 });
 
 app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
   try {
-    const { name, cost, imageUrl = null, description = "" } = req.body || {};
+    const body = req.body || {};
+    const name = body.name;
+    const cost = body.cost;
+    const imageUrl = body.imageUrl ?? body.image_url ?? null;
+    const youtubeUrl = body.youtubeUrl ?? body.youtube_url ?? null;
+    const description = body.description ?? "";
     if (!name || Number.isNaN(Number(cost))) return res.status(400).json({ error: "name and cost required" });
-    const stmt = db.prepare("INSERT INTO rewards (name, price, image_url, description, active, created_at) VALUES (?, ?, ?, ?, 1, ?)");
-    const info = stmt.run(String(name), Math.floor(Number(cost)), imageUrl ? String(imageUrl) : null, String(description || ""), nowSec());
-    const row = db.prepare("SELECT id, name, price AS cost, image_url, description, active FROM rewards WHERE id = ?").get(info.lastInsertRowid);
+    const stmt = db.prepare("INSERT INTO rewards (name, price, image_url, youtube_url, description, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)");
+    const info = stmt.run(
+      String(name),
+      Math.floor(Number(cost)),
+      imageUrl ? String(imageUrl).trim() || null : null,
+      youtubeUrl ? String(youtubeUrl).trim() || null : null,
+      String((description ?? "")).trim(),
+      nowSec()
+    );
+    const row = db.prepare("SELECT id, name, price AS cost, image_url, youtube_url, description, active FROM rewards WHERE id = ?").get(info.lastInsertRowid);
     if (!row) return res.status(500).json({ error: "create reward failed" });
     res.status(201).json({
       ...row,
       price: row.cost,
-      imageUrl: row.image_url
+      imageUrl: row.image_url,
+      youtubeUrl: row.youtube_url
     });
   } catch (e) {
     console.error("create reward", e);
@@ -1293,7 +1313,13 @@ app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
 app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: "invalid_id" });
-  const { name, price, description, imageUrl, active } = req.body || {};
+  const body = req.body || {};
+  const name = body.name;
+  const price = body.price;
+  const description = body.description;
+  const imageUrl = body.imageUrl ?? body.image_url;
+  const youtubeUrl = body.youtubeUrl ?? body.youtube_url;
+  const active = body.active;
   const fields = [];
   const params = [];
   if (name !== undefined) { fields.push("name = ?"); params.push(name); }
@@ -1302,7 +1328,8 @@ app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
     fields.push("price = ?"); params.push(Math.floor(Number(price)));
   }
   if (description !== undefined) { fields.push("description = ?"); params.push(description); }
-  if (imageUrl !== undefined) { fields.push("image_url = ?"); params.push(imageUrl); }
+  if (imageUrl !== undefined) { fields.push("image_url = ?"); params.push(imageUrl ? String(imageUrl).trim() || null : null); }
+  if (youtubeUrl !== undefined) { fields.push("youtube_url = ?"); params.push(youtubeUrl ? String(youtubeUrl).trim() || null : null); }
   if (active !== undefined) { fields.push("active = ?"); params.push(active ? 1 : 0); }
   if (!fields.length) return res.status(400).json({ error: "no_fields" });
   const sql = `UPDATE rewards SET ${fields.join(", ")} WHERE id = ?`;
