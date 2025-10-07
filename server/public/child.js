@@ -40,56 +40,21 @@
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-
     const id = extractYouTubeId(url);
     if (!id) {
       frame.src = '';
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-
-    const nocookie = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-    const regular = `https://www.youtube.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-
-    if (frame.dataset.fallbackTimer) {
-      clearTimeout(Number(frame.dataset.fallbackTimer));
-      delete frame.dataset.fallbackTimer;
-    }
-
-    let loaded = false;
-    frame.onload = () => {
-      loaded = true;
-      if (frame.dataset.fallbackTimer) {
-        clearTimeout(Number(frame.dataset.fallbackTimer));
-        delete frame.dataset.fallbackTimer;
-      }
-    };
-
-    frame.src = nocookie;
+    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    frame.src = embed;
     modal.hidden = false;
-
-    const fallbackTimer = window.setTimeout(() => {
-      if (!loaded && frame.src === nocookie) {
-        frame.src = regular;
-      }
-      if (frame.dataset.fallbackTimer) {
-        clearTimeout(Number(frame.dataset.fallbackTimer));
-        delete frame.dataset.fallbackTimer;
-      }
-    }, 1500);
-
-    frame.dataset.fallbackTimer = String(fallbackTimer);
   }
 
   function closeVideoModal() {
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-    if (frame.dataset.fallbackTimer) {
-      clearTimeout(Number(frame.dataset.fallbackTimer));
-      delete frame.dataset.fallbackTimer;
-    }
-    frame.onload = null;
     frame.src = '';
     modal.hidden = true;
   }
