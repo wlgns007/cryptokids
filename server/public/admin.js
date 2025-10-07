@@ -127,26 +127,34 @@
     memberInfoDetails.appendChild(div);
   }
 
-  function setupCollapsibleToggle(buttonId, contentId, { expanded = false } = {}) {
-    const button = $(buttonId);
-    const content = $(contentId);
-    if (!button || !content) return;
-    const arrow = button.querySelector('[data-arrow]');
-    const setExpanded = (state) => {
-      content.hidden = !state;
-      button.setAttribute('aria-expanded', state ? 'true' : 'false');
-      if (arrow) arrow.textContent = state ? '▲' : '▼';
-    };
-    setExpanded(expanded);
-    button.addEventListener('click', () => setExpanded(content.hidden));
+  // Collapsible panels: pairs <button.card-toggle aria-controls="..."> + <div id="...">
+  function initCollapsibles() {
+    const toggles = document.querySelectorAll('.card .card-toggle[aria-controls]');
+    toggles.forEach(btn => {
+      const targetId = btn.getAttribute('aria-controls');
+      const target = document.getElementById(targetId);
+      if (!target) return;
+
+      const arrow = btn.querySelector('[data-arrow]');
+
+      const setState = (expanded) => {
+        btn.setAttribute('aria-expanded', String(expanded));
+        target.hidden = !expanded;
+        if (arrow) arrow.textContent = expanded ? '▲' : '▼';
+      };
+
+      // start collapsed unless markup says otherwise
+      setState(btn.getAttribute('aria-expanded') === 'true');
+
+      btn.addEventListener('click', () => {
+        const next = btn.getAttribute('aria-expanded') !== 'true';
+        setState(next);
+      });
+    });
   }
 
-  setupCollapsibleToggle('toggleMemberRegister', 'memberRegisterFields');
-  setupCollapsibleToggle('toggleMemberList', 'memberListSection');
-  setupCollapsibleToggle('toggleIssueSection', 'issueSectionFields');
-  setupCollapsibleToggle('toggleHoldSection', 'holdSectionFields');
-  setupCollapsibleToggle('toggleRewardsSection', 'rewardsSectionFields');
-  setupCollapsibleToggle('toggleRegisterReward', 'registerRewardFields');
+  // ensure DOM is ready, then call once
+  document.addEventListener('DOMContentLoaded', initCollapsibles);
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
