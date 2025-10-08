@@ -8,6 +8,31 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
+  const memoryStore = {};
+
+  function storageGet(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value != null) memoryStore[key] = value;
+      return value;
+    } catch (error) {
+      console.warn('localStorage getItem failed', error);
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+    }
+  }
+
+  function storageSet(key, value) {
+    let ok = true;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage setItem failed', error);
+      ok = false;
+    }
+    memoryStore[key] = value;
+    return ok;
+  }
+
   function extractYouTubeId(u) {
     if (!u) return "";
     try {
@@ -33,10 +58,9 @@
 
       // Last resort: first 11-char token
       const m = u.match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      if (m) return m[1];
     } catch {
-      const m = String(u).match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      // ignore parsing errors and fall back to loose matching below
     }
     const fallback = String(u).match(/([\w-]{11})/);
     return fallback ? fallback[1] : "";
@@ -53,35 +77,46 @@
     if (!modal || !frame) return;
 
     let fallbackTimer = null;
+    let loadListener = null;
 
     function buildEmbed(id, host) {
       const h = host || "www.youtube-nocookie.com";
       return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
     }
 
+    function cleanupListeners() {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (loadListener) {
+        frame.removeEventListener('load', loadListener);
+        loadListener = null;
+      }
+    }
+
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      cleanupListeners();
       modal.hidden = false;
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
 
       let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
+      loadListener = () => {
+        loaded = true;
+        cleanupListeners();
+      };
+      frame.addEventListener('load', loadListener, { once: true });
 
       fallbackTimer = setTimeout(() => {
         if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
       }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      }
     };
 
     window.closeVideoModal = function () {
-      // stop video + hide
+      cleanupListeners();
       frame.src = "";
       modal.hidden = true;
     };
@@ -105,11 +140,12 @@
   }
 
   function saveFilters(filters) {
-    localStorage.setItem(LS_FILTER, JSON.stringify(filters));
+    const payload = JSON.stringify(filters || {});
+    storageSet(LS_FILTER, payload);
   }
   function loadFilters() {
     try {
-      return JSON.parse(localStorage.getItem(LS_FILTER) || '{}');
+      return JSON.parse(storageGet(LS_FILTER) || '{}');
     } catch { return {}; }
   }
 

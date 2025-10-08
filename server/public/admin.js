@@ -7,9 +7,46 @@
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
+  const memoryStore = {};
+
+  function storageGet(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value != null) memoryStore[key] = value;
+      return value;
+    } catch (error) {
+      console.warn('localStorage getItem failed', error);
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+    }
+  }
+
+  function storageSet(key, value) {
+    let ok = true;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage setItem failed', error);
+      ok = false;
+    }
+    memoryStore[key] = value;
+    return ok;
+  }
+
+  function storageRemove(key) {
+    let ok = true;
+    try {
+      window.localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('localStorage removeItem failed', error);
+      ok = false;
+    }
+    delete memoryStore[key];
+    return ok;
+  }
+
   if (keyInput) {
     keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
-    const saved = localStorage.getItem('CK_ADMIN_KEY');
+    const saved = storageGet('CK_ADMIN_KEY');
     if (!saved) keyInput.value = ADMIN_KEY_DEFAULT;
   }
 
@@ -72,37 +109,12 @@
       const m = String(u).match(/([\w-]{11})/);
       return m ? m[1] : "";
     }
+  }
 
-    function waitForReady(oframe, timeout = 1800) {
-      return new Promise((resolve, reject) => {
-        let timer = null;
-        let settled = false;
-
-        const finish = (fn, value) => {
-          if (settled) return;
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          window.removeEventListener("message", onMessage);
-          fn(value);
-        };
-
-        function onMessage(event) {
-          if (event.source !== oframe.contentWindow) return;
-          let payload = event.data;
-          if (typeof payload === "string") {
-            try {
-              payload = JSON.parse(payload);
-            } catch (error) {
-              // ignore non-JSON payloads
-            }
-          }
-          if (payload && payload.event === "onReady") {
-            finish(resolve);
-          }
-        }
+  function getYouTubeThumbnail(url) {
+    const id = extractYouTubeId(url);
+    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+  }
 
   (function setupVideoModal() {
     const modal = document.getElementById("videoModal");
@@ -110,35 +122,46 @@
     if (!modal || !frame) return;
 
     let fallbackTimer = null;
+    let loadListener = null;
 
     function buildEmbed(id, host) {
       const h = host || "www.youtube-nocookie.com";
       return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
     }
 
+    function cleanupListeners() {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (loadListener) {
+        frame.removeEventListener('load', loadListener);
+        loadListener = null;
+      }
+    }
+
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      cleanupListeners();
       modal.hidden = false;
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
 
       let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
+      loadListener = () => {
+        loaded = true;
+        cleanupListeners();
+      };
+      frame.addEventListener('load', loadListener, { once: true });
 
       fallbackTimer = setTimeout(() => {
         if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
       }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      }
     };
 
     window.closeVideoModal = function () {
-      // stop video + hide
+      cleanupListeners();
       frame.src = "";
       modal.hidden = true;
     };
@@ -159,16 +182,19 @@
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
-    return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
+    return storageGet(ADMIN_KEY_STORAGE) || '';
   }
   function saveAdminKey(value) {
-    localStorage.setItem(ADMIN_KEY_STORAGE, value || '');
+    if (!value) {
+      return storageRemove(ADMIN_KEY_STORAGE);
+    }
+    return storageSet(ADMIN_KEY_STORAGE, value);
   }
 
   $('saveAdminKey')?.addEventListener('click', () => {
     const value = (keyInput?.value || '').trim();
-    saveAdminKey(value);
-    toast('Admin key saved');
+    const persisted = saveAdminKey(value);
+    toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
   });
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -178,7 +204,7 @@
 
   function getAdminKey(){
     const el = document.getElementById('adminKey');
-    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
+    return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
   }
   async function adminFetch(url, opts = {}) {
     const headers = { ...(opts.headers||{}), 'x-admin-key': getAdminKey() };
@@ -914,12 +940,12 @@ setupScanner({
   (function initToggle() {
     const toggle = $('adminShowUrls');
     if (!toggle) return;
-    const saved = localStorage.getItem(SHOW_URLS_KEY);
+    const saved = storageGet(SHOW_URLS_KEY);
     const show = saved === '1';
     toggle.checked = show;
     applyUrlToggle(show);
     toggle.addEventListener('change', () => {
-      localStorage.setItem(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
+      storageSet(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
       applyUrlToggle(toggle.checked);
       loadRewards();
     });
