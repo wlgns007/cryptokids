@@ -164,8 +164,11 @@ window.getYouTubeEmbed = getYouTubeEmbed;
         console.error("openVideoModal: modal/iframe not found");
         return;
       }
-      iframe.removeAttribute("sandbox");
-      const embedUrl = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+      const embedUrl =
+        window.getYouTubeEmbed?.(`https://www.youtube.com/watch?v=${id}`, {
+          autoplay: true,
+        }) ||
+        `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
       iframe.src = embedUrl;
       if (link) {
         link.href = `https://www.youtube.com/watch?v=${id}`;
