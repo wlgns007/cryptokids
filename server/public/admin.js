@@ -7,9 +7,46 @@
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
+  const memoryStore = {};
+
+  function storageGet(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value != null) memoryStore[key] = value;
+      return value;
+    } catch (error) {
+      console.warn('localStorage getItem failed', error);
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+    }
+  }
+
+  function storageSet(key, value) {
+    let ok = true;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage setItem failed', error);
+      ok = false;
+    }
+    memoryStore[key] = value;
+    return ok;
+  }
+
+  function storageRemove(key) {
+    let ok = true;
+    try {
+      window.localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('localStorage removeItem failed', error);
+      ok = false;
+    }
+    delete memoryStore[key];
+    return ok;
+  }
+
   if (keyInput) {
     keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
-    const saved = localStorage.getItem('CK_ADMIN_KEY');
+    const saved = storageGet('CK_ADMIN_KEY');
     if (!saved) keyInput.value = ADMIN_KEY_DEFAULT;
   }
 
@@ -115,38 +152,52 @@
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let fallbackTimer = null;
+    let loadToken = 0;
 
     function buildEmbed(id, host) {
       const h = host || "www.youtube-nocookie.com";
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+      const origin = encodeURIComponent(window.location.origin || "null");
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
     }
 
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      const currentToken = ++loadToken;
+      frame.src = "";
       modal.hidden = false;
 
-      let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
+      const tryHost = async (host) => {
+        frame.src = buildEmbed(id, host);
+        try {
+          await waitForReady(frame, 2500);
+          if (currentToken !== loadToken) return false;
+          frame.dataset.videoHost = host;
+          return true;
+        } catch (error) {
+          if (currentToken !== loadToken) return false;
+          console.warn(`YouTube host ${host} did not become ready`, error);
+          return false;
+        }
+      };
 
-      fallbackTimer = setTimeout(() => {
-        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
-      }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      }
+      (async () => {
+        if (await tryHost("www.youtube-nocookie.com")) return;
+        if (await tryHost("www.youtube.com")) return;
+        if (currentToken !== loadToken) return;
+        closeVideoModal();
+        toast("Unable to load the video player. Opening YouTube in a new tab.", "error");
+        window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
+      })();
     };
 
     window.closeVideoModal = function () {
+      loadToken++;
       // stop video + hide
       frame.src = "";
       modal.hidden = true;
+      delete frame.dataset.videoHost;
     };
 
     // Close on backdrop or [data-close]
@@ -165,16 +216,19 @@
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
-    return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
+    return storageGet(ADMIN_KEY_STORAGE) || '';
   }
   function saveAdminKey(value) {
-    localStorage.setItem(ADMIN_KEY_STORAGE, value || '');
+    if (!value) {
+      return storageRemove(ADMIN_KEY_STORAGE);
+    }
+    return storageSet(ADMIN_KEY_STORAGE, value);
   }
 
   $('saveAdminKey')?.addEventListener('click', () => {
     const value = (keyInput?.value || '').trim();
-    saveAdminKey(value);
-    toast('Admin key saved');
+    const persisted = saveAdminKey(value);
+    toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
   });
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -184,7 +238,7 @@
 
   function getAdminKey(){
     const el = document.getElementById('adminKey');
-    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
+    return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
   }
   async function adminFetch(url, opts = {}) {
     const headers = { ...(opts.headers||{}), 'x-admin-key': getAdminKey() };
@@ -920,12 +974,12 @@ setupScanner({
   (function initToggle() {
     const toggle = $('adminShowUrls');
     if (!toggle) return;
-    const saved = localStorage.getItem(SHOW_URLS_KEY);
+    const saved = storageGet(SHOW_URLS_KEY);
     const show = saved === '1';
     toggle.checked = show;
     applyUrlToggle(show);
     toggle.addEventListener('change', () => {
-      localStorage.setItem(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
+      storageSet(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
       applyUrlToggle(toggle.checked);
       loadRewards();
     });

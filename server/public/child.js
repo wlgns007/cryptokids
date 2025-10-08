@@ -41,6 +41,61 @@
       return fallback ? fallback[1] : "";
     }
 
+  function waitForReady(oframe, timeout = 2000) {
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let settled = false;
+      let handshake = null;
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (handshake) {
+          clearInterval(handshake);
+          handshake = null;
+        }
+        window.removeEventListener('message', onMessage);
+        fn(value);
+      };
+
+      function onMessage(event) {
+        if (event.source !== oframe.contentWindow) return;
+        let payload = event.data;
+        if (typeof payload === 'string') {
+          try {
+            payload = JSON.parse(payload);
+          } catch (error) {
+            // ignore
+          }
+        }
+        if (payload && payload.event === 'onReady') {
+          finish(resolve);
+        }
+      }
+
+      function sendHandshake() {
+        try {
+          const target = oframe.contentWindow;
+          if (!target) return;
+          const payload = JSON.stringify({ event: 'listening', channel: 'widget', id: oframe.id || 'ck-video' });
+          target.postMessage(payload, '*');
+        } catch (error) {
+          console.warn('iframe handshake failed', error);
+        }
+      }
+
+      window.addEventListener('message', onMessage);
+      sendHandshake();
+      handshake = setInterval(sendHandshake, 400);
+      oframe.addEventListener('load', sendHandshake, { once: true });
+      timer = setTimeout(() => finish(reject, new Error('timeout')), timeout);
+    });
+  }
+
   function getYouTubeThumbnail(url) {
     const id = extractYouTubeId(url);
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
@@ -51,38 +106,52 @@
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let fallbackTimer = null;
+    let loadToken = 0;
 
     function buildEmbed(id, host) {
       const h = host || "www.youtube-nocookie.com";
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+      const origin = encodeURIComponent(window.location.origin || "null");
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
     }
 
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      const currentToken = ++loadToken;
+      frame.src = "";
       modal.hidden = false;
 
-      let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
+      const tryHost = async (host) => {
+        frame.src = buildEmbed(id, host);
+        try {
+          await waitForReady(frame, 2500);
+          if (currentToken !== loadToken) return false;
+          frame.dataset.videoHost = host;
+          return true;
+        } catch (error) {
+          if (currentToken !== loadToken) return false;
+          console.warn(`YouTube host ${host} did not become ready`, error);
+          return false;
+        }
+      };
 
-      fallbackTimer = setTimeout(() => {
-        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
-      }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      }
+      (async () => {
+        if (await tryHost("www.youtube-nocookie.com")) return;
+        if (await tryHost("www.youtube.com")) return;
+        if (currentToken !== loadToken) return;
+        closeVideoModal();
+        alert('Unable to load the video player. Opening YouTube in a new tab.');
+        window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
+      })();
     };
 
     window.closeVideoModal = function () {
+      loadToken++;
       // stop video + hide
       frame.src = "";
       modal.hidden = true;
+      delete frame.dataset.videoHost;
     };
 
     // Close on backdrop or [data-close]
@@ -104,11 +173,12 @@
   }
 
   function saveFilters(filters) {
-    localStorage.setItem(LS_FILTER, JSON.stringify(filters));
+    const payload = JSON.stringify(filters || {});
+    storageSet(LS_FILTER, payload);
   }
   function loadFilters() {
     try {
-      return JSON.parse(localStorage.getItem(LS_FILTER) || '{}');
+      return JSON.parse(storageGet(LS_FILTER) || '{}');
     } catch { return {}; }
   }
 
