@@ -159,18 +159,29 @@ window.getYouTubeEmbed = getYouTubeEmbed;
         return;
       }
       const iframe = modal?.querySelector("iframe");
+      const link = modal?.querySelector("#openOnYouTube");
       if (!iframe) {
         console.error("openVideoModal: modal/iframe not found");
         return;
       }
-      iframe.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
+      const embedUrl =
+        window.getYouTubeEmbed?.(`https://www.youtube.com/watch?v=${id}`, {
+          autoplay: true,
+        }) ||
+        `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+      iframe.src = embedUrl;
+      if (link) {
+        link.href = `https://www.youtube.com/watch?v=${id}`;
+      }
       modal.classList.remove("hidden");
       modal.classList.add("open");
     };
 
     window.closeVideoModal = function closeVideoModal() {
       const iframe = modal?.querySelector("iframe");
+      const link = modal?.querySelector("#openOnYouTube");
       if (iframe) iframe.src = "";
+      if (link) link.removeAttribute("href");
       modal.classList.remove("open");
       modal.classList.add("hidden");
     };
