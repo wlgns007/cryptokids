@@ -160,6 +160,17 @@
       return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
     }
 
+    function cleanupListeners() {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (loadListener) {
+        frame.removeEventListener('load', loadListener);
+        loadListener = null;
+      }
+    }
+
     window.openVideoModal = function (url) {
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
@@ -167,6 +178,7 @@
       const currentToken = ++loadToken;
       frame.src = "";
       modal.hidden = false;
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
 
       const tryHost = async (host) => {
         frame.src = buildEmbed(id, host);
