@@ -1,3 +1,40 @@
+function getYouTubeId(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+    if (u.searchParams.has("v")) return u.searchParams.get("v");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p === "embed" || p === "shorts");
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+    return "";
+  } catch {
+    const m = String(url).match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
+    return m ? m[1] : "";
+  }
+}
+
+function getYouTubeThumbnail(url) {
+  const id = getYouTubeId(url);
+  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";
+}
+
+function getYouTubeEmbed(url, { host = "www.youtube.com", autoplay = true } = {}) {
+  const id = getYouTubeId(url);
+  if (!id) return "";
+  const params = new URLSearchParams({
+    modestbranding: "1",
+    rel: "0",
+    playsinline: "1",
+  });
+  if (autoplay) params.set("autoplay", "1");
+  return `https://${host}/embed/${id}?${params.toString()}`;
+}
+
+window.getYouTubeId = getYouTubeId;
+window.getYouTubeThumbnail = getYouTubeThumbnail;
+window.getYouTubeEmbed = getYouTubeEmbed;
+
 (() => {
   const $ = (id) => document.getElementById(id);
   const LS_FILTER = 'ck_child_filters';
@@ -8,43 +45,29 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
+  const memoryStore = {};
+
+  function storageGet(key) {
     try {
-      // Allow raw IDs
-      if (/^[\w-]{11}$/.test(u)) return u;
-
-      const x = new URL(u);
-      // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
-      }
-      // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
-
-      // youtube.com/shorts/<id>
-      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (mShorts) return mShorts[1];
-
-      // youtube.com/embed/<id>
-      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
-      if (mEmbed) return mEmbed[1];
-
-      // Last resort: first 11-char token
-      const m = u.match(/([\w-]{11})/);
-      return m ? m[1] : "";
-    } catch {
-      const m = String(u).match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      const value = window.localStorage.getItem(key);
+      if (value != null) memoryStore[key] = value;
+      return value;
+    } catch (error) {
+      console.warn('localStorage getItem failed', error);
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
     }
-    const fallback = String(u).match(/([\w-]{11})/);
-    return fallback ? fallback[1] : "";
   }
 
-  function getYouTubeThumbnail(url) {
-    const id = extractYouTubeId(url);
-    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+  function storageSet(key, value) {
+    let ok = true;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage setItem failed', error);
+      ok = false;
+    }
+    memoryStore[key] = value;
+    return ok;
   }
 
   (function setupVideoModal() {
@@ -52,37 +75,16 @@
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let fallbackTimer = null;
-
-    function buildEmbed(id, host) {
-      const h = host || "www.youtube-nocookie.com";
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-    }
-
     window.openVideoModal = function (url) {
-      const id = extractYouTubeId(url);
-      if (!id) return window.open(url, "_blank", "noopener");
+      const embedUrl = getYouTubeEmbed(url);
+      if (!embedUrl) return window.open(url, '_blank', 'noopener');
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
       modal.hidden = false;
-
-      let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
-
-      fallbackTimer = setTimeout(() => {
-        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
-      }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
-      }
+      frame.src = embedUrl;
     };
 
     window.closeVideoModal = function () {
-      // stop video + hide
-      frame.src = "";
+      frame.src = '';
       modal.hidden = true;
     };
 
@@ -105,11 +107,12 @@
   }
 
   function saveFilters(filters) {
-    localStorage.setItem(LS_FILTER, JSON.stringify(filters));
+    const payload = JSON.stringify(filters || {});
+    storageSet(LS_FILTER, payload);
   }
   function loadFilters() {
     try {
-      return JSON.parse(localStorage.getItem(LS_FILTER) || '{}');
+      return JSON.parse(storageGet(LS_FILTER) || '{}');
     } catch { return {}; }
   }
 

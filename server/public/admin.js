@@ -1,3 +1,40 @@
+function getYouTubeId(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+    if (u.searchParams.has("v")) return u.searchParams.get("v");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p === "embed" || p === "shorts");
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+    return "";
+  } catch {
+    const m = String(url).match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
+    return m ? m[1] : "";
+  }
+}
+
+function getYouTubeThumbnail(url) {
+  const id = getYouTubeId(url);
+  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";
+}
+
+function getYouTubeEmbed(url, { host = "www.youtube.com", autoplay = true } = {}) {
+  const id = getYouTubeId(url);
+  if (!id) return "";
+  const params = new URLSearchParams({
+    modestbranding: "1",
+    rel: "0",
+    playsinline: "1",
+  });
+  if (autoplay) params.set("autoplay", "1");
+  return `https://${host}/embed/${id}?${params.toString()}`;
+}
+
+window.getYouTubeId = getYouTubeId;
+window.getYouTubeThumbnail = getYouTubeThumbnail;
+window.getYouTubeEmbed = getYouTubeEmbed;
+
 (function () {
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
@@ -7,9 +44,46 @@
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
+  const memoryStore = {};
+
+  function storageGet(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value != null) memoryStore[key] = value;
+      return value;
+    } catch (error) {
+      console.warn('localStorage getItem failed', error);
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+    }
+  }
+
+  function storageSet(key, value) {
+    let ok = true;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage setItem failed', error);
+      ok = false;
+    }
+    memoryStore[key] = value;
+    return ok;
+  }
+
+  function storageRemove(key) {
+    let ok = true;
+    try {
+      window.localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('localStorage removeItem failed', error);
+      ok = false;
+    }
+    delete memoryStore[key];
+    return ok;
+  }
+
   if (keyInput) {
     keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
-    const saved = localStorage.getItem('CK_ADMIN_KEY');
+    const saved = storageGet('CK_ADMIN_KEY');
     if (!saved) keyInput.value = ADMIN_KEY_DEFAULT;
   }
 
@@ -42,103 +116,51 @@
     document.body.appendChild(m);
   }
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
-    try {
-      // Allow raw IDs
-      if (/^[\w-]{11}$/.test(u)) return u;
-
-      const x = new URL(u);
-      // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
-      }
-      // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
-
-      // youtube.com/shorts/<id>
-      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (mShorts) return mShorts[1];
-
-      // youtube.com/embed/<id>
-      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
-      if (mEmbed) return mEmbed[1];
-
-      // Last resort: first 11-char token
-      const m = u.match(/([\w-]{11})/);
-      return m ? m[1] : "";
-    } catch {
-      const m = String(u).match(/([\w-]{11})/);
-      return m ? m[1] : "";
-    }
-
-    function waitForReady(oframe, timeout = 1800) {
-      return new Promise((resolve, reject) => {
-        let timer = null;
-        let settled = false;
-
-        const finish = (fn, value) => {
-          if (settled) return;
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          window.removeEventListener("message", onMessage);
-          fn(value);
-        };
-
-        function onMessage(event) {
-          if (event.source !== oframe.contentWindow) return;
-          let payload = event.data;
-          if (typeof payload === "string") {
-            try {
-              payload = JSON.parse(payload);
-            } catch (error) {
-              // ignore non-JSON payloads
-            }
-          }
-          if (payload && payload.event === "onReady") {
-            finish(resolve);
-          }
-        }
-
   (function setupVideoModal() {
     const modal = document.getElementById("videoModal");
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
     let fallbackTimer = null;
+    let loadListener = null;
 
-    function buildEmbed(id, host) {
-      const h = host || "www.youtube-nocookie.com";
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    function cleanupListeners() {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      if (loadListener) {
+        frame.removeEventListener('load', loadListener);
+        loadListener = null;
+      }
     }
 
     window.openVideoModal = function (url) {
-      const id = extractYouTubeId(url);
-      if (!id) return window.open(url, "_blank", "noopener");
+      const nocookie = getYouTubeEmbed(url, { host: 'www.youtube-nocookie.com' });
+      const fallback = getYouTubeEmbed(url, { host: 'www.youtube.com' });
+      const target = nocookie || fallback;
+      if (!target) return window.open(url, '_blank', 'noopener');
 
-      // try nocookie, fallback to regular if it doesn't load quickly
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      cleanupListeners();
       modal.hidden = false;
+      frame.src = target;
 
       let loaded = false;
-      const onload = () => { loaded = true; cleanupListeners(); };
-      frame.addEventListener("load", onload, { once: true });
+      loadListener = () => {
+        loaded = true;
+        cleanupListeners();
+      };
+      frame.addEventListener('load', loadListener, { once: true });
 
-      fallbackTimer = setTimeout(() => {
-        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
-      }, 1500);
-
-      function cleanupListeners() {
-        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      if (nocookie && fallback && nocookie !== fallback) {
+        fallbackTimer = setTimeout(() => {
+          if (!loaded) frame.src = fallback;
+        }, 1500);
       }
     };
 
     window.closeVideoModal = function () {
-      // stop video + hide
+      cleanupListeners();
       frame.src = "";
       modal.hidden = true;
     };
@@ -159,16 +181,19 @@
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
-    return localStorage.getItem(ADMIN_KEY_STORAGE) || '';
+    return storageGet(ADMIN_KEY_STORAGE) || '';
   }
   function saveAdminKey(value) {
-    localStorage.setItem(ADMIN_KEY_STORAGE, value || '');
+    if (!value) {
+      return storageRemove(ADMIN_KEY_STORAGE);
+    }
+    return storageSet(ADMIN_KEY_STORAGE, value);
   }
 
   $('saveAdminKey')?.addEventListener('click', () => {
     const value = (keyInput?.value || '').trim();
-    saveAdminKey(value);
-    toast('Admin key saved');
+    const persisted = saveAdminKey(value);
+    toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
   });
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -178,7 +203,7 @@
 
   function getAdminKey(){
     const el = document.getElementById('adminKey');
-    return (localStorage.getItem('CK_ADMIN_KEY') || el?.value || '').trim();
+    return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
   }
   async function adminFetch(url, opts = {}) {
     const headers = { ...(opts.headers||{}), 'x-admin-key': getAdminKey() };
@@ -914,12 +939,12 @@ setupScanner({
   (function initToggle() {
     const toggle = $('adminShowUrls');
     if (!toggle) return;
-    const saved = localStorage.getItem(SHOW_URLS_KEY);
+    const saved = storageGet(SHOW_URLS_KEY);
     const show = saved === '1';
     toggle.checked = show;
     applyUrlToggle(show);
     toggle.addEventListener('change', () => {
-      localStorage.setItem(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
+      storageSet(SHOW_URLS_KEY, toggle.checked ? '1' : '0');
       applyUrlToggle(toggle.checked);
       loadRewards();
     });
