@@ -97,8 +97,20 @@
   }
 
   function getYouTubeThumbnail(url) {
-    const id = extractYouTubeId(url);
+    const id = getYouTubeId(url);
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
+  }
+
+  function getYouTubeEmbed(url, { host = 'www.youtube.com', autoplay = true } = {}) {
+    const id = getYouTubeId(url);
+    if (!id) return '';
+    const params = new URLSearchParams({
+      modestbranding: '1',
+      rel: '0',
+      playsinline: '1',
+    });
+    if (autoplay) params.set('autoplay', '1');
+    return `https://${host}/embed/${id}?${params.toString()}`;
   }
 
   (function setupVideoModal() {
@@ -126,8 +138,8 @@
     }
 
     window.openVideoModal = function (url) {
-      const id = extractYouTubeId(url);
-      if (!id) return window.open(url, "_blank", "noopener");
+      const embedUrl = getYouTubeEmbed(url);
+      if (!embedUrl) return window.open(url, '_blank', 'noopener');
 
       const currentToken = ++loadToken;
       frame.src = "";

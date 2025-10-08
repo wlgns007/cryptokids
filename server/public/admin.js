@@ -79,20 +79,20 @@
     document.body.appendChild(m);
   }
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
+  function getYouTubeId(u) {
+    if (!u) return '';
     try {
       // Allow raw IDs
       if (/^[\w-]{11}$/.test(u)) return u;
 
       const x = new URL(u);
       // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+      if (x.hostname.includes('youtu.be')) {
+        return (x.pathname.split('/')[1] || '').split('?')[0].split('&')[0];
       }
       // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
+      const v = x.searchParams.get('v');
+      if (v) return v.split('&')[0];
 
       // youtube.com/shorts/<id>
       const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
@@ -104,10 +104,10 @@
 
       // Last resort: first 11-char token
       const m = u.match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      return m ? m[1] : '';
     } catch {
       const m = String(u).match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      return m ? m[1] : '';
     }
   }
 
@@ -172,8 +172,10 @@
     }
 
     window.openVideoModal = function (url) {
-      const id = extractYouTubeId(url);
-      if (!id) return window.open(url, "_blank", "noopener");
+      const nocookie = getYouTubeEmbed(url, { host: 'www.youtube-nocookie.com' });
+      const fallback = getYouTubeEmbed(url, { host: 'www.youtube.com' });
+      const target = nocookie || fallback;
+      if (!target) return window.open(url, '_blank', 'noopener');
 
       const currentToken = ++loadToken;
       frame.src = "";
