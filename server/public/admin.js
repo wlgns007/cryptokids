@@ -42,105 +42,92 @@
     document.body.appendChild(m);
   }
 
-  const sanitizeYouTubeId = (value) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  // --- YouTube modal loader with onReady detection ---
+  (function () {
+    const modal = document.getElementById("videoModal");
+    const frame = document.getElementById("videoFrame");
+    if (!modal || !frame) return;
+
+    function extractYouTubeId(u){
+      if (!u) return "";
+      if (/^[\w-]{11}$/.test(u)) return u;
+      try{
+        const x=new URL(u);
+        if (x.hostname.includes("youtu.be")) return x.pathname.slice(1).split("/")[0];
+        const v=x.searchParams.get("v"); if (v) return v.split("&")[0];
+        let m=x.pathname.match(/\/shorts\/([\w-]{11})/); if (m) return m[1];
+        m=x.pathname.match(/\/embed\/([\w-]{11})/); if (m) return m[1];
+      }catch{}
+      const m=String(u).match(/([\w-]{11})/); return m?m[1]:"";
+    }
+
+    function buildEmbed(id, host){
+      return `https://${host}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${location.origin}`;
+    }
+
+    function waitForReady(oframe, timeout=1800){
+      return new Promise((resolve,reject)=>{
+        let t=setTimeout(()=>{cleanup();reject(new Error("yt-timeout"));}, timeout);
+        function onMsg(ev){
+          if (ev.source!==oframe.contentWindow) return;
+          let d=ev.data; if (typeof d==="string"){ try{ d=JSON.parse(d); }catch{} }
+          if (d && d.event==="onReady"){ cleanup(); resolve(); }
+        }
+        function cleanup(){ clearTimeout(t); window.removeEventListener("message", onMsg); }
+        window.addEventListener("message", onMsg);
+      });
+    }
+
+    window.openVideoModal = async function(url){
+      const id = extractYouTubeId(url);
+      if (!id){ window.open(url,"_blank","noopener"); return; }
+      modal.hidden = false;
+
+      try{
+        frame.src = buildEmbed(id,"www.youtube-nocookie.com");
+        await waitForReady(frame);
+      }catch{
+        try{
+          frame.src = buildEmbed(id,"www.youtube.com");
+          await waitForReady(frame);
+        }catch{
+          // both blocked → graceful fallback
+          window.open(`https://www.youtube.com/watch?v=${id}`,"_blank","noopener");
+          closeVideoModal();
+        }
+      }
+    };
+
+    window.closeVideoModal = function(){
+      frame.src = "";            // stop playback
+      modal.hidden = true;
+    };
+  })();
+
+  // Close wiring (admin)
+  document.querySelector("#videoModal .modal-backdrop")
+    ?.addEventListener("click", () => closeVideoModal());
+  document.querySelector("#videoModal .modal-close")
+    ?.addEventListener("click", () => closeVideoModal());
+  window.addEventListener("keydown", (e)=>{ if(e.key==="Escape") closeVideoModal(); });
 
   function extractYouTubeId(u) {
-    if (!u) return '';
+    if (!u) return "";
+    if (/^[\w-]{11}$/.test(u)) return u;
     try {
-      const parsed = new URL(String(u).trim());
-      const host = parsed.hostname.toLowerCase();
-      if (host.includes('youtu.be')) {
-        return sanitizeYouTubeId(parsed.pathname.slice(1));
-      }
-      if (host.includes('youtube')) {
-        const queryId = parsed.searchParams.get('v');
-        if (queryId) return sanitizeYouTubeId(queryId);
-        const match = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/);
-        if (match) return sanitizeYouTubeId(match[1]);
-      }
-      return '';
-    } catch {
-      return sanitizeYouTubeId(typeof u === 'string' ? u : '');
-    }
+      const x = new URL(u);
+      if (x.hostname.includes("youtu.be")) return x.pathname.slice(1).split("/")[0];
+      const v = x.searchParams.get("v"); if (v) return v.split("&")[0];
+      let m = x.pathname.match(/\/shorts\/([\w-]{11})/); if (m) return m[1];
+      m = x.pathname.match(/\/embed\/([\w-]{11})/); if (m) return m[1];
+    } catch {}
+    const m = String(u).match(/([\w-]{11})/); return m ? m[1] : "";
   }
 
   function getYouTubeThumbnail(url) {
     const id = extractYouTubeId(url);
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
-
-  function openVideoModal(url) {
-    if (!url) return;
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    const id = extractYouTubeId(url);
-    if (!id) {
-      frame.src = '';
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-    frame.src = embed;
-    modal.hidden = false;
-  }
-
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    frame.src = '';
-    modal.hidden = true;
-  }
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
-
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    clearVideoListeners();
-    frame.onload = null;
-    frame.src = '';
-    modal.hidden = true;
-  }
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
   function loadAdminKey() {
