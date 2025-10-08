@@ -152,38 +152,27 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     const modal = document.getElementById("videoModal");
     if (!modal) return;
 
-    window.openVideoModalById = function openVideoModalById(videoId) {
-      if (!videoId) return console.warn("openVideoModalById: missing videoId");
-      return window.openVideoModal(videoId);
-    };
-
-    window.openVideoModal = function openVideoModal(urlOrId) {
-      const id = (window.getYouTubeId ? getYouTubeId(urlOrId) : "") || urlOrId;
-      if (!id) return console.warn("openVideoModal: missing id/url", urlOrId);
-
-      const modalEl = document.getElementById("videoModal");
-      const iframe = modalEl?.querySelector("iframe");
-      const link = document.getElementById("openOnYouTube");
-      if (!modalEl || !iframe) return console.error("videoModal/iframe missing");
-
-      const src = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
-      iframe.removeAttribute("sandbox");
-      iframe.src = src;
-
-      if (link) link.href = `https://www.youtube.com/watch?v=${id}`;
-
-      modalEl.classList.remove("hidden");
-      modalEl.classList.add("open");
+    window.openVideoModal = function openVideoModal(url) {
+      const id = window.getYouTubeId ? getYouTubeId(url) : "";
+      if (!id) {
+        console.warn("openVideoModal: no video id for url:", url);
+        return;
+      }
+      const iframe = modal?.querySelector("iframe");
+      if (!iframe) {
+        console.error("openVideoModal: modal/iframe not found");
+        return;
+      }
+      iframe.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
+      modal.classList.remove("hidden");
+      modal.classList.add("open");
     };
 
     window.closeVideoModal = function closeVideoModal() {
-      const modalEl = document.getElementById("videoModal");
-      const iframe = modalEl?.querySelector("iframe");
+      const iframe = modal?.querySelector("iframe");
       if (iframe) iframe.src = "";
-      if (modalEl) {
-        modalEl.classList.remove("open");
-        modalEl.classList.add("hidden");
-      }
+      modal.classList.remove("open");
+      modal.classList.add("hidden");
     };
 
     // Close on backdrop or [data-close]
