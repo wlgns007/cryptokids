@@ -1,3 +1,40 @@
+function getYouTubeId(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+    if (u.searchParams.has("v")) return u.searchParams.get("v");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p === "embed" || p === "shorts");
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+    return "";
+  } catch {
+    const m = String(url).match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
+    return m ? m[1] : "";
+  }
+}
+
+function getYouTubeThumbnail(url) {
+  const id = getYouTubeId(url);
+  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";
+}
+
+function getYouTubeEmbed(url, { host = "www.youtube.com", autoplay = true } = {}) {
+  const id = getYouTubeId(url);
+  if (!id) return "";
+  const params = new URLSearchParams({
+    modestbranding: "1",
+    rel: "0",
+    playsinline: "1",
+  });
+  if (autoplay) params.set("autoplay", "1");
+  return `https://${host}/embed/${id}?${params.toString()}`;
+}
+
+window.getYouTubeId = getYouTubeId;
+window.getYouTubeThumbnail = getYouTubeThumbnail;
+window.getYouTubeEmbed = getYouTubeEmbed;
+
 (function () {
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
