@@ -8,62 +8,92 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
-  const memoryStore = {};
+    function extractYouTubeId(u) {
+      if (!u) return "";
+      try {
+        // Allow raw IDs
+        if (/^[\w-]{11}$/.test(u)) return u;
 
-  function storageGet(key) {
-    try {
-      const value = window.localStorage.getItem(key);
-      if (value != null) memoryStore[key] = value;
-      return value;
-    } catch (error) {
-      console.warn('localStorage getItem failed', error);
-      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
-    }
-  }
+        const x = new URL(u);
+        // youtu.be/<id>
+        if (x.hostname.includes("youtu.be")) {
+          return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        }
+        // youtube.com/watch?v=<id>
+        const v = x.searchParams.get("v");
+        if (v) return v.split("&")[0];
 
-  function storageSet(key, value) {
-    let ok = true;
-    try {
-      window.localStorage.setItem(key, value);
-    } catch (error) {
-      console.warn('localStorage setItem failed', error);
-      ok = false;
-    }
-    memoryStore[key] = value;
-    return ok;
-  }
+        // youtube.com/shorts/<id>
+        const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+        if (mShorts) return mShorts[1];
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
-    try {
-      // Allow raw IDs
-      if (/^[\w-]{11}$/.test(u)) return u;
+        // youtube.com/embed/<id>
+        const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+        if (mEmbed) return mEmbed[1];
 
-      const x = new URL(u);
-      // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        // Last resort: first 11-char token
+        const m = u.match(/([\w-]{11})/);
+        if (m) return m[1];
+      } catch {
+        // ignore parsing errors and fall back to loose matching below
       }
-      // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
-
-      // youtube.com/shorts/<id>
-      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (mShorts) return mShorts[1];
-
-      // youtube.com/embed/<id>
-      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
-      if (mEmbed) return mEmbed[1];
-
-      // Last resort: first 11-char token
-      const m = u.match(/([\w-]{11})/);
-      if (m) return m[1];
-    } catch {
-      // ignore parsing errors and fall back to loose matching below
+      const fallback = String(u).match(/([\w-]{11})/);
+      return fallback ? fallback[1] : "";
     }
-    const fallback = String(u).match(/([\w-]{11})/);
-    return fallback ? fallback[1] : "";
+
+  function waitForReady(oframe, timeout = 2000) {
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let settled = false;
+      let handshake = null;
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (handshake) {
+          clearInterval(handshake);
+          handshake = null;
+        }
+        window.removeEventListener('message', onMessage);
+        fn(value);
+      };
+
+      function onMessage(event) {
+        if (event.source !== oframe.contentWindow) return;
+        let payload = event.data;
+        if (typeof payload === 'string') {
+          try {
+            payload = JSON.parse(payload);
+          } catch (error) {
+            // ignore
+          }
+        }
+        if (payload && payload.event === 'onReady') {
+          finish(resolve);
+        }
+      }
+
+      function sendHandshake() {
+        try {
+          const target = oframe.contentWindow;
+          if (!target) return;
+          const payload = JSON.stringify({ event: 'listening', channel: 'widget', id: oframe.id || 'ck-video' });
+          target.postMessage(payload, '*');
+        } catch (error) {
+          console.warn('iframe handshake failed', error);
+        }
+      }
+
+      window.addEventListener('message', onMessage);
+      sendHandshake();
+      handshake = setInterval(sendHandshake, 400);
+      oframe.addEventListener('load', sendHandshake, { once: true });
+      timer = setTimeout(() => finish(reject, new Error('timeout')), timeout);
+    });
   }
 
   function getYouTubeThumbnail(url) {
@@ -76,12 +106,12 @@
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let fallbackTimer = null;
-    let loadListener = null;
+    let loadToken = 0;
 
     function buildEmbed(id, host) {
       const h = host || "www.youtube-nocookie.com";
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+      const origin = encodeURIComponent(window.location.origin || "null");
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
     }
 
     function cleanupListeners() {
@@ -99,26 +129,41 @@
       const id = extractYouTubeId(url);
       if (!id) return window.open(url, "_blank", "noopener");
 
-      cleanupListeners();
+      const currentToken = ++loadToken;
+      frame.src = "";
       modal.hidden = false;
       frame.src = buildEmbed(id, "www.youtube-nocookie.com");
 
-      let loaded = false;
-      loadListener = () => {
-        loaded = true;
-        cleanupListeners();
+      const tryHost = async (host) => {
+        frame.src = buildEmbed(id, host);
+        try {
+          await waitForReady(frame, 2500);
+          if (currentToken !== loadToken) return false;
+          frame.dataset.videoHost = host;
+          return true;
+        } catch (error) {
+          if (currentToken !== loadToken) return false;
+          console.warn(`YouTube host ${host} did not become ready`, error);
+          return false;
+        }
       };
-      frame.addEventListener('load', loadListener, { once: true });
 
-      fallbackTimer = setTimeout(() => {
-        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
-      }, 1500);
+      (async () => {
+        if (await tryHost("www.youtube-nocookie.com")) return;
+        if (await tryHost("www.youtube.com")) return;
+        if (currentToken !== loadToken) return;
+        closeVideoModal();
+        alert('Unable to load the video player. Opening YouTube in a new tab.');
+        window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
+      })();
     };
 
     window.closeVideoModal = function () {
-      cleanupListeners();
+      loadToken++;
+      // stop video + hide
       frame.src = "";
       modal.hidden = true;
+      delete frame.dataset.videoHost;
     };
 
     // Close on backdrop or [data-close]
