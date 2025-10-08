@@ -154,96 +154,27 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     const modal = document.getElementById("videoModal");
     if (!modal) return;
 
-    window.openVideoModalById = function openVideoModalById(videoId) {
-      if (!videoId) return console.warn("openVideoModalById: missing videoId");
-      return window.openVideoModal(videoId);
-    };
-
-    window.openVideoModal = function openVideoModal(urlOrId) {
-      const id = (window.getYouTubeId ? getYouTubeId(urlOrId) : "") || urlOrId;
-      if (!id) return console.warn("openVideoModal: missing id/url", urlOrId);
-
-      const modalEl = document.getElementById("videoModal");
-      const iframe = modalEl?.querySelector("iframe");
-      if (!modalEl || !iframe) return console.error("videoModal/iframe missing");
-
-      const nocookie = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
-      const regular = `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
-
-      let fallbackTimer = 0;
-      const cancelFallback = () => {
-        if (fallbackTimer) {
-          clearTimeout(fallbackTimer);
-          fallbackTimer = 0;
-        }
-      };
-
-      const swapToRegular = (reason) => {
-        if (iframe.dataset.youtubeMode === "regular") return;
-        iframe.dataset.youtubeMode = "regular";
-        cancelFallback();
-        iframe.dataset.youtubeFailure = reason || "";
-        iframe.src = "";
-        requestAnimationFrame(() => {
-          iframe.src = regular;
-        });
-      };
-
-      iframe.onload = () => {
-        const currentSrc = iframe.getAttribute("src") || "";
-        if (!currentSrc) return; // ignore transient about:blank loads
-        if (!currentSrc.includes("youtube-nocookie.com")) {
-          cancelFallback();
-          return;
-        }
-        try {
-          const doc = iframe.contentDocument;
-          const text = doc?.body?.textContent?.toLowerCase() || "";
-          const blockedPhrases = [
-            "closed the connection",
-            "can't be reached",
-            "refused to connect",
-            "took too long",
-            "can't reach this page",
-          ];
-          const blocked = blockedPhrases.some((phrase) => text.includes(phrase));
-          if (blocked) {
-            swapToRegular("edge-block");
-            return;
-          }
-          if (doc) {
-            swapToRegular("accessible-doc");
-            return;
-          }
-          cancelFallback();
-        } catch {
-          cancelFallback();
-        }
-      };
-
-      iframe.onerror = () => swapToRegular("error");
-
-      iframe.dataset.youtubeMode = "nocookie";
-      iframe.dataset.youtubeFailure = "";
-      iframe.src = nocookie;
-
-      fallbackTimer = window.setTimeout(() => swapToRegular("timeout"), 1800);
-
-      const link = document.getElementById("openOnYouTube");
-      if (link) link.href = `https://www.youtube.com/watch?v=${id}`;
-
-      modalEl.classList.remove("hidden");
-      modalEl.classList.add("open");
+    window.openVideoModal = function openVideoModal(url) {
+      const id = window.getYouTubeId ? getYouTubeId(url) : "";
+      if (!id) {
+        console.warn("openVideoModal: no video id for url:", url);
+        return;
+      }
+      const iframe = modal?.querySelector("iframe");
+      if (!iframe) {
+        console.error("openVideoModal: modal/iframe not found");
+        return;
+      }
+      iframe.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
+      modal.classList.remove("hidden");
+      modal.classList.add("open");
     };
 
     window.closeVideoModal = function closeVideoModal() {
-      const modalEl = document.getElementById("videoModal");
-      const iframe = modalEl?.querySelector("iframe");
+      const iframe = modal?.querySelector("iframe");
       if (iframe) iframe.src = "";
-      if (modalEl) {
-        modalEl.classList.remove("open");
-        modalEl.classList.add("hidden");
-      }
+      modal.classList.remove("open");
+      modal.classList.add("hidden");
     };
 
     // Close on backdrop or [data-close]
