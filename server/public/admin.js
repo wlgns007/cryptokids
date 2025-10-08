@@ -42,103 +42,139 @@
     document.body.appendChild(m);
   }
 
-  const sanitizeYouTubeId = (value) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const extractYouTubeId = (() => {
+    if (typeof window.extractYouTubeId === 'function') return window.extractYouTubeId;
 
-  function extractYouTubeId(u) {
-    if (!u) return '';
-    try {
-      const parsed = new URL(String(u).trim());
-      const host = parsed.hostname.toLowerCase();
-      if (host.includes('youtu.be')) {
-        return sanitizeYouTubeId(parsed.pathname.slice(1));
+    function parseId(u) {
+      if (!u) return '';
+      if (/^[\w-]{11}$/.test(u)) return u;
+      try {
+        const parsed = new URL(u);
+        if (parsed.hostname.includes('youtu.be')) {
+          return parsed.pathname.slice(1).split('/')[0];
+        }
+        const v = parsed.searchParams.get('v');
+        if (v) return v.split('&')[0];
+        let match = parsed.pathname.match(/\/shorts\/([\w-]{11})/);
+        if (match) return match[1];
+        match = parsed.pathname.match(/\/embed\/([\w-]{11})/);
+        if (match) return match[1];
+      } catch (error) {
+        // ignore parsing failures
       }
-      if (host.includes('youtube')) {
-        const queryId = parsed.searchParams.get('v');
-        if (queryId) return sanitizeYouTubeId(queryId);
-        const match = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/);
-        if (match) return sanitizeYouTubeId(match[1]);
-      }
-      return '';
-    } catch {
-      return sanitizeYouTubeId(typeof u === 'string' ? u : '');
+      const fallback = String(u).match(/([\w-]{11})/);
+      return fallback ? fallback[1] : '';
     }
-  }
+
+    window.extractYouTubeId = parseId;
+    return parseId;
+  })();
 
   function getYouTubeThumbnail(url) {
     const id = extractYouTubeId(url);
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  function openVideoModal(url) {
-    if (!url) return;
+  // --- YouTube modal loader with onReady detection ---
+  (function () {
     const modal = document.getElementById('videoModal');
     const frame = document.getElementById('videoFrame');
     if (!modal || !frame) return;
-    const id = extractYouTubeId(url);
-    if (!id) {
+
+    function buildEmbed(id, host) {
+      const params = new URLSearchParams({
+        autoplay: '1',
+        modestbranding: '1',
+        rel: '0',
+        playsinline: '1',
+        enablejsapi: '1'
+      });
+      if (typeof location === 'object' && location && location.origin) {
+        params.set('origin', location.origin);
+      }
+      return 'https://' + host + '/embed/' + id + '?' + params.toString();
+    }
+
+    function waitForReady(oframe, timeout = 1800) {
+      return new Promise((resolve, reject) => {
+        let timer = null;
+        let settled = false;
+
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          window.removeEventListener('message', onMessage);
+          fn(value);
+        };
+
+        function onMessage(event) {
+          if (event.source !== oframe.contentWindow) return;
+          let payload = event.data;
+          if (typeof payload === 'string') {
+            try {
+              payload = JSON.parse(payload);
+            } catch (error) {
+              // ignore non-JSON payloads
+            }
+          }
+          if (payload && payload.event === 'onReady') {
+            finish(resolve);
+          }
+        }
+
+        window.addEventListener('message', onMessage);
+        timer = setTimeout(() => finish(reject, new Error('yt-timeout')), timeout);
+      });
+    }
+
+    window.openVideoModal = async function openVideoModal(url) {
+      const id = extractYouTubeId(url);
+      if (!id) {
+        window.open(url, '_blank', 'noopener');
+        return;
+      }
+
+      modal.hidden = false;
+
+      try {
+        frame.src = buildEmbed(id, 'www.youtube-nocookie.com');
+        await waitForReady(frame);
+      } catch (nocookieError) {
+        try {
+          frame.src = buildEmbed(id, 'www.youtube.com');
+          await waitForReady(frame);
+        } catch (youtubeError) {
+          window.open('https://www.youtube.com/watch?v=' + id, '_blank', 'noopener');
+          closeVideoModal();
+        }
+      }
+    };
+
+    window.closeVideoModal = function closeVideoModal() {
       frame.src = '';
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
+      modal.hidden = true;
+    };
+  })();
+
+  // Close wiring (admin)
+  {
+    const backdrop = document.querySelector('#videoModal .modal-backdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', () => closeVideoModal());
     }
-    const embed = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
-    frame.src = embed;
-    modal.hidden = false;
+    const closeButton = document.querySelector('#videoModal .modal-close');
+    if (closeButton) {
+      closeButton.addEventListener('click', () => closeVideoModal());
+    }
   }
-
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    frame.src = '';
-    modal.hidden = true;
-  }
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
-    }
-  });
-
-  function closeVideoModal() {
-    const modal = document.getElementById('videoModal');
-    const frame = document.getElementById('videoFrame');
-    if (!modal || !frame) return;
-    clearVideoListeners();
-    frame.onload = null;
-    frame.src = '';
-    modal.hidden = true;
-  }
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('[data-close]')) {
-      event.preventDefault();
-      closeVideoModal();
-    }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeVideoModal();
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('videoModal');
+      if (modal && !modal.hidden) closeVideoModal();
     }
   });
 
