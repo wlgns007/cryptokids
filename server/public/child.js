@@ -8,63 +8,38 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
-  const memoryStore = {};
+    function extractYouTubeId(u) {
+      if (!u) return "";
+      try {
+        // Allow raw IDs
+        if (/^[\w-]{11}$/.test(u)) return u;
 
-  function storageGet(key) {
-    try {
-      const value = window.localStorage.getItem(key);
-      if (value != null) memoryStore[key] = value;
-      return value;
-    } catch (error) {
-      console.warn('localStorage getItem failed', error);
-      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
-    }
-  }
+        const x = new URL(u);
+        // youtu.be/<id>
+        if (x.hostname.includes("youtu.be")) {
+          return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        }
+        // youtube.com/watch?v=<id>
+        const v = x.searchParams.get("v");
+        if (v) return v.split("&")[0];
 
-  function storageSet(key, value) {
-    let ok = true;
-    try {
-      window.localStorage.setItem(key, value);
-    } catch (error) {
-      console.warn('localStorage setItem failed', error);
-      ok = false;
-    }
-    memoryStore[key] = value;
-    return ok;
-  }
+        // youtube.com/shorts/<id>
+        const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+        if (mShorts) return mShorts[1];
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
-    try {
-      // Allow raw IDs
-      if (/^[\w-]{11}$/.test(u)) return u;
+        // youtube.com/embed/<id>
+        const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+        if (mEmbed) return mEmbed[1];
 
-      const x = new URL(u);
-      // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        // Last resort: first 11-char token
+        const m = u.match(/([\w-]{11})/);
+        if (m) return m[1];
+      } catch {
+        // ignore parsing errors and fall back to loose matching below
       }
-      // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
-
-      // youtube.com/shorts/<id>
-      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (mShorts) return mShorts[1];
-
-      // youtube.com/embed/<id>
-      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
-      if (mEmbed) return mEmbed[1];
-
-      // Last resort: first 11-char token
-      const m = u.match(/([\w-]{11})/);
-      if (m) return m[1];
-    } catch {
-      // ignore parsing errors and fall back to loose matching below
+      const fallback = String(u).match(/([\w-]{11})/);
+      return fallback ? fallback[1] : "";
     }
-    const fallback = String(u).match(/([\w-]{11})/);
-    return fallback ? fallback[1] : "";
-  }
 
   function waitForReady(oframe, timeout = 2000) {
     return new Promise((resolve, reject) => {

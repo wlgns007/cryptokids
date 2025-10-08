@@ -111,11 +111,10 @@
     }
   }
 
-  function waitForReady(oframe, timeout = 2000) {
+  function waitForReady(oframe, timeout = 1800) {
     return new Promise((resolve, reject) => {
       let timer = null;
       let settled = false;
-      let handshake = null;
 
       const finish = (fn, value) => {
         if (settled) return;
@@ -123,10 +122,6 @@
         if (timer) {
           clearTimeout(timer);
           timer = null;
-        }
-        if (handshake) {
-          clearInterval(handshake);
-          handshake = null;
         }
         window.removeEventListener("message", onMessage);
         fn(value);
@@ -147,21 +142,7 @@
         }
       }
 
-      function sendHandshake() {
-        try {
-          const target = oframe.contentWindow;
-          if (!target) return;
-          const payload = JSON.stringify({ event: "listening", channel: "widget", id: oframe.id || "ck-video" });
-          target.postMessage(payload, "*");
-        } catch (error) {
-          console.warn("iframe handshake failed", error);
-        }
-      }
-
       window.addEventListener("message", onMessage);
-      sendHandshake();
-      handshake = setInterval(sendHandshake, 400);
-      oframe.addEventListener("load", sendHandshake, { once: true });
       timer = setTimeout(() => finish(reject, new Error("timeout")), timeout);
     });
   }
