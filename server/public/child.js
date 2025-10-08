@@ -8,39 +8,38 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
-  function extractYouTubeId(u) {
-    if (!u) return "";
-    try {
-      // Allow raw IDs
-      if (/^[\w-]{11}$/.test(u)) return u;
+    function extractYouTubeId(u) {
+      if (!u) return "";
+      try {
+        // Allow raw IDs
+        if (/^[\w-]{11}$/.test(u)) return u;
 
-      const x = new URL(u);
-      // youtu.be/<id>
-      if (x.hostname.includes("youtu.be")) {
-        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        const x = new URL(u);
+        // youtu.be/<id>
+        if (x.hostname.includes("youtu.be")) {
+          return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
+        }
+        // youtube.com/watch?v=<id>
+        const v = x.searchParams.get("v");
+        if (v) return v.split("&")[0];
+
+        // youtube.com/shorts/<id>
+        const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+        if (mShorts) return mShorts[1];
+
+        // youtube.com/embed/<id>
+        const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+        if (mEmbed) return mEmbed[1];
+
+        // Last resort: first 11-char token
+        const m = u.match(/([\w-]{11})/);
+        if (m) return m[1];
+      } catch {
+        // ignore parsing errors and fall back to loose matching below
       }
-      // youtube.com/watch?v=<id>
-      const v = x.searchParams.get("v");
-      if (v) return v.split("&")[0];
-
-      // youtube.com/shorts/<id>
-      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (mShorts) return mShorts[1];
-
-      // youtube.com/embed/<id>
-      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
-      if (mEmbed) return mEmbed[1];
-
-      // Last resort: first 11-char token
-      const m = u.match(/([\w-]{11})/);
-      return m ? m[1] : "";
-    } catch {
-      const m = String(u).match(/([\w-]{11})/);
-      return m ? m[1] : "";
+      const fallback = String(u).match(/([\w-]{11})/);
+      return fallback ? fallback[1] : "";
     }
-    const fallback = String(u).match(/([\w-]{11})/);
-    return fallback ? fallback[1] : "";
-  }
 
   function getYouTubeThumbnail(url) {
     const id = extractYouTubeId(url);
