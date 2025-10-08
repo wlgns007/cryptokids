@@ -59,7 +59,8 @@
       z-index: 1000;
     }
 
-    .modal[hidden] {
+    .modal[hidden],
+    .modal.hidden {
       display: none;
     }
 
@@ -906,13 +907,27 @@
   <div id="toastHost" class="toast-host" aria-live="polite"></div>
 
   <!-- Video Modal -->
-  <div id="videoModal" class="modal" hidden>
+  <div id="videoModal" class="modal hidden">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-dialog">
       <button class="modal-close" type="button" aria-label="Close" data-close>×</button>
       <div class="modal-body">
-        <iframe id="videoFrame" title="Reward video"
-          allow="autoplay; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe>
+        <iframe
+          id="videoFrame"
+          width="100%"
+          height="480"
+          src=""
+          title="YouTube video"
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowfullscreen
+        ></iframe>
+        <a
+          id="openOnYouTube"
+          target="_blank"
+          rel="noopener"
+          class="text-xs opacity-70"
+        >Open on YouTube</a>
       </div>
     </div>
   </div>
