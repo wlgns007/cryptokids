@@ -72,12 +72,37 @@
       const m = String(u).match(/([\w-]{11})/);
       return m ? m[1] : "";
     }
-  }
 
-  function getYouTubeThumbnail(url) {
-    const id = extractYouTubeId(url);
-    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
-  }
+    function waitForReady(oframe, timeout = 1800) {
+      return new Promise((resolve, reject) => {
+        let timer = null;
+        let settled = false;
+
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          window.removeEventListener("message", onMessage);
+          fn(value);
+        };
+
+        function onMessage(event) {
+          if (event.source !== oframe.contentWindow) return;
+          let payload = event.data;
+          if (typeof payload === "string") {
+            try {
+              payload = JSON.parse(payload);
+            } catch (error) {
+              // ignore non-JSON payloads
+            }
+          }
+          if (payload && payload.event === "onReady") {
+            finish(resolve);
+          }
+        }
 
   (function setupVideoModal() {
     const modal = document.getElementById("videoModal");

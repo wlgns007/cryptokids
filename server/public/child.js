@@ -38,6 +38,8 @@
       const m = String(u).match(/([\w-]{11})/);
       return m ? m[1] : "";
     }
+    const fallback = String(u).match(/([\w-]{11})/);
+    return fallback ? fallback[1] : "";
   }
 
   function getYouTubeThumbnail(url) {
