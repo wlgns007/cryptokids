@@ -8,113 +8,35 @@
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
-  // --- YouTube modal loader with onReady detection ---
-  (function () {
-    const modal = document.getElementById("videoModal");
-    const frame = document.getElementById("videoFrame");
-    if (!modal || !frame) return;
-
-    function buildEmbed(id, host) {
-      return `https://${host}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${location.origin}`;
-    }
-
-    function waitForReady(oframe, timeout = 1800) {
-      return new Promise((resolve, reject) => {
-        let timer = null;
-        let settled = false;
-
-        const finish = (fn, value) => {
-          if (settled) return;
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          window.removeEventListener("message", onMessage);
-          fn(value);
-        };
-
-        function onMessage(event) {
-          if (event.source !== oframe.contentWindow) return;
-          let payload = event.data;
-          if (typeof payload === "string") {
-            try {
-              payload = JSON.parse(payload);
-            } catch (error) {
-              // ignore non-JSON payloads
-            }
-          }
-          if (payload && payload.event === "onReady") {
-            finish(resolve);
-          }
-        }
-
-        window.addEventListener("message", onMessage);
-        timer = setTimeout(() => finish(reject, new Error("yt-timeout")), timeout);
-      });
-    }
-
-    window.openVideoModal = async function openVideoModal(url) {
-      const id = extractYouTubeId(url);
-      if (!id) {
-        window.open(url, "_blank", "noopener");
-        return;
-      }
-
-      modal.hidden = false;
-
-      try {
-        frame.src = buildEmbed(id, "www.youtube-nocookie.com");
-        await waitForReady(frame);
-      } catch (nocookieError) {
-        try {
-          frame.src = buildEmbed(id, "www.youtube.com");
-          await waitForReady(frame);
-        } catch (youtubeError) {
-          window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
-          closeVideoModal();
-        }
-      }
-    };
-
-    window.closeVideoModal = function closeVideoModal() {
-      frame.src = "";
-      modal.hidden = true;
-    };
-  })();
-
-  (function setupModalClosers() {
-    const modal = document.getElementById("videoModal");
-    if (!modal) return;
-
-    modal.addEventListener("click", (e) => {
-      if (e.target.matches("[data-close]") || e.target === modal.querySelector(".modal-backdrop")) {
-        e.preventDefault();
-        closeVideoModal();
-      }
-    });
-
-    window.addEventListener("keydown", (e) => {
-      if (!modal.hidden && e.key === "Escape") closeVideoModal();
-    });
-  })();
-
   function extractYouTubeId(u) {
     if (!u) return "";
-    if (/^[\w-]{11}$/.test(u)) return u;
     try {
-      const parsed = new URL(u);
-      if (parsed.hostname.includes("youtu.be")) {
-        return parsed.pathname.slice(1).split("/")[0];
+      // Allow raw IDs
+      if (/^[\w-]{11}$/.test(u)) return u;
+
+      const x = new URL(u);
+      // youtu.be/<id>
+      if (x.hostname.includes("youtu.be")) {
+        return (x.pathname.split("/")[1] || "").split("?")[0].split("&")[0];
       }
-      const v = parsed.searchParams.get("v");
+      // youtube.com/watch?v=<id>
+      const v = x.searchParams.get("v");
       if (v) return v.split("&")[0];
-      let match = parsed.pathname.match(/\/shorts\/([\w-]{11})/);
-      if (match) return match[1];
-      match = parsed.pathname.match(/\/embed\/([\w-]{11})/);
-      if (match) return match[1];
-    } catch (error) {
-      // ignore parsing failures
+
+      // youtube.com/shorts/<id>
+      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+      if (mShorts) return mShorts[1];
+
+      // youtube.com/embed/<id>
+      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+      if (mEmbed) return mEmbed[1];
+
+      // Last resort: first 11-char token
+      const m = u.match(/([\w-]{11})/);
+      return m ? m[1] : "";
+    } catch {
+      const m = String(u).match(/([\w-]{11})/);
+      return m ? m[1] : "";
     }
     const fallback = String(u).match(/([\w-]{11})/);
     return fallback ? fallback[1] : "";
@@ -124,6 +46,59 @@
     const id = extractYouTubeId(url);
     return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
+
+  (function setupVideoModal() {
+    const modal = document.getElementById("videoModal");
+    const frame = document.getElementById("videoFrame");
+    if (!modal || !frame) return;
+
+    let fallbackTimer = null;
+
+    function buildEmbed(id, host) {
+      const h = host || "www.youtube-nocookie.com";
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1`;
+    }
+
+    window.openVideoModal = function (url) {
+      const id = extractYouTubeId(url);
+      if (!id) return window.open(url, "_blank", "noopener");
+
+      // try nocookie, fallback to regular if it doesn't load quickly
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
+      modal.hidden = false;
+
+      let loaded = false;
+      const onload = () => { loaded = true; cleanupListeners(); };
+      frame.addEventListener("load", onload, { once: true });
+
+      fallbackTimer = setTimeout(() => {
+        if (!loaded) frame.src = buildEmbed(id, "www.youtube.com");
+      }, 1500);
+
+      function cleanupListeners() {
+        if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      }
+    };
+
+    window.closeVideoModal = function () {
+      // stop video + hide
+      frame.src = "";
+      modal.hidden = true;
+    };
+
+    // Close on backdrop or [data-close]
+    modal.addEventListener("click", (e) => {
+      if (e.target.matches("[data-close]") || e.target === modal.querySelector(".modal-backdrop")) {
+        e.preventDefault();
+        closeVideoModal();
+      }
+    });
+
+    // Close on Esc
+    window.addEventListener("keydown", (e) => {
+      if (!modal.hidden && e.key === "Escape") closeVideoModal();
+    });
+  })();
 
   function getUserId() {
     return $('childUserId').value.trim();
