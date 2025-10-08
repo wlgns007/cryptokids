@@ -116,13 +116,86 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     document.body.appendChild(m);
   }
 
+  function getYouTubeId(u) {
+    if (!u) return '';
+    try {
+      // Allow raw IDs
+      if (/^[\w-]{11}$/.test(u)) return u;
+
+      const x = new URL(u);
+      // youtu.be/<id>
+      if (x.hostname.includes('youtu.be')) {
+        return (x.pathname.split('/')[1] || '').split('?')[0].split('&')[0];
+      }
+      // youtube.com/watch?v=<id>
+      const v = x.searchParams.get('v');
+      if (v) return v.split('&')[0];
+
+      // youtube.com/shorts/<id>
+      const mShorts = x.pathname.match(/\/shorts\/([\w-]{11})/);
+      if (mShorts) return mShorts[1];
+
+      // youtube.com/embed/<id>
+      const mEmbed = x.pathname.match(/\/embed\/([\w-]{11})/);
+      if (mEmbed) return mEmbed[1];
+
+      // Last resort: first 11-char token
+      const m = u.match(/([\w-]{11})/);
+      return m ? m[1] : '';
+    } catch {
+      const m = String(u).match(/([\w-]{11})/);
+      return m ? m[1] : '';
+    }
+  }
+
+  function waitForReady(oframe, timeout = 1800) {
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let settled = false;
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        window.removeEventListener("message", onMessage);
+        fn(value);
+      };
+
+      function onMessage(event) {
+        if (event.source !== oframe.contentWindow) return;
+        let payload = event.data;
+        if (typeof payload === "string") {
+          try {
+            payload = JSON.parse(payload);
+          } catch (error) {
+            // ignore non-JSON payloads
+          }
+        }
+        if (payload && payload.event === "onReady") {
+          finish(resolve);
+        }
+      }
+
+      window.addEventListener("message", onMessage);
+      timer = setTimeout(() => finish(reject, new Error("timeout")), timeout);
+    });
+  }
+
   (function setupVideoModal() {
     const modal = document.getElementById("videoModal");
     const frame = document.getElementById("videoFrame");
     if (!modal || !frame) return;
 
-    let fallbackTimer = null;
-    let loadListener = null;
+    let loadToken = 0;
+
+    function buildEmbed(id, host) {
+      const h = host || "www.youtube-nocookie.com";
+      const origin = encodeURIComponent(window.location.origin || "null");
+      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
+    }
 
     function cleanupListeners() {
       if (fallbackTimer) {
@@ -141,28 +214,41 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       const target = nocookie || fallback;
       if (!target) return window.open(url, '_blank', 'noopener');
 
-      cleanupListeners();
+      const currentToken = ++loadToken;
+      frame.src = "";
       modal.hidden = false;
-      frame.src = target;
+      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
 
-      let loaded = false;
-      loadListener = () => {
-        loaded = true;
-        cleanupListeners();
+      const tryHost = async (host) => {
+        frame.src = buildEmbed(id, host);
+        try {
+          await waitForReady(frame, 2500);
+          if (currentToken !== loadToken) return false;
+          frame.dataset.videoHost = host;
+          return true;
+        } catch (error) {
+          if (currentToken !== loadToken) return false;
+          console.warn(`YouTube host ${host} did not become ready`, error);
+          return false;
+        }
       };
-      frame.addEventListener('load', loadListener, { once: true });
 
-      if (nocookie && fallback && nocookie !== fallback) {
-        fallbackTimer = setTimeout(() => {
-          if (!loaded) frame.src = fallback;
-        }, 1500);
-      }
+      (async () => {
+        if (await tryHost("www.youtube-nocookie.com")) return;
+        if (await tryHost("www.youtube.com")) return;
+        if (currentToken !== loadToken) return;
+        closeVideoModal();
+        toast("Unable to load the video player. Opening YouTube in a new tab.", "error");
+        window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
+      })();
     };
 
     window.closeVideoModal = function () {
-      cleanupListeners();
+      loadToken++;
+      // stop video + hide
       frame.src = "";
       modal.hidden = true;
+      delete frame.dataset.videoHost;
     };
 
     // Close on backdrop or [data-close]
