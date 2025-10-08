@@ -78,7 +78,8 @@
       z-index: 1000;
     }
 
-    .modal[hidden] {
+    .modal[hidden],
+    .modal.hidden {
       display: none;
     }
 
@@ -449,7 +450,7 @@
   </footer>
 
   <!-- Video Modal -->
-  <div id="videoModal" class="modal" hidden>
+  <div id="videoModal" class="modal hidden">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-dialog">
       <button class="modal-close" aria-label="Close" data-close>×</button>

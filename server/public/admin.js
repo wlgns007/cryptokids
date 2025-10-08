@@ -148,107 +148,31 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     }
   }
 
-  function waitForReady(oframe, timeout = 1800) {
-    return new Promise((resolve, reject) => {
-      let timer = null;
-      let settled = false;
-
-      const finish = (fn, value) => {
-        if (settled) return;
-        settled = true;
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        window.removeEventListener("message", onMessage);
-        fn(value);
-      };
-
-      function onMessage(event) {
-        if (event.source !== oframe.contentWindow) return;
-        let payload = event.data;
-        if (typeof payload === "string") {
-          try {
-            payload = JSON.parse(payload);
-          } catch (error) {
-            // ignore non-JSON payloads
-          }
-        }
-        if (payload && payload.event === "onReady") {
-          finish(resolve);
-        }
-      }
-
-      window.addEventListener("message", onMessage);
-      timer = setTimeout(() => finish(reject, new Error("timeout")), timeout);
-    });
-  }
-
   (function setupVideoModal() {
     const modal = document.getElementById("videoModal");
-    const frame = document.getElementById("videoFrame");
-    if (!modal || !frame) return;
+    if (!modal) return;
 
-    let loadToken = 0;
-
-    function buildEmbed(id, host) {
-      const h = host || "www.youtube-nocookie.com";
-      const origin = encodeURIComponent(window.location.origin || "null");
-      return `https://${h}/embed/${id}?autoplay=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=${origin}`;
-    }
-
-    function cleanupListeners() {
-      if (fallbackTimer) {
-        clearTimeout(fallbackTimer);
-        fallbackTimer = null;
+    window.openVideoModal = function openVideoModal(url) {
+      const id = window.getYouTubeId ? getYouTubeId(url) : "";
+      if (!id) {
+        console.warn("openVideoModal: no video id for url:", url);
+        return;
       }
-      if (loadListener) {
-        frame.removeEventListener('load', loadListener);
-        loadListener = null;
+      const iframe = modal?.querySelector("iframe");
+      if (!iframe) {
+        console.error("openVideoModal: modal/iframe not found");
+        return;
       }
-    }
-
-    window.openVideoModal = function (url) {
-      const nocookie = getYouTubeEmbed(url, { host: 'www.youtube-nocookie.com' });
-      const fallback = getYouTubeEmbed(url, { host: 'www.youtube.com' });
-      const target = nocookie || fallback;
-      if (!target) return window.open(url, '_blank', 'noopener');
-
-      const currentToken = ++loadToken;
-      frame.src = "";
-      modal.hidden = false;
-      frame.src = buildEmbed(id, "www.youtube-nocookie.com");
-
-      const tryHost = async (host) => {
-        frame.src = buildEmbed(id, host);
-        try {
-          await waitForReady(frame, 2500);
-          if (currentToken !== loadToken) return false;
-          frame.dataset.videoHost = host;
-          return true;
-        } catch (error) {
-          if (currentToken !== loadToken) return false;
-          console.warn(`YouTube host ${host} did not become ready`, error);
-          return false;
-        }
-      };
-
-      (async () => {
-        if (await tryHost("www.youtube-nocookie.com")) return;
-        if (await tryHost("www.youtube.com")) return;
-        if (currentToken !== loadToken) return;
-        closeVideoModal();
-        toast("Unable to load the video player. Opening YouTube in a new tab.", "error");
-        window.open(`https://www.youtube.com/watch?v=${id}`, "_blank", "noopener");
-      })();
+      iframe.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1`;
+      modal.classList.remove("hidden");
+      modal.classList.add("open");
     };
 
-    window.closeVideoModal = function () {
-      loadToken++;
-      // stop video + hide
-      frame.src = "";
-      modal.hidden = true;
-      delete frame.dataset.videoHost;
+    window.closeVideoModal = function closeVideoModal() {
+      const iframe = modal?.querySelector("iframe");
+      if (iframe) iframe.src = "";
+      modal.classList.remove("open");
+      modal.classList.add("hidden");
     };
 
     // Close on backdrop or [data-close]
@@ -261,7 +185,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
 
     // Close on Esc
     window.addEventListener("keydown", (e) => {
-      if (!modal.hidden && e.key === "Escape") closeVideoModal();
+      if (!modal.classList.contains("hidden") && e.key === "Escape") closeVideoModal();
     });
   })();
 
@@ -1150,9 +1074,11 @@ setupScanner({
           ytThumb.style.cursor = 'pointer';
           ytThumb.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
           ytThumb.title = 'Open YouTube video';
+          ytThumb.dataset.youtube = item.youtubeUrl;
           ytThumb.addEventListener('click', () => {
-            if (item.youtubeUrl) {
-              openVideoModal(item.youtubeUrl);
+            const url = ytThumb.dataset.youtube;
+            if (url) {
+              openVideoModal(url);
             }
           });
           ytThumb.addEventListener('error', () => ytThumb.remove());
@@ -1205,7 +1131,11 @@ setupScanner({
           watchBtn.type = 'button';
           watchBtn.className = 'btn btn-sm';
           watchBtn.textContent = 'Watch clip';
-          watchBtn.addEventListener('click', () => openVideoModal(item.youtubeUrl));
+          watchBtn.dataset.youtube = item.youtubeUrl;
+          watchBtn.addEventListener('click', () => {
+            const url = watchBtn.dataset.youtube;
+            if (url) openVideoModal(url);
+          });
           actions.appendChild(watchBtn);
         }
 
@@ -1382,9 +1312,11 @@ setupScanner({
       `;
       const videoLink = tr.querySelector('a[href]');
       if (videoLink) {
+        videoLink.dataset.youtube = videoLink.href;
         videoLink.addEventListener('click', (event) => {
           event.preventDefault();
-          openVideoModal(videoLink.href);
+          const url = videoLink.dataset.youtube;
+          if (url) openVideoModal(url);
         });
       }
       const actions = tr.querySelector('.actions');
@@ -1422,9 +1354,11 @@ setupScanner({
       `;
       const videoLink = tr.querySelector('a[href]');
       if (videoLink) {
+        videoLink.dataset.youtube = videoLink.href;
         videoLink.addEventListener('click', (event) => {
           event.preventDefault();
-          openVideoModal(videoLink.href);
+          const url = videoLink.dataset.youtube;
+          if (url) openVideoModal(url);
         });
       }
       const actions = tr.querySelector('.actions');
