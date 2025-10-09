@@ -502,7 +502,6 @@ details.member-fold .summary-value {
   const activityTableBody = $('activityTable')?.querySelector('tbody');
   const activityStatus = $('activityStatus');
   const activityVerb = $('activityVerb');
-  const activityUser = $('activityUser');
   const activityActor = $('activityActor');
   const activityFrom = $('activityFrom');
   const activityTo = $('activityTo');
@@ -939,23 +938,32 @@ details.member-fold .summary-value {
     memberInfoDetails.appendChild(sexEl);
   }
 
-  function memberIdChanged() {
+  function memberIdChanged({ loadActivityNow = true } = {}) {
     normalizeMemberInput();
     setMemberStatus('');
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
     clearMemberLedger('Redeemed rewards will appear here.');
     loadHolds();
+    if (loadActivityNow) {
+      loadActivity();
+    } else {
+      resetActivityView();
+    }
   }
 
-  memberIdInput?.addEventListener('change', memberIdChanged);
+  memberIdInput?.addEventListener('change', (event) => memberIdChanged({ loadActivityNow: event?.isTrusted !== false }));
+  memberIdInput?.addEventListener('input', () => {
+    if (!memberIdInput.value.trim()) resetActivityView();
+  });
   memberIdInput?.addEventListener('blur', normalizeMemberInput);
   memberIdInput?.addEventListener('keyup', (event) => {
-    if (event.key === 'Enter') memberIdChanged();
+    if (event.key === 'Enter') memberIdChanged({ loadActivityNow: event.isTrusted !== false });
   });
 
   $('btnMemberInfo')?.addEventListener('click', async () => {
     const userId = requireMemberId();
     if (!userId) return;
+    loadActivity();
     setMemberStatus('');
     setMemberInfoMessage('Loading member info...');
     clearMemberLedger();
@@ -993,6 +1001,7 @@ details.member-fold .summary-value {
   $('btnMemberBalance')?.addEventListener('click', async () => {
     const userId = requireMemberId();
     if (!userId) return;
+    loadActivity();
     setMemberStatus('Fetching balance...');
     if (memberBalanceContainer) memberBalanceContainer.hidden = false;
     collapseDetails(memberBalanceDetails);
@@ -1480,7 +1489,7 @@ details.member-fold .summary-value {
     }
   }
 
-  function renderActivity(rows = []) {
+  function renderActivity(rows = [], { emptyMessage = 'No activity yet.' } = {}) {
     if (!activityTableBody) return;
     activityRowIndex.clear();
     activityTableBody.innerHTML = '';
@@ -1489,7 +1498,7 @@ details.member-fold .summary-value {
       const td = document.createElement('td');
       td.colSpan = 9;
       td.className = 'muted';
-      td.textContent = 'No activity yet.';
+      td.textContent = emptyMessage;
       tr.appendChild(td);
       activityTableBody.appendChild(tr);
       return;
@@ -1554,13 +1563,23 @@ details.member-fold .summary-value {
 
   const triggerActivityLoad = debounce(() => loadActivity(), 300);
 
+  function resetActivityView(message = 'Enter a user ID to view activity.') {
+    renderActivity([], { emptyMessage: message });
+    if (activityStatus) activityStatus.textContent = message;
+  }
+
   async function loadActivity() {
     if (!activityTableBody) return;
+    const memberInfo = getMemberIdInfo();
+    const user = (memberInfo?.normalized || '').trim();
+    if (!user) {
+      resetActivityView();
+      return;
+    }
     const params = new URLSearchParams();
     const verb = (activityVerb?.value || 'all').toLowerCase();
     if (verb && verb !== 'all') params.set('verb', verb);
-    const user = (activityUser?.value || '').trim();
-    if (user) params.set('userId', user);
+    params.set('userId', user);
     const actor = (activityActor?.value || '').trim();
     if (actor) params.set('actor', actor);
     if (activityFrom?.value) params.set('from', activityFrom.value);
@@ -1574,6 +1593,8 @@ details.member-fold .summary-value {
       const { res, body } = await adminFetch(`/api/history${qs}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
+        if (activityStatus) activityStatus.textContent = 'Admin key invalid.';
+        renderActivity([], { emptyMessage: 'Admin key invalid.' });
         return;
       }
       if (!res.ok) {
@@ -1590,7 +1611,7 @@ details.member-fold .summary-value {
     } catch (err) {
       console.error(err);
       if (activityStatus) activityStatus.textContent = presentError(err.message, 'Activity unavailable.');
-      renderActivity([]);
+      renderActivity([], { emptyMessage: 'Activity unavailable.' });
     }
   }
 
@@ -2451,13 +2472,13 @@ setupScanner({
 
   if (btnActivityRefresh) btnActivityRefresh.addEventListener('click', () => loadActivity());
   if (activityVerb) activityVerb.addEventListener('change', () => loadActivity());
-  [activityUser, activityActor].forEach(el => {
-    if (el) el.addEventListener('input', triggerActivityLoad);
-  });
+  if (activityActor) activityActor.addEventListener('input', triggerActivityLoad);
   [activityFrom, activityTo].forEach(el => {
     if (el) el.addEventListener('change', () => loadActivity());
   });
-  if (activityTableBody) loadActivity();
+  if (activityTableBody) {
+    resetActivityView();
+  }
 
   loadFeatureFlagsFromServer();
 
