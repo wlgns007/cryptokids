@@ -388,16 +388,70 @@ details.member-fold .summary-value {
     if (saved && keyInput) keyInput.value = saved;
   });
 
+  async function loadFeatureFlagsFromServer() {
+    try {
+      const res = await fetch('/api/features');
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      if (data && typeof data === 'object') {
+        applyFeatureFlags(data);
+      }
+    } catch (err) {
+      console.warn('feature flag fetch failed', err);
+    }
+  }
+
   function getAdminKey(){
     const el = document.getElementById('adminKey');
     return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
   }
   async function adminFetch(url, opts = {}) {
-    const headers = { ...(opts.headers||{}), 'x-admin-key': getAdminKey() };
+    const headers = {
+      'x-admin-key': getAdminKey(),
+      'x-actor-role': 'admin',
+      ...(opts.headers || {})
+    };
+    if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
     const res = await fetch(url, { ...opts, headers });
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
+  }
+
+  const ERROR_MESSAGES = {
+    INVALID_AMOUNT: 'Enter a positive amount to continue.',
+    INVALID_DELTA: 'Adjustment amount must be non-zero.',
+    INVALID_USER: 'Choose a member before performing this action.',
+    INVALID_PARENT_TX: 'Select a redeemed reward to refund.',
+    INVALID_REASON: 'Pick a refund reason.',
+    REFUND_NOT_ALLOWED: 'This reward has already been fully refunded.',
+    OVER_REFUND: 'Amount exceeds the refundable balance.',
+    FEATURE_DISABLED: 'This feature is currently turned off.',
+    ROLE_REQUIRED: 'You do not have permission to do that.',
+    INSUFFICIENT_FUNDS: 'Not enough balance to complete this action.',
+    TOKEN_USED: 'This QR code has already been used.',
+    hold_not_pending: 'This reward request is no longer pending.',
+    invalid_payload: 'The request was missing required information.',
+    scan_failed: 'Unable to redeem that QR code. Try again.'
+  };
+
+  function presentError(code, fallback) {
+    if (!code && fallback) return fallback;
+    const normalized = String(code || '').trim();
+    if (!normalized) return fallback || 'Something went wrong.';
+    const direct = ERROR_MESSAGES[normalized];
+    if (direct) return direct;
+    const upper = ERROR_MESSAGES[normalized.toUpperCase()];
+    if (upper) return upper;
+    return fallback || normalized.replace(/_/g, ' ');
+  }
+
+  function debounce(fn, wait = 300) {
+    let timer = null;
+    return function debounced(...args) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(this, args), wait);
+    };
   }
 
   function renderQr(elId, text) {
@@ -445,8 +499,82 @@ details.member-fold .summary-value {
   const refundNotesInput = $('refundNotes');
   const refundRemainingText = $('refundRemaining');
   const refundConfirmBtn = $('btnRefundConfirm');
+  const activityTableBody = $('activityTable')?.querySelector('tbody');
+  const activityStatus = $('activityStatus');
+  const activityVerb = $('activityVerb');
+  const activityUser = $('activityUser');
+  const activityActor = $('activityActor');
+  const activityFrom = $('activityFrom');
+  const activityTo = $('activityTo');
+  const btnActivityRefresh = $('btnActivityRefresh');
+  const activityRowIndex = new Map();
 
   let activeRefundContext = null;
+  let latestHints = null;
+  let latestHintsErrorMessage = null;
+  let featureFlags = { refunds: true };
+
+  function applyFeatureFlags(flags = {}) {
+    featureFlags = { ...featureFlags, ...flags };
+    const refundsEnabled = !!featureFlags.refunds;
+    document.documentElement.setAttribute('data-feature-refunds', refundsEnabled ? 'on' : 'off');
+    const nodes = document.querySelectorAll('[data-feature="refunds"]');
+    nodes.forEach((el) => {
+      if (el instanceof HTMLButtonElement) {
+        el.disabled = !refundsEnabled;
+        el.title = refundsEnabled ? '' : 'Refunds are disabled by policy.';
+      } else if (!refundsEnabled) {
+        el.setAttribute('aria-disabled', 'true');
+      } else {
+        el.removeAttribute('aria-disabled');
+      }
+    });
+    if (!refundsEnabled && typeof closeRefundModal === 'function') {
+      closeRefundModal();
+    }
+  }
+
+  function renderBalanceFromHints(hints) {
+    if (!memberBalanceSummaryValue || !memberBalanceBody) return;
+    if (!hints) {
+      memberBalanceSummaryValue.textContent = '—';
+      const message = latestHintsErrorMessage || 'Balance info will appear here.';
+      setPlaceholder(memberBalanceBody, message);
+      return;
+    }
+    const balanceValue = Number(hints.balance ?? 0);
+    const formattedBalance = formatTokenValue(balanceValue);
+    memberBalanceSummaryValue.textContent = `${formattedBalance} tokens`;
+    memberBalanceBody.innerHTML = '';
+    const line = document.createElement('div');
+    line.textContent = `Current balance: ${formattedBalance} tokens.`;
+    memberBalanceBody.appendChild(line);
+    const details = document.createElement('small');
+    details.className = 'muted';
+    const redeemInfo = hints.can_redeem
+      ? `Can redeem up to ${formatTokenValue(hints.max_redeem ?? balanceValue)} tokens.`
+      : 'Not enough balance to redeem right now.';
+    details.textContent = redeemInfo;
+    memberBalanceBody.appendChild(details);
+  }
+
+  function applyStateHints(hints, { errorMessage = null } = {}) {
+    latestHints = hints ? { ...hints } : null;
+    latestHintsErrorMessage = hints ? null : errorMessage || null;
+    if (!hints) {
+      renderBalanceFromHints(null);
+      return;
+    }
+    applyFeatureFlags(hints.features || {});
+    renderBalanceFromHints(hints);
+    const refundsEnabled = !!(hints.features?.refunds);
+    const refundAllowed = refundsEnabled && !!hints.can_refund;
+    document.querySelectorAll('[data-feature="refunds"]').forEach((node) => {
+      if (!(node instanceof HTMLButtonElement)) return;
+      node.disabled = !refundAllowed;
+      node.title = refundAllowed ? '' : refundsEnabled ? 'Nothing refundable right now.' : 'Refunds are disabled by policy.';
+    });
+  }
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -602,6 +730,7 @@ details.member-fold .summary-value {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'primary';
+        btn.dataset.feature = 'refunds';
         btn.textContent = entry.remaining_refundable === amount
           ? 'Refund'
           : `Refund (remaining ${entry.remaining_refundable})`;
@@ -713,12 +842,19 @@ details.member-fold .summary-value {
       const data = body && typeof body === 'object' ? body : {};
       renderLedgerSummary(data.summary || {});
       renderRedeemLedger(Array.isArray(data.redeems) ? data.redeems : []);
+      if (data.hints) {
+        applyStateHints(data.hints);
+      } else {
+        applyStateHints(null);
+      }
       if (showPanels && memberBalanceContainer) memberBalanceContainer.hidden = false;
       return data;
     } catch (err) {
       console.error(err);
-      if (memberLedgerHost) setPlaceholder(memberLedgerHost, err.message || 'Failed to load ledger history.');
+      const friendly = presentError(err?.message, 'Failed to load ledger history.');
+      if (memberLedgerHost) setPlaceholder(memberLedgerHost, friendly);
       renderLedgerSummary(null);
+      applyStateHints(null, { errorMessage: presentError(err?.message, 'Balance temporarily unavailable. Please try again.') });
       return null;
     }
   }
@@ -865,37 +1001,12 @@ details.member-fold .summary-value {
     collapseDetails(memberRefundDetails);
     if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Loading…';
     if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Loading balance…');
-    const ledgerPromise = refreshMemberLedger(userId, { showPanels: true });
-    try {
-      const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to fetch balance');
-        throw new Error(msg);
-      }
-      const data = body && typeof body === 'object' ? body : {};
-      const numericBalance = Number(data.balance);
-      const balanceValue = Number.isFinite(numericBalance) ? numericBalance : data.balance ?? 0;
-      const formattedBalance = formatTokenValue(balanceValue ?? 0);
-      if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = `${formattedBalance} tokens`;
-      if (memberBalanceBody) {
-        memberBalanceBody.innerHTML = '';
-        const line = document.createElement('div');
-        line.textContent = `Current balance: ${formattedBalance} tokens.`;
-        memberBalanceBody.appendChild(line);
-        const checked = document.createElement('small');
-        checked.className = 'muted';
-        checked.textContent = `Checked ${new Date().toLocaleString()}`;
-        memberBalanceBody.appendChild(checked);
-      }
+    const data = await refreshMemberLedger(userId, { showPanels: true });
+    if (data?.hints) {
+      const formattedBalance = formatTokenValue(Number(data.hints.balance ?? 0));
       setMemberStatus(`Balance: ${formattedBalance} tokens.`);
-    } catch (err) {
-      console.error(err);
-      setMemberStatus(err.message || 'Failed to fetch balance.');
-      if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Unavailable';
-      if (memberBalanceBody) setPlaceholder(memberBalanceBody, err.message || 'Balance unavailable.');
-      toast(err.message || 'Failed to fetch balance', 'error');
-    } finally {
-      await ledgerPromise;
+    } else {
+      setMemberStatus('Balance unavailable.');
     }
   });
 
@@ -1329,22 +1440,24 @@ details.member-fold .summary-value {
         throw new Error(msg);
       }
       if (res.status === 409 && body && typeof body === 'object') {
-        toast('This refund was already recorded.', 'warning');
+        toast(presentError(body.error || 'REFUND_EXISTS', 'This refund was already recorded.'), 'warning');
         closeRefundModal();
         await refreshMemberLedger(userId);
+        applyStateHints(body.hints || null);
         return;
       }
       if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Refund failed');
+        const msg = presentError(body?.error, 'Refund failed');
         throw new Error(msg);
       }
       toast(`${amount} tokens returned.`, 'success');
       closeRefundModal();
       await refreshMemberLedger(userId);
+      applyStateHints(body?.hints || null);
       loadHolds();
     } catch (err) {
       console.error(err);
-      toast(err.message || 'Refund failed', 'error');
+      toast(presentError(err.message, 'Refund failed'), 'error');
       refundConfirmBtn.disabled = false;
       refundConfirmBtn.textContent = 'Confirm refund';
     }
@@ -1356,13 +1469,128 @@ details.member-fold .summary-value {
       const { res, body } = await adminFetch(`/api/holds/${id}/cancel`, { method: 'POST' });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
+        const msg = presentError(body?.error, 'Cancel failed');
         throw new Error(msg);
       }
       toast('Hold canceled');
+      applyStateHints(body?.hints || null);
       loadHolds();
     } catch (err) {
-      toast(err.message || 'Cancel failed', 'error');
+      toast(presentError(err.message, 'Cancel failed'), 'error');
+    }
+  }
+
+  function renderActivity(rows = []) {
+    if (!activityTableBody) return;
+    activityRowIndex.clear();
+    activityTableBody.innerHTML = '';
+    if (!rows.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 9;
+      td.className = 'muted';
+      td.textContent = 'No activity yet.';
+      tr.appendChild(td);
+      activityTableBody.appendChild(tr);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      const txId = row.id ? String(row.id) : '';
+      if (txId) {
+        tr.dataset.txId = txId;
+        activityRowIndex.set(txId, tr);
+      }
+      if (row.parent_tx_id) {
+        tr.dataset.parentId = String(row.parent_tx_id);
+      }
+      const deltaNum = Number(row.delta || 0);
+      const deltaText = `${deltaNum > 0 ? '+' : ''}${formatTokenValue(deltaNum)}`;
+      const balanceText = formatTokenValue(row.balance_after ?? row.balanceAfter ?? 0);
+      const cells = [
+        formatTime(row.at),
+        row.userId || '',
+        row.verb || '',
+        row.action || '',
+        deltaText,
+        balanceText,
+        row.actor || '',
+        row.parent_tx_id || '',
+        txId
+      ];
+      cells.forEach((value, idx) => {
+        const td = document.createElement('td');
+        if ((idx === 7 || idx === 8) && value) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'link-button';
+          btn.dataset.linkTarget = String(value);
+          btn.textContent = value;
+          td.appendChild(btn);
+        } else {
+          td.textContent = value ?? '';
+        }
+        tr.appendChild(td);
+      });
+      frag.appendChild(tr);
+    }
+    activityTableBody.appendChild(frag);
+    activityTableBody.querySelectorAll('.link-button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-link-target');
+        if (!targetId) return;
+        const target = activityRowIndex.get(targetId);
+        if (target) {
+          target.classList.add('activity-highlight');
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(() => target.classList.remove('activity-highlight'), 1500);
+        } else {
+          toast('Transaction not in the current view.', 'info');
+        }
+      });
+    });
+  }
+
+  const triggerActivityLoad = debounce(() => loadActivity(), 300);
+
+  async function loadActivity() {
+    if (!activityTableBody) return;
+    const params = new URLSearchParams();
+    const verb = (activityVerb?.value || 'all').toLowerCase();
+    if (verb && verb !== 'all') params.set('verb', verb);
+    const user = (activityUser?.value || '').trim();
+    if (user) params.set('userId', user);
+    const actor = (activityActor?.value || '').trim();
+    if (actor) params.set('actor', actor);
+    if (activityFrom?.value) params.set('from', activityFrom.value);
+    if (activityTo?.value) params.set('to', activityTo.value);
+    params.set('limit', '100');
+    params.set('offset', '0');
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    if (activityStatus) activityStatus.textContent = 'Loading activity…';
+    activityTableBody.innerHTML = '';
+    try {
+      const { res, body } = await adminFetch(`/api/history${qs}`);
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Activity load failed');
+        throw new Error(msg);
+      }
+      const rows = Array.isArray(body?.rows) ? body.rows : [];
+      renderActivity(rows);
+      if (activityStatus) {
+        activityStatus.textContent = rows.length
+          ? `Showing ${rows.length} item${rows.length === 1 ? '' : 's'}.`
+          : 'No activity matches your filters.';
+      }
+    } catch (err) {
+      console.error(err);
+      if (activityStatus) activityStatus.textContent = presentError(err.message, 'Activity unavailable.');
+      renderActivity([]);
     }
   }
 
@@ -2093,7 +2321,7 @@ setupScanner({
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'quick failed');
+        const msg = presentError(body?.error, 'Quick award failed');
         throw new Error(msg);
       }
       const data = body && typeof body === 'object' ? body : {};
@@ -2101,8 +2329,13 @@ setupScanner({
       const user = data.userId || userId;
       toast(`Awarded ${amount} to ${user}`);
       $('quickUser').value = '';
+      applyStateHints(data.hints || latestHints);
+      const info = normalizeMemberInput();
+      if (info?.normalized && info.normalized === String(user).toLowerCase()) {
+        await refreshMemberLedger(info.normalized, { showPanels: true });
+      }
     } catch (err) {
-      toast(err.message || 'Quick award failed', 'error');
+      toast(presentError(err.message, 'Quick award failed'), 'error');
     }
   });
 
@@ -2215,6 +2448,18 @@ setupScanner({
       openHistory(preset);
     });
   });
+
+  if (btnActivityRefresh) btnActivityRefresh.addEventListener('click', () => loadActivity());
+  if (activityVerb) activityVerb.addEventListener('change', () => loadActivity());
+  [activityUser, activityActor].forEach(el => {
+    if (el) el.addEventListener('input', triggerActivityLoad);
+  });
+  [activityFrom, activityTo].forEach(el => {
+    if (el) el.addEventListener('change', () => loadActivity());
+  });
+  if (activityTableBody) loadActivity();
+
+  loadFeatureFlagsFromServer();
 
 })();
 

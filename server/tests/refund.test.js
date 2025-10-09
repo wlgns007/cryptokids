@@ -9,6 +9,7 @@ const {
   createRefundTransaction,
   applyLedger,
   getLedgerViewForUser,
+  getStateHints,
   __resetRefundRateLimiter
 } = await import('../index.js');
 import db from '../db.js';
@@ -222,4 +223,39 @@ test('enforces refund window', () => {
       }),
     /REFUND_WINDOW_EXPIRED/
   );
+});
+
+test('state hints surface refund capacity', () => {
+  resetDatabase();
+  applyLedger({ userId: 'kid', delta: 100, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  const redeemResult = applyLedger({
+    userId: 'kid',
+    delta: -40,
+    action: 'toy',
+    note: 'Toy',
+    actor: 'admin',
+    verb: 'redeem',
+    returnRow: true
+  });
+  const redeemRow = redeemResult.row;
+  let hints = getStateHints('kid');
+  assert.equal(hints.balance, 60);
+  assert.equal(hints.can_refund, true);
+  assert.equal(hints.max_refund, 40);
+
+  createRefundTransaction({
+    userId: 'kid',
+    redeemTxId: String(redeemRow.id),
+    amount: 10,
+    reason: 'duplicate',
+    actorId: 'admin1'
+  });
+
+  hints = getStateHints('kid');
+  assert.equal(hints.balance, 70);
+  assert.equal(hints.max_refund, 30);
+  assert.ok(Array.isArray(hints.refundable_redeems));
+  const redeemHint = hints.refundable_redeems.find(r => r.redeemTxId === String(redeemRow.id));
+  assert.ok(redeemHint, 'refund hint should include redeem');
+  assert.equal(redeemHint.remaining, 30);
 });
