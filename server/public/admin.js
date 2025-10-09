@@ -81,6 +81,172 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     return ok;
   }
 
+  function ensureMemberPanelStyles() {
+    if (document.getElementById('memberPanelsStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'memberPanelsStyles';
+    style.textContent = `
+.member-balance-container {
+  display: grid;
+  gap: 12px;
+}
+
+details.member-fold {
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+details.member-fold[open] {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+details.member-fold summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 14px;
+  position: relative;
+  padding-right: 36px;
+}
+
+details.member-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+details.member-fold summary::after {
+  content: '▾';
+  position: absolute;
+  right: 14px;
+  color: var(--muted, #6b7280);
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+details.member-fold[open] summary::after {
+  transform: rotate(-180deg);
+}
+
+details.member-fold .summary-value {
+  font-size: 13px;
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+
+.member-fold-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ledger-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ledger-summary .chip {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent, #2563eb);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.ledger-summary .chip span {
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+
+.member-ledger {
+  display: grid;
+  gap: 8px;
+}
+`;
+    if (document.head) {
+      document.head.appendChild(style);
+    } else if (document.body) {
+      document.body.appendChild(style);
+    }
+  }
+
+  function ensureMemberPanels() {
+    ensureMemberPanelStyles();
+    if (!memberInfoPanel) return;
+    let container = document.getElementById('memberBalanceContainer');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'memberBalanceContainer';
+      container.className = 'stack member-balance-container';
+      if (memberInfoDetails && memberInfoDetails.nextSibling) {
+        memberInfoPanel.insertBefore(container, memberInfoDetails.nextSibling);
+      } else {
+        memberInfoPanel.appendChild(container);
+      }
+    } else if (container.parentElement !== memberInfoPanel) {
+      memberInfoPanel.appendChild(container);
+    }
+
+    if (!container.querySelector('#memberBalanceDetails')) {
+      container.innerHTML = `
+<details id="memberBalanceDetails" class="member-fold">
+  <summary>
+    <span>Balance</span>
+    <span class="summary-value" id="memberBalanceSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberBalanceBody">
+    <div class="muted">Balance info will appear here.</div>
+  </div>
+</details>
+<details id="memberEarnDetails" class="member-fold">
+  <summary>
+    <span>Earn</span>
+    <span class="summary-value" id="memberEarnSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberEarnBody">
+    <div id="memberEarnSummary" class="ledger-summary">
+      <div class="muted">Earn activity will appear here.</div>
+    </div>
+  </div>
+</details>
+<details id="memberRedeemDetails" class="member-fold">
+  <summary>
+    <span>Redeem</span>
+    <span class="summary-value" id="memberRedeemSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body">
+    <div id="memberRedeemSummary" class="ledger-summary">
+      <div class="muted">Redeem activity will appear here.</div>
+    </div>
+    <div id="memberLedger" class="member-ledger muted">Redeemed rewards will appear here.</div>
+  </div>
+</details>
+<details id="memberRefundDetails" class="member-fold">
+  <summary>
+    <span>Refund</span>
+    <span class="summary-value" id="memberRefundSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberRefundBody">
+    <div id="memberRefundSummary" class="ledger-summary">
+      <div class="muted">Refund activity will appear here.</div>
+    </div>
+  </div>
+</details>
+`;
+    }
+  }
+
   if (keyInput) {
     keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
     const saved = storageGet('CK_ADMIN_KEY');
