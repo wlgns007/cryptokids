@@ -830,6 +830,7 @@
         <li><a href="#secRewards">Rewards Menu</a></li>
         <li><a href="#secRegisterReward">Register New Reward</a></li>
         <li><a href="#secEarnMenu">Edit Earn Points Menu</a></li>
+        <li><a href="#activitySection">Activity</a></li>
       </ul>
     </nav>
 
@@ -1157,54 +1158,54 @@
         </div>
       </section>
       <section class="card" id="activitySection">
-        <header>
-          <div>
-            <h2>Activity</h2>
+        <div class="collapsible" id="activityPanel">
+          <button type="button" class="card-toggle" id="toggleActivity" aria-controls="activityFields" aria-expanded="false">
+            <span class="card-toggle-title">Activity</span>
+            <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
+          </button>
+          <div class="stack" id="activityFields" hidden>
             <p class="muted">Review recent ledger changes and cross-link related transactions.</p>
+            <div class="row" id="activityFilters">
+              <label style="flex:1;">Verb
+                <select id="activityVerb">
+                  <option value="all">All</option>
+                  <option value="earn">Earn</option>
+                  <option value="redeem">Redeem</option>
+                  <option value="refund">Refund</option>
+                  <option value="adjust">Adjust</option>
+                </select>
+              </label>
+              <label style="flex:1;">Actor
+                <input id="activityActor" type="text" placeholder="actor id">
+              </label>
+              <label style="flex:1;">From
+                <input id="activityFrom" type="date">
+              </label>
+              <label style="flex:1;">To
+                <input id="activityTo" type="date">
+              </label>
+              <button type="button" id="btnActivityRefresh">Refresh</button>
+            </div>
+            <small class="muted" id="activityStatus"></small>
+            <div class="table-wrap" style="overflow:auto; max-height:360px;">
+              <table class="table" id="activityTable">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>User</th>
+                    <th>Verb</th>
+                    <th>Action</th>
+                    <th>Δ</th>
+                    <th>Balance</th>
+                    <th>Actor</th>
+                    <th>Parent</th>
+                    <th>Tx</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
-        </header>
-        <div class="row" id="activityFilters">
-          <label style="flex:1;">Verb
-            <select id="activityVerb">
-              <option value="all">All</option>
-              <option value="earn">Earn</option>
-              <option value="redeem">Redeem</option>
-              <option value="refund">Refund</option>
-              <option value="adjust">Adjust</option>
-            </select>
-          </label>
-          <label style="flex:1;">User
-            <input id="activityUser" type="text" placeholder="user id">
-          </label>
-          <label style="flex:1;">Actor
-            <input id="activityActor" type="text" placeholder="actor id">
-          </label>
-          <label style="flex:1;">From
-            <input id="activityFrom" type="date">
-          </label>
-          <label style="flex:1;">To
-            <input id="activityTo" type="date">
-          </label>
-          <button type="button" id="btnActivityRefresh">Refresh</button>
-        </div>
-        <small class="muted" id="activityStatus"></small>
-        <div class="table-wrap" style="overflow:auto; max-height:360px;">
-          <table class="table" id="activityTable">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>User</th>
-                <th>Verb</th>
-                <th>Action</th>
-                <th>Δ</th>
-                <th>Balance</th>
-                <th>Actor</th>
-                <th>Parent</th>
-                <th>Tx</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
         </div>
       </section>
     </main>
