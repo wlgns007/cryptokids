@@ -23,6 +23,29 @@ const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
 const PORT = process.env.PORT || 4000;
 
+const REFUND_REASON_VALUES = [
+  "mis_tap",
+  "duplicate",
+  "wrong_item",
+  "canceled",
+  "quality_issue",
+  "staff_error"
+];
+export const REFUND_REASONS = new Set(REFUND_REASON_VALUES);
+
+const REFUND_WINDOW_DAYS_RAW = process.env.CK_REFUND_WINDOW_DAYS;
+const REFUND_WINDOW_DAYS =
+  REFUND_WINDOW_DAYS_RAW === undefined || REFUND_WINDOW_DAYS_RAW === null || REFUND_WINDOW_DAYS_RAW === ""
+    ? null
+    : Number(REFUND_WINDOW_DAYS_RAW);
+const REFUND_WINDOW_MS = Number.isFinite(REFUND_WINDOW_DAYS)
+  ? Math.max(0, REFUND_WINDOW_DAYS) * 24 * 60 * 60 * 1000
+  : null;
+
+const REFUND_RATE_LIMIT_PER_HOUR = Number(process.env.CK_REFUND_RATE_LIMIT_PER_HOUR || 20);
+const REFUND_RATE_WINDOW_MS = 60 * 60 * 1000;
+const refundRateLimiter = new Map();
+
 let BUILD = (process.env.BUILD_VERSION || process.env.RENDER_GIT_COMMIT || process.env.COMMIT_HASH || "").trim();
 if (!BUILD) {
   try {
@@ -198,9 +221,20 @@ function ensureSchema() {
 
   const ledgerCols = db.prepare(`PRAGMA table_info(ledger)`).all();
   const requiredLedgerCols = new Set([
-    "id", "at", "userId", "action", "delta", "balance_after",
-    "itemId", "holdId", "templates", "finalCost", "note",
-    "actor", "ip", "ua"
+    "id",
+    "at",
+    "userId",
+    "action",
+    "delta",
+    "balance_after",
+    "itemId",
+    "holdId",
+    "templates",
+    "finalCost",
+    "note",
+    "actor",
+    "ip",
+    "ua"
   ]);
   const hasLedger = ledgerCols.length && [...requiredLedgerCols].every(col => ledgerCols.some(c => c.name === col));
   if (!hasLedger) {
@@ -227,6 +261,78 @@ function ensureSchema() {
       );
     `);
   }
+
+  const ensureLedgerColumn = (name, sql) => {
+    if (!ledgerCols.some(c => c.name === name)) {
+      db.exec(sql);
+      ledgerCols.push({ name });
+      return true;
+    }
+    return false;
+  };
+
+  const addedVerbColumn = ensureLedgerColumn("verb", "ALTER TABLE ledger ADD COLUMN verb TEXT");
+  const addedParentColumn = ensureLedgerColumn(
+    "parent_tx_id",
+    "ALTER TABLE ledger ADD COLUMN parent_tx_id TEXT"
+  );
+  ensureLedgerColumn("refund_reason", "ALTER TABLE ledger ADD COLUMN refund_reason TEXT");
+  ensureLedgerColumn("refund_notes", "ALTER TABLE ledger ADD COLUMN refund_notes TEXT");
+  const addedNotesColumn = ensureLedgerColumn("notes", "ALTER TABLE ledger ADD COLUMN notes TEXT");
+  const addedIdempotencyColumn = ensureLedgerColumn(
+    "idempotency_key",
+    "ALTER TABLE ledger ADD COLUMN idempotency_key TEXT"
+  );
+
+  if (addedVerbColumn) {
+    db.exec(`
+      UPDATE ledger
+      SET verb = CASE
+        WHEN delta > 0 THEN 'earn'
+        WHEN delta < 0 THEN 'redeem'
+        ELSE 'adjust'
+      END
+      WHERE verb IS NULL OR verb = ''
+    `);
+  }
+
+  if (addedNotesColumn) {
+    db.exec(`
+      UPDATE ledger
+      SET notes = note
+      WHERE notes IS NULL
+    `);
+  }
+
+  if (addedParentColumn) {
+    db.exec(`
+      UPDATE ledger
+      SET parent_tx_id = NULL
+      WHERE parent_tx_id IS NULL
+    `);
+  }
+
+  if (addedIdempotencyColumn) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+      ON ledger(idempotency_key)
+      WHERE idempotency_key IS NOT NULL
+    `);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+    ON ledger(idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ledger_parent_tx ON ledger(parent_tx_id);
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_at ON ledger(userId, verb, at);
+  `);
 
   const rewardsCols = db.prepare(`PRAGMA table_info('rewards')`).all();
   if (!rewardsCols.length) {
@@ -465,23 +571,141 @@ function listMembers(search) {
 }
 
 const insertLedgerStmt = db.prepare(`
-  INSERT INTO ledger (at, userId, action, delta, balance_after, itemId, holdId, templates, finalCost, note, actor, ip, ua)
-  VALUES (@at, @userId, @action, @delta, @balance_after, @itemId, @holdId, @templates, @finalCost, @note, @actor, @ip, @ua)
+  INSERT INTO ledger (
+    at,
+    userId,
+    action,
+    delta,
+    balance_after,
+    itemId,
+    holdId,
+    templates,
+    finalCost,
+    note,
+    actor,
+    ip,
+    ua,
+    verb,
+    parent_tx_id,
+    refund_reason,
+    refund_notes,
+    notes,
+    idempotency_key
+  )
+  VALUES (
+    @at,
+    @userId,
+    @action,
+    @delta,
+    @balance_after,
+    @itemId,
+    @holdId,
+    @templates,
+    @finalCost,
+    @note,
+    @actor,
+    @ip,
+    @ua,
+    @verb,
+    @parent_tx_id,
+    @refund_reason,
+    @refund_notes,
+    @notes,
+    @idempotency_key
+  )
+`);
+const selectLedgerByIdStmt = db.prepare("SELECT * FROM ledger WHERE id = ?");
+const selectLedgerByKeyStmt = db.prepare("SELECT * FROM ledger WHERE idempotency_key = ?");
+const sumRefundsByParentStmt = db.prepare(
+  "SELECT COALESCE(SUM(delta), 0) AS total FROM ledger WHERE parent_tx_id = ? AND verb = 'refund'"
+);
+const listLedgerByUserStmt = db.prepare(`
+  SELECT *
+  FROM ledger
+  WHERE userId = ?
+  ORDER BY at DESC, id DESC
 `);
 const checkTokenStmt = db.prepare("SELECT 1 FROM consumed_tokens WHERE jti = ?");
 const consumeTokenStmt = db.prepare("INSERT INTO consumed_tokens (jti, typ, consumed_at) VALUES (?, ?, ?)");
 
-function applyLedger({ userId, delta, action, note = null, itemId = null, holdId = null, templates = null, finalCost = null, actor = null, req = null, tokenInfo = null }) {
+function mapLedgerRow(row) {
+  if (!row) return null;
+  let parsedTemplates = null;
+  if (row.templates) {
+    try {
+      parsedTemplates = JSON.parse(row.templates);
+    } catch {
+      parsedTemplates = null;
+    }
+  }
+  const resolvedVerb = row.verb || (row.delta > 0 ? "earn" : row.delta < 0 ? "redeem" : "adjust");
+  return {
+    id: row.id,
+    at: row.at,
+    userId: row.userId,
+    action: row.action,
+    verb: resolvedVerb,
+    delta: Number(row.delta),
+    balance_after: Number(row.balance_after),
+    itemId: row.itemId || null,
+    holdId: row.holdId || null,
+    templates: parsedTemplates,
+    finalCost: row.finalCost ?? null,
+    note: row.note || null,
+    notes: row.notes || null,
+    actor: row.actor || null,
+    ip: row.ip || null,
+    ua: row.ua || null,
+    parent_tx_id: row.parent_tx_id || null,
+    refund_reason: row.refund_reason || null,
+    refund_notes: row.refund_notes || null,
+    idempotency_key: row.idempotency_key || null
+  };
+}
+
+function applyLedger({
+  userId,
+  delta,
+  action,
+  note = null,
+  itemId = null,
+  holdId = null,
+  templates = null,
+  finalCost = null,
+  actor = null,
+  req = null,
+  tokenInfo = null,
+  verb = null,
+  parentTxId = null,
+  refundReason = null,
+  refundNotes = null,
+  notes = null,
+  idempotencyKey = null,
+  returnRow = false
+}) {
   const ip = req?.ip || null;
   const ua = req?.headers?.["user-agent"] || null;
   const at = Date.now();
   const templatesJson = templates ? JSON.stringify(templates) : null;
   const normalizedDelta = Number(delta) | 0;
 
+  const resolvedVerb =
+    verb || (normalizedDelta > 0 ? "earn" : normalizedDelta < 0 ? "redeem" : "adjust");
+  const explicitLedgerKey = idempotencyKey ? `api:${String(idempotencyKey)}` : null;
+
+  if (explicitLedgerKey) {
+    const existing = selectLedgerByKeyStmt.get(explicitLedgerKey);
+    if (existing) {
+      const mapped = mapLedgerRow(existing);
+      return returnRow ? { balance: mapped.balance_after, row: mapped } : mapped.balance_after;
+    }
+  }
+
+  let tokenLedgerKey = null;
   return db.transaction(() => {
     if (tokenInfo?.jti) {
-      const ledgerKey = `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}`;
-      const existingTx = db.get("SELECT id FROM ledger_tx WHERE idempotency_key=?", [ledgerKey]);
+      tokenLedgerKey = `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}`;
+      const existingTx = db.get("SELECT id FROM ledger_tx WHERE idempotency_key=?", [tokenLedgerKey]);
       if (existingTx) {
         throw new Error("TOKEN_USED");
       }
@@ -494,17 +718,18 @@ function applyLedger({ userId, delta, action, note = null, itemId = null, holdId
     if (next < 0) {
       throw new Error("INSUFFICIENT_FUNDS");
     }
-    const idempotencyKey = tokenInfo?.jti ? `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}` : undefined;
+    const ledgerKey = explicitLedgerKey || tokenLedgerKey || undefined;
     const sourceRef = holdId ?? itemId ?? null;
     if (normalizedDelta > 0) {
-      earn({ memberId: userId, amount: normalizedDelta, reason: action, sourceId: sourceRef, idempotencyKey });
+      earn({ memberId: userId, amount: normalizedDelta, reason: action, sourceId: sourceRef, idempotencyKey: ledgerKey });
     } else if (normalizedDelta < 0) {
-      redeem({ memberId: userId, amount: -normalizedDelta, rewardId: sourceRef ?? action, idempotencyKey });
+      redeem({ memberId: userId, amount: -normalizedDelta, rewardId: sourceRef ?? action, idempotencyKey: ledgerKey });
     } else {
       ensureMemberAccount(userId);
     }
     const balanceAfter = getBalance(userId);
-    insertLedgerStmt.run({
+    const resolvedNotes = notes ?? null;
+    const result = insertLedgerStmt.run({
       at,
       userId,
       action,
@@ -517,12 +742,19 @@ function applyLedger({ userId, delta, action, note = null, itemId = null, holdId
       note,
       actor,
       ip,
-      ua
+      ua,
+      verb: resolvedVerb,
+      parent_tx_id: parentTxId ? String(parentTxId) : null,
+      refund_reason: refundReason || null,
+      refund_notes: refundNotes || null,
+      notes: resolvedNotes,
+      idempotency_key: ledgerKey || null
     });
     if (tokenInfo?.jti) {
       consumeTokenStmt.run(tokenInfo.jti, tokenInfo.typ, at);
     }
-    return balanceAfter;
+    const insertedRow = mapLedgerRow(selectLedgerByIdStmt.get(result.lastInsertRowid));
+    return returnRow ? { balance: balanceAfter, row: insertedRow } : balanceAfter;
   })();
 }
 
@@ -542,6 +774,26 @@ function createHttpError(status, message) {
   const err = new Error(message);
   err.status = status;
   return err;
+}
+
+function assertRefundRateLimit(actorId) {
+  if (!REFUND_RATE_LIMIT_PER_HOUR || REFUND_RATE_LIMIT_PER_HOUR <= 0) return;
+  const key = (actorId || "admin").toLowerCase();
+  const now = Date.now();
+  const cutoff = now - REFUND_RATE_WINDOW_MS;
+  const existing = refundRateLimiter.get(key) || [];
+  const recent = existing.filter(ts => ts > cutoff);
+  if (recent.length >= REFUND_RATE_LIMIT_PER_HOUR) {
+    const err = createHttpError(429, "REFUND_RATE_LIMIT");
+    err.retryAfterMs = Math.max(0, recent[0] + REFUND_RATE_WINDOW_MS - now);
+    throw err;
+  }
+  recent.push(now);
+  refundRateLimiter.set(key, recent);
+}
+
+export function __resetRefundRateLimiter() {
+  refundRateLimiter.clear();
 }
 
 function escapeHtml(value) {
@@ -641,6 +893,192 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
   }
 
   throw createHttpError(400, "unsupported_token");
+}
+
+function createRefundTransaction({
+  userId,
+  redeemTxId,
+  amount,
+  reason,
+  notes,
+  actorId,
+  idempotencyKey,
+  req
+}) {
+  const normalizedUser = normId(userId);
+  if (!normalizedUser) {
+    throw createHttpError(400, "INVALID_USER");
+  }
+  const redeemId = String(redeemTxId ?? "").trim();
+  if (!redeemId) {
+    throw createHttpError(400, "INVALID_PARENT_TX");
+  }
+  const amountValue = Math.floor(Number(amount));
+  if (!Number.isFinite(amountValue) || amountValue <= 0) {
+    throw createHttpError(400, "INVALID_AMOUNT");
+  }
+  const reasonKey = String(reason ?? "").trim();
+  if (!REFUND_REASONS.has(reasonKey)) {
+    const err = createHttpError(400, "INVALID_REASON");
+    err.allowed = Array.from(REFUND_REASONS);
+    throw err;
+  }
+  const trimmedNotes = notes === undefined || notes === null ? null : String(notes).trim();
+  const actorLabel = actorId ? `admin_refund:${actorId}` : "admin_refund";
+  const ledgerKeyRaw = idempotencyKey ? String(idempotencyKey).trim() : null;
+  const ledgerKey = ledgerKeyRaw ? `refund:${ledgerKeyRaw}` : null;
+  const ledgerLookupKey = ledgerKey ? `api:${ledgerKey}` : null;
+
+  const run = db.transaction(() => {
+    const parentRaw = selectLedgerByIdStmt.get(redeemId);
+    if (!parentRaw) {
+      throw createHttpError(400, "REDEEM_NOT_FOUND");
+    }
+    const parent = mapLedgerRow(parentRaw);
+    if (normId(parent.userId) !== normalizedUser) {
+      throw createHttpError(400, "USER_MISMATCH");
+    }
+    if (Number(parent.delta) >= 0) {
+      const err = createHttpError(400, "NOT_REDEEM_TX");
+      err.details = { action: parent.action, verb: parent.verb };
+      throw err;
+    }
+    if (parent.verb && parent.verb !== "redeem") {
+      const err = createHttpError(400, "NOT_REDEEM_TX");
+      err.details = { verb: parent.verb };
+      throw err;
+    }
+    if (REFUND_WINDOW_MS !== null) {
+      const age = Date.now() - Number(parent.at || 0);
+      if (age > REFUND_WINDOW_MS) {
+        const err = createHttpError(400, "REFUND_WINDOW_EXPIRED");
+        err.windowMs = REFUND_WINDOW_MS;
+        throw err;
+      }
+    }
+
+    if (ledgerLookupKey) {
+      const existing = selectLedgerByKeyStmt.get(ledgerLookupKey);
+      if (existing) {
+        const mappedExisting = mapLedgerRow(existing);
+        if ((mappedExisting.parent_tx_id || null) !== String(parent.id)) {
+          const conflict = createHttpError(409, "IDEMPOTENCY_CONFLICT");
+          conflict.existing = mappedExisting;
+          throw conflict;
+        }
+        const totals = sumRefundsByParentStmt.get(String(parent.id));
+        const totalRefunded = Number(totals?.total || 0);
+        const remaining = Math.max(0, Math.abs(Number(parent.delta)) - totalRefunded);
+        const conflict = createHttpError(409, "REFUND_EXISTS");
+        conflict.existing = mappedExisting;
+        conflict.balance = getBalance(normalizedUser);
+        conflict.remaining = remaining;
+        throw conflict;
+      }
+    }
+
+    const parentAmount = Math.abs(Number(parent.delta) || 0);
+    const totals = sumRefundsByParentStmt.get(String(parent.id));
+    const alreadyRefunded = Number(totals?.total || 0);
+    if (alreadyRefunded >= parentAmount) {
+      const err = createHttpError(400, "REFUND_NOT_ALLOWED");
+      err.remaining = 0;
+      throw err;
+    }
+    if (amountValue + alreadyRefunded > parentAmount) {
+      const err = createHttpError(400, "OVER_REFUND");
+      err.remaining = parentAmount - alreadyRefunded;
+      throw err;
+    }
+
+    const ledgerResult = applyLedger({
+      userId: normalizedUser,
+      delta: amountValue,
+      action: "refund",
+      note: parent.note,
+      notes: trimmedNotes,
+      actor: actorLabel,
+      verb: "refund",
+      parentTxId: String(parent.id),
+      refundReason: reasonKey,
+      refundNotes: trimmedNotes,
+      idempotencyKey: ledgerKey,
+      req,
+      returnRow: true
+    });
+
+    const afterTotals = sumRefundsByParentStmt.get(String(parent.id));
+    const totalAfter = Number(afterTotals?.total || alreadyRefunded + amountValue);
+    const remaining = Math.max(0, parentAmount - totalAfter);
+
+    return {
+      balance: ledgerResult.balance,
+      refund: ledgerResult.row,
+      remaining
+    };
+  });
+
+  return run();
+}
+
+function getLedgerViewForUser(userId) {
+  const rows = listLedgerByUserStmt.all(userId).map(mapLedgerRow);
+  const refundsByParent = new Map();
+  for (const row of rows) {
+    if (row.verb === "refund" && row.parent_tx_id) {
+      const key = String(row.parent_tx_id);
+      if (!refundsByParent.has(key)) refundsByParent.set(key, []);
+      refundsByParent.get(key).push(row);
+    }
+  }
+
+  const redeems = [];
+  for (const row of rows) {
+    const isRedeem = row.verb === "redeem" || Number(row.delta) < 0;
+    if (!isRedeem) continue;
+    const key = String(row.id);
+    const refunds = (refundsByParent.get(key) || []).slice().sort((a, b) => (a.at || 0) - (b.at || 0));
+    const totalRefunded = refunds.reduce((sum, r) => sum + Number(r.delta || 0), 0);
+    const redeemAmount = Math.abs(Number(row.delta) || 0);
+    const remaining = Math.max(0, redeemAmount - totalRefunded);
+    let status = "open";
+    if (refunds.length) {
+      status = remaining === 0 ? "refunded" : "partial";
+    }
+    redeems.push({
+      ...row,
+      redeem_amount: redeemAmount,
+      refunded_amount: totalRefunded,
+      remaining_refundable: remaining,
+      refund_status: status,
+      refunds
+    });
+  }
+
+  const now = Date.now();
+  const sevenAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const thirtyAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const summary = {
+    earn: { d7: 0, d30: 0 },
+    redeem: { d7: 0, d30: 0 },
+    refund: { d7: 0, d30: 0 }
+  };
+  for (const row of rows) {
+    const bucket = summary[row.verb];
+    if (!bucket) continue;
+    const amountAbs = Math.abs(Number(row.delta) || 0);
+    const ts = Number(row.at) || 0;
+    if (ts >= sevenAgo) bucket.d7 += amountAbs;
+    if (ts >= thirtyAgo) bucket.d30 += amountAbs;
+  }
+
+  return {
+    userId,
+    balance: getBalance(userId),
+    rows,
+    redeems,
+    summary
+  };
 }
 
 function friendlyScanError(code) {
@@ -1257,6 +1695,82 @@ app.delete("/api/earn-templates/:id", requireAdminKey, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/ck/refund", requireAdminKey, (req, res) => {
+  const body = req.body || {};
+  const actorId = (req.headers["x-admin-actor"] || "").toString().trim() || "admin";
+  const idempotencyKey = body.idempotency_key ? String(body.idempotency_key).trim() : null;
+  const normalizedUser = normId(body.user_id);
+  try {
+    assertRefundRateLimit(actorId);
+    console.info("[refund] attempt", {
+      userId: normalizedUser,
+      redeemTxId: body.redeem_tx_id,
+      amount: body.amount,
+      reason: body.reason,
+      actorId,
+      idempotencyKey
+    });
+    const result = createRefundTransaction({
+      userId: body.user_id,
+      redeemTxId: body.redeem_tx_id,
+      amount: body.amount,
+      reason: body.reason,
+      notes: body.notes,
+      actorId,
+      idempotencyKey,
+      req
+    });
+    console.info("[refund] success", {
+      userId: normalizedUser,
+      redeemTxId: body.redeem_tx_id,
+      refundId: result.refund?.id,
+      amount: result.refund?.delta,
+      remaining: result.remaining,
+      actorId
+    });
+    res.json({
+      balance: result.balance,
+      refund: result.refund,
+      remaining_refundable: result.remaining
+    });
+  } catch (err) {
+    const status = err?.status || 500;
+    if (status === 409 && err?.existing) {
+      console.warn("[refund] idempotent", {
+        userId: normalizedUser,
+        redeemTxId: body.redeem_tx_id,
+        actorId,
+        idempotencyKey
+      });
+      res.status(409).json({
+        error: err.message || "REFUND_EXISTS",
+        balance: err.balance ?? (normalizedUser ? getBalance(normalizedUser) : null),
+        refund: err.existing,
+        remaining_refundable: err.remaining ?? 0
+      });
+      return;
+    }
+    const payload = { error: err?.message || "REFUND_FAILED" };
+    if (err?.remaining !== undefined) payload.remaining_refundable = err.remaining;
+    if (err?.retryAfterMs !== undefined) payload.retry_after_ms = err.retryAfterMs;
+    console.error("[refund] failed", {
+      userId: normalizedUser,
+      redeemTxId: body.redeem_tx_id,
+      error: err?.message,
+      status,
+      actorId
+    });
+    res.status(status).json(payload);
+  }
+});
+
+app.get("/ck/ledger/:userId", requireAdminKey, (req, res) => {
+  const userId = normId(req.params.userId);
+  if (!userId) return res.status(400).json({ error: "userId required" });
+  const data = getLedgerViewForUser(userId);
+  res.json(data);
+});
+
 app.get("/api/rewards", (_req, res) => {
   const rows = db.prepare("SELECT id, name, price, description, image_url, youtube_url, active FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
   res.json(rows.map(r => ({
@@ -1570,9 +2084,11 @@ function buildHistoryQuery(params) {
     sqlParams.push(normId(params.userId));
   }
   if (params.type === "earn") {
-    where.push("action LIKE 'earn_%'");
+    where.push("verb = 'earn'");
   } else if (params.type === "spend") {
-    where.push("action LIKE 'spend_%'");
+    where.push("verb = 'redeem'");
+  } else if (params.type === "refund") {
+    where.push("verb = 'refund'");
   }
   if (params.source === "task") {
     where.push("action = 'earn_qr'");
@@ -1609,15 +2125,37 @@ app.get("/api/history", requireAdminKey, (req, res) => {
     limit: req.query.limit,
     offset: req.query.offset
   });
-  const rows = db.prepare(query.sql).all(...query.params).map(row => ({
-    ...row,
-    templates: row.templates ? JSON.parse(row.templates) : null
-  }));
+  const rows = db.prepare(query.sql).all(...query.params).map(mapLedgerRow);
   if (req.query.format === "csv") {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", "attachment; filename=history.csv");
-    const header = "at,userId,action,delta,balance_after,itemId,holdId,finalCost,note,actor\n";
-    const body = rows.map(r => [r.at, r.userId, r.action, r.delta, r.balance_after, r.itemId ?? "", r.holdId ?? "", r.finalCost ?? "", (r.note ?? "").replace(/"/g, ""), r.actor ?? ""].join(",")).join("\n");
+    const header = "at,userId,verb,action,delta,balance_after,itemId,holdId,parent_tx_id,finalCost,note,notes,templates,refund_reason,refund_notes,actor,idempotency_key\n";
+    const escape = value => {
+      if (value === null || value === undefined) return "";
+      const str = String(value).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+    const body = rows
+      .map(r => [
+        escape(r.at),
+        escape(r.userId),
+        escape(r.verb),
+        escape(r.action),
+        escape(r.delta),
+        escape(r.balance_after),
+        escape(r.itemId ?? ""),
+        escape(r.holdId ?? ""),
+        escape(r.parent_tx_id ?? ""),
+        escape(r.finalCost ?? ""),
+        escape(r.note ?? ""),
+        escape(r.notes ?? ""),
+        escape(r.templates ? JSON.stringify(r.templates) : ""),
+        escape(r.refund_reason ?? ""),
+        escape(r.refund_notes ?? ""),
+        escape(r.actor ?? ""),
+        escape(r.idempotency_key ?? "")
+      ].join(","))
+      .join("\n");
     res.send(header + body);
     return;
   }
@@ -1641,20 +2179,37 @@ app.get("/api/history/user/:userId", (req, res) => {
 app.get("/api/history.csv/:userId", (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).send("userId required");
-  const rows = db.prepare(`
-    SELECT at, action, delta, balance_after, note
-    FROM ledger
-    WHERE userId = ?
-    ORDER BY at DESC, id DESC
-  `).all(userId);
-  const header = "at,action,delta,balance_after,note\n";
-  const csv = rows.map(r => {
-    const note = String(r.note ?? '').replace(/"/g, '""');
-    return `"${r.at}","${r.action}","${r.delta}","${r.balance_after}","${note}"`;
-  }).join("\n");
+  const rows = listLedgerByUserStmt.all(userId).map(mapLedgerRow);
+  const header = "at,userId,verb,action,delta,balance_after,itemId,holdId,parent_tx_id,finalCost,note,notes,templates,refund_reason,refund_notes,actor,idempotency_key\n";
+  const escape = value => {
+    if (value === null || value === undefined) return "";
+    const str = String(value).replace(/"/g, '""');
+    return `"${str}"`;
+  };
+  const body = rows
+    .map(r => [
+      escape(r.at),
+      escape(r.userId),
+      escape(r.verb),
+      escape(r.action),
+      escape(r.delta),
+      escape(r.balance_after),
+      escape(r.itemId ?? ""),
+      escape(r.holdId ?? ""),
+      escape(r.parent_tx_id ?? ""),
+      escape(r.finalCost ?? ""),
+      escape(r.note ?? ""),
+      escape(r.notes ?? ""),
+      escape(r.templates ? JSON.stringify(r.templates) : ""),
+      escape(r.refund_reason ?? ""),
+      escape(r.refund_notes ?? ""),
+      escape(r.actor ?? ""),
+      escape(r.idempotency_key ?? "")
+    ].join(","))
+    .join("\n");
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename=history_${userId}.csv`);
-  res.send(header + csv + (csv ? "\n" : ""));
+  res.send(header + body + (body ? "\n" : ""));
 });
 
 app.post("/admin/upload-image64", requireAdminKey, (req, res) => {
@@ -1683,6 +2238,10 @@ app.get("/", (_req, res) => {
   res.redirect(`/admin.html?v=${BUILD}`);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Parents Shop API listening on http://0.0.0.0:${PORT}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Parents Shop API listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+export { app, applyLedger, createRefundTransaction, getLedgerViewForUser, mapLedgerRow, getBalance, normId };

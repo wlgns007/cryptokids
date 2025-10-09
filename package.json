@@ -4,7 +4,7 @@
   "description": "Hardhat 3 Beta project using the native Node.js test runner and the viem library for Ethereum interactions.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test \"server/tests/**/*.js\"",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "lint": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs .",

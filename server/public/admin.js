@@ -242,13 +242,33 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     new QRCode(el, { text, width: 200, height: 200 });
   }
 
+  function generateIdempotencyKey() {
+    if (window.crypto?.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    const rand = Math.random().toString(16).slice(2);
+    return `refund-${Date.now()}-${rand}`;
+  }
+
   const memberIdInput = $('memberUserId');
   const memberStatusEl = $('memberStatus');
   const memberInfoDetails = $('memberInfoDetails');
+  const memberLedgerSummary = $('memberLedgerSummary');
+  const memberLedgerHost = $('memberLedger');
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
   const memberListSection = $('memberListSection');
+
+  const refundModal = $('refundModal');
+  const refundForm = $('refundForm');
+  const refundAmountInput = $('refundAmount');
+  const refundReasonSelect = $('refundReason');
+  const refundNotesInput = $('refundNotes');
+  const refundRemainingText = $('refundRemaining');
+  const refundConfirmBtn = $('btnRefundConfirm');
+
+  let activeRefundContext = null;
 
   function getMemberIdInfo() {
     const raw = (memberIdInput?.value || '').trim();
@@ -263,6 +283,199 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       return { raw: info.normalized, normalized: info.normalized };
     }
     return info;
+  }
+
+  function clearMemberLedger(message = 'Redeem and refund history will appear here.') {
+    if (memberLedgerHost) {
+      memberLedgerHost.innerHTML = '';
+      if (message) {
+        const div = document.createElement('div');
+        div.className = 'muted';
+        div.textContent = message;
+        memberLedgerHost.appendChild(div);
+      }
+    }
+    if (memberLedgerSummary) {
+      memberLedgerSummary.innerHTML = '';
+    }
+    activeRefundContext = null;
+  }
+
+  function renderLedgerSummary(summary) {
+    if (!memberLedgerSummary) return;
+    memberLedgerSummary.innerHTML = '';
+    if (!summary) return;
+    const chips = [
+      { key: 'earn', label: 'Earn' },
+      { key: 'redeem', label: 'Redeem' },
+      { key: 'refund', label: 'Refund' }
+    ];
+    for (const chip of chips) {
+      const data = summary[chip.key];
+      if (!data) continue;
+      const el = document.createElement('div');
+      el.className = 'chip';
+      el.textContent = `${chip.label}: ${data.d7 ?? 0} in 7d`;
+      const span = document.createElement('span');
+      span.textContent = `${data.d30 ?? 0} in 30d`;
+      el.appendChild(span);
+      memberLedgerSummary.appendChild(el);
+    }
+  }
+
+  function renderRedeemLedger(redeems = []) {
+    if (!memberLedgerHost) return;
+    memberLedgerHost.innerHTML = '';
+    if (!Array.isArray(redeems) || !redeems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'No redeemed rewards yet.';
+      memberLedgerHost.appendChild(empty);
+      return;
+    }
+    for (const entry of redeems) {
+      const card = document.createElement('div');
+      card.className = 'ledger-entry';
+
+      const header = document.createElement('div');
+      header.className = 'ledger-entry-header';
+      const title = document.createElement('div');
+      title.className = 'ledger-entry-title';
+      const amount = Math.abs(Number(entry.redeem_amount || entry.delta || 0));
+      const label = entry.note || entry.action || 'Redeem';
+      title.textContent = `${label} · ${amount} tokens`;
+      header.appendChild(title);
+
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      if (entry.refund_status === 'refunded') {
+        badge.classList.add('success');
+        badge.textContent = 'Refunded';
+      } else if (entry.refund_status === 'partial') {
+        badge.classList.add('warning');
+        badge.textContent = `Partial refund`;
+      } else {
+        badge.textContent = 'Redeemed';
+      }
+      header.appendChild(badge);
+
+      const actions = document.createElement('div');
+      actions.className = 'ledger-actions';
+      if (entry.remaining_refundable > 0) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'primary';
+        btn.textContent = entry.remaining_refundable === amount
+          ? 'Refund'
+          : `Refund (remaining ${entry.remaining_refundable})`;
+        btn.addEventListener('click', () => openRefundModal(entry));
+        actions.appendChild(btn);
+      } else {
+        const note = document.createElement('span');
+        note.className = 'refund-remaining';
+        note.textContent = 'No refundable amount remaining';
+        actions.appendChild(note);
+      }
+      header.appendChild(actions);
+
+      card.appendChild(header);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const when = document.createElement('span');
+      when.textContent = `Redeemed ${formatTime(entry.at)}`;
+      meta.appendChild(when);
+      if (entry.actor) {
+        const actor = document.createElement('span');
+        actor.textContent = `By ${entry.actor}`;
+        meta.appendChild(actor);
+      }
+      const totals = document.createElement('span');
+      totals.textContent = `Refunded ${entry.refunded_amount || 0} · Remaining ${entry.remaining_refundable || 0}`;
+      meta.appendChild(totals);
+      card.appendChild(meta);
+
+      if (Array.isArray(entry.refunds) && entry.refunds.length) {
+        const list = document.createElement('div');
+        list.className = 'ledger-refund-list';
+        for (const refund of entry.refunds) {
+          const line = document.createElement('div');
+          line.className = 'ledger-refund';
+          const headline = document.createElement('strong');
+          headline.textContent = `+${Number(refund.delta || 0)} tokens on ${formatTime(refund.at)}`;
+          line.appendChild(headline);
+          const details = document.createElement('span');
+          const parts = [];
+          if (refund.refund_reason) parts.push(refund.refund_reason.replace(/_/g, ' '));
+          if (refund.actor) parts.push(refund.actor);
+          if (refund.id) parts.push(`#${refund.id}`);
+          details.textContent = parts.join(' · ');
+          line.appendChild(details);
+          if (refund.refund_notes) {
+            const notes = document.createElement('span');
+            notes.textContent = refund.refund_notes;
+            line.appendChild(notes);
+          }
+          list.appendChild(line);
+        }
+        card.appendChild(list);
+      }
+
+      memberLedgerHost.appendChild(card);
+    }
+  }
+
+  function openRefundModal(entry) {
+    if (!refundModal || !refundAmountInput || !refundReasonSelect || !refundConfirmBtn) return;
+    activeRefundContext = entry;
+    const remaining = Math.max(0, Number(entry.remaining_refundable || 0));
+    refundAmountInput.value = remaining || Math.abs(Number(entry.redeem_amount || entry.delta || 0)) || 1;
+    refundAmountInput.max = remaining || '';
+    refundAmountInput.focus();
+    refundReasonSelect.value = refundReasonSelect.options[0]?.value || 'duplicate';
+    if (refundNotesInput) refundNotesInput.value = '';
+    if (refundRemainingText) {
+      const label = entry.note || entry.action || 'reward';
+      refundRemainingText.textContent = `Up to ${remaining} tokens can be refunded for “${label}”.`;
+    }
+    refundConfirmBtn.disabled = false;
+    refundConfirmBtn.textContent = 'Confirm refund';
+    refundModal.classList.remove('hidden');
+  }
+
+  function closeRefundModal() {
+    if (!refundModal) return;
+    refundModal.classList.add('hidden');
+    activeRefundContext = null;
+  }
+
+  async function refreshMemberLedger(userId) {
+    if (!userId) {
+      clearMemberLedger();
+      return;
+    }
+    if (memberLedgerHost) {
+      memberLedgerHost.innerHTML = '<div class="muted">Loading redeem history…</div>';
+    }
+    if (memberLedgerSummary) memberLedgerSummary.innerHTML = '';
+    try {
+      const { res, body } = await adminFetch(`/ck/ledger/${encodeURIComponent(userId)}`);
+      if (res.status === 401) {
+        clearMemberLedger('Admin key invalid.');
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to load ledger');
+        throw new Error(msg);
+      }
+      const data = body && typeof body === 'object' ? body : {};
+      renderLedgerSummary(data.summary);
+      renderRedeemLedger(data.redeems || []);
+    } catch (err) {
+      console.error(err);
+      clearMemberLedger(err.message || 'Failed to load ledger history.');
+    }
   }
 
   function requireMemberId({ silent = false } = {}) {
@@ -349,6 +562,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     normalizeMemberInput();
     setMemberStatus('');
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
+    clearMemberLedger('Redeem and refund history will appear here.');
     loadHolds();
   }
 
@@ -363,6 +577,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     if (!userId) return;
     setMemberStatus('');
     setMemberInfoMessage('Loading member info...');
+    clearMemberLedger('Loading redeem history…');
     try {
       const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`);
       if (res.status === 401) {
@@ -380,11 +595,18 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       }
       const member = body && typeof body === 'object' ? body : null;
       renderMemberInfo(member);
-      if (member) setMemberStatus(`Loaded member ${member.userId}.`);
+      if (member) {
+        setMemberStatus(`Loaded member ${member.userId}.`);
+        clearMemberLedger('Loading redeem history…');
+        await refreshMemberLedger(member.userId);
+      } else {
+        clearMemberLedger('Redeem and refund history will appear here.');
+      }
     } catch (err) {
       console.error(err);
       setMemberInfoMessage(err.message || 'Failed to load member.');
       toast(err.message || 'Failed to load member', 'error');
+      clearMemberLedger(err.message || 'Redeem history unavailable.');
     }
   });
 
@@ -777,6 +999,87 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   $('btnReloadHolds')?.addEventListener('click', loadHolds);
   $('holdFilter')?.addEventListener('change', loadHolds);
   document.addEventListener('DOMContentLoaded', loadHolds);
+
+  refundModal?.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target?.dataset?.close !== undefined || target === refundModal || target?.classList?.contains('modal-backdrop')) {
+      event.preventDefault();
+      closeRefundModal();
+    }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && refundModal && !refundModal.classList.contains('hidden')) {
+      closeRefundModal();
+    }
+  });
+
+  refundForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!activeRefundContext) {
+      toast('Select a redeem entry to refund.', 'error');
+      return;
+    }
+    const userId = activeRefundContext.userId || activeRefundContext.user_id || '';
+    const remaining = Math.max(0, Number(activeRefundContext.remaining_refundable || 0));
+    const amount = Number(refundAmountInput?.value || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast('Enter a positive refund amount.', 'error');
+      return;
+    }
+    if (remaining && amount > remaining + 0.0001) {
+      toast(`Amount exceeds remaining refundable tokens (${remaining}).`, 'error');
+      return;
+    }
+    const payload = {
+      user_id: userId,
+      redeem_tx_id: activeRefundContext.id,
+      amount,
+      reason: refundReasonSelect?.value || 'duplicate',
+      notes: (refundNotesInput?.value || '').trim() || undefined,
+      idempotency_key: generateIdempotencyKey()
+    };
+    refundConfirmBtn.disabled = true;
+    refundConfirmBtn.textContent = 'Processing…';
+    try {
+      const { res, body } = await adminFetch('/ck/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        refundConfirmBtn.disabled = false;
+        refundConfirmBtn.textContent = 'Confirm refund';
+        return;
+      }
+      if (res.status === 429) {
+        const retry = Number(body?.retry_after_ms || 0);
+        const seconds = retry ? Math.ceil(retry / 1000) : null;
+        const msg = seconds ? `Too many refunds. Try again in ${seconds} seconds.` : 'Too many refunds right now. Try again soon.';
+        throw new Error(msg);
+      }
+      if (res.status === 409 && body && typeof body === 'object') {
+        toast('This refund was already recorded.', 'warning');
+        closeRefundModal();
+        await refreshMemberLedger(userId);
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Refund failed');
+        throw new Error(msg);
+      }
+      toast(`${amount} tokens returned.`, 'success');
+      closeRefundModal();
+      await refreshMemberLedger(userId);
+      loadHolds();
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Refund failed', 'error');
+      refundConfirmBtn.disabled = false;
+      refundConfirmBtn.textContent = 'Confirm refund';
+    }
+  });
 
   async function cancelHold(id) {
     if (!confirm('Cancel this hold?')) return;
@@ -1573,14 +1876,14 @@ setupScanner({
 
   async function loadHistory() {
     if (!historyTable) return;
-    historyTable.innerHTML = '<tr><td colspan="11" class="muted">Loading...</td></tr>';
+    historyTable.innerHTML = '<tr><td colspan="17" class="muted">Loading...</td></tr>';
     try {
       const params = buildHistoryParams();
       const qs = new URLSearchParams(params).toString();
       const { res, body } = await adminFetch(`/api/history?${qs}`);
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
-        historyTable.innerHTML = '<tr><td colspan="11" class="muted">Admin key invalid.</td></tr>';
+        historyTable.innerHTML = '<tr><td colspan="17" class="muted">Admin key invalid.</td></tr>';
         return;
       }
       if (!res.ok) {
@@ -1591,26 +1894,37 @@ setupScanner({
       historyTable.innerHTML = '';
       for (const row of data.rows || []) {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${formatTime(row.at)}</td>
-          <td>${row.userId}</td>
-          <td>${row.action}</td>
-          <td>${row.delta}</td>
-          <td>${row.balance_after}</td>
-          <td>${row.note || ''}</td>
-          <td>${row.templates ? JSON.stringify(row.templates) : ''}</td>
-          <td>${row.itemId || ''}</td>
-          <td>${row.holdId || ''}</td>
-          <td>${row.finalCost ?? ''}</td>
-          <td>${row.actor || ''}</td>
-        `;
+        const values = [
+          formatTime(row.at),
+          row.userId || '',
+          row.verb || '',
+          row.action || '',
+          row.delta ?? '',
+          row.balance_after ?? '',
+          row.note || '',
+          row.notes || '',
+          row.templates ? JSON.stringify(row.templates) : '',
+          row.itemId || '',
+          row.holdId || '',
+          row.parent_tx_id || '',
+          row.finalCost ?? '',
+          row.refund_reason || '',
+          row.refund_notes || '',
+          row.actor || '',
+          row.idempotency_key || ''
+        ];
+        for (const value of values) {
+          const td = document.createElement('td');
+          td.textContent = value === undefined || value === null ? '' : String(value);
+          tr.appendChild(td);
+        }
         historyTable.appendChild(tr);
       }
       if (!historyTable.children.length) {
-        historyTable.innerHTML = '<tr><td colspan="11" class="muted">No history</td></tr>';
+        historyTable.innerHTML = '<tr><td colspan="17" class="muted">No history</td></tr>';
       }
     } catch (err) {
-      historyTable.innerHTML = `<tr><td colspan="11" class="muted">${err.message || 'Failed'}</td></tr>`;
+      historyTable.innerHTML = `<tr><td colspan="17" class="muted">${err.message || 'Failed'}</td></tr>`;
     }
   }
 

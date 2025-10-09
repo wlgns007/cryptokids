@@ -338,6 +338,188 @@
       cursor: pointer;
     }
 
+    .modal-card {
+      position: relative;
+      width: min(94vw, 420px);
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .modal-card header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .modal-card form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .modal-card label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 14px;
+    }
+
+    .modal-card input,
+    .modal-card select,
+    .modal-card textarea {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    .modal-card textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .ledger-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .ledger-summary .chip {
+      display: inline-flex;
+      flex-direction: column;
+      padding: 6px 10px;
+      background: rgba(37, 99, 235, 0.1);
+      color: var(--accent);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      min-width: 120px;
+    }
+
+    .ledger-summary .chip span {
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .member-ledger {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .ledger-entry {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    }
+
+    .ledger-entry-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .ledger-entry-title {
+      font-weight: 600;
+    }
+
+    .ledger-entry .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ledger-entry .meta span {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .ledger-refund-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .ledger-refund {
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-left: 8px;
+      border-left: 2px solid rgba(37, 99, 235, 0.2);
+    }
+
+    .ledger-refund strong {
+      color: var(--fg);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(37, 99, 235, 0.12);
+      color: #1d4ed8;
+    }
+
+    .badge.success {
+      background: rgba(22, 163, 74, 0.12);
+      color: #15803d;
+    }
+
+    .badge.warning {
+      background: rgba(234, 179, 8, 0.18);
+      color: #b45309;
+    }
+
+    .ledger-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .ledger-actions button {
+      flex: 0 0 auto;
+    }
+
+    .refund-remaining {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
     .collapsible-content[hidden] {
       display: none !important;
     }
@@ -584,6 +766,8 @@
           </label>
           <div id="memberInfoPanel" class="stack" style="border:1px solid var(--line); border-radius:12px; padding:12px; background:rgba(37,99,235,0.04);">
             <div id="memberInfoDetails" class="muted">Enter a user ID and click Member Info to view details.</div>
+            <div id="memberLedgerSummary" class="ledger-summary"></div>
+            <div id="memberLedger" class="member-ledger muted">Redeem and refund history will appear here.</div>
           </div>
           <small class="muted" id="memberStatus"></small>
         </div>
@@ -892,7 +1076,8 @@
             <select id="historyType">
               <option value="all">All</option>
               <option value="earn">Earn</option>
-              <option value="spend">Spend</option>
+              <option value="spend">Redeem</option>
+              <option value="refund">Refund</option>
             </select>
           </label>
           <label>Source
@@ -917,21 +1102,61 @@
               <tr>
                 <th>When</th>
                 <th>User</th>
+                <th>Verb</th>
                 <th>Action</th>
                 <th>Delta</th>
                 <th>Balance</th>
                 <th>Note</th>
+                <th>Notes</th>
                 <th>Templates</th>
                 <th>Item</th>
                 <th>Hold</th>
+                <th>Parent Tx</th>
                 <th>Final Cost</th>
+                <th>Refund Reason</th>
+                <th>Refund Notes</th>
                 <th>Actor</th>
+                <th>Idempotency Key</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="refundModal" class="modal hidden">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <header>
+        <h3>Refund tokens</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-close>×</button>
+      </header>
+      <form id="refundForm">
+        <p class="refund-remaining" id="refundRemaining">Tokens returned are added back to the child's balance.</p>
+        <label>Amount
+          <input id="refundAmount" type="number" min="1" step="1" required>
+        </label>
+        <label>Reason
+          <select id="refundReason" required>
+            <option value="duplicate">Duplicate request</option>
+            <option value="mis_tap">Mis-tap</option>
+            <option value="wrong_item">Wrong item</option>
+            <option value="canceled">Canceled</option>
+            <option value="quality_issue">Quality issue</option>
+            <option value="staff_error">Staff error</option>
+          </select>
+        </label>
+        <label>Notes (optional)
+          <textarea id="refundNotes" placeholder="Optional context for the audit log"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" data-close>Cancel</button>
+          <button type="submit" class="primary" id="btnRefundConfirm">Confirm refund</button>
+        </div>
+      </form>
+      <small class="muted">Returns tokens to the child. No money changes hands.</small>
     </div>
   </div>
 
