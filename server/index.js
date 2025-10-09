@@ -52,7 +52,6 @@ const FEATURE_FLAGS = Object.freeze({
 
 let BUILD = (process.env.BUILD_VERSION || process.env.RENDER_GIT_COMMIT || process.env.COMMIT_HASH || "").trim();
 if (!BUILD) {
-  const started = Date.now();
   try {
     BUILD = execSync("git rev-parse --short HEAD").toString().trim();
   } catch {
@@ -637,14 +636,6 @@ const listRecentRedeemsStmt = db.prepare(`
   FROM ledger
   WHERE userId = ?
     AND verb = 'redeem'
-  ORDER BY at DESC, id DESC
-  LIMIT 50
-`);
-const listRecentRefundsStmt = db.prepare(`
-  SELECT id, at, delta, parent_tx_id
-  FROM ledger
-  WHERE userId = ?
-    AND verb = 'refund'
   ORDER BY at DESC, id DESC
   LIMIT 50
 `);
@@ -1936,6 +1927,7 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
   if (!FEATURE_FLAGS.refunds) {
     return res.status(403).json(buildErrorResponse({ err: { message: "FEATURE_DISABLED" }, userId: normalizedUser }));
   }
+  const started = Date.now();
   try {
     assertRefundRateLimit(actorId);
     console.info("[refund] attempt", {
@@ -1946,7 +1938,6 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
       actorId,
       idempotencyKey
     });
-    const started = Date.now();
     const result = createRefundTransaction({
       userId: body.user_id,
       redeemTxId: body.redeem_tx_id,

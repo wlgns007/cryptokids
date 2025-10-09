@@ -6,6 +6,8 @@ process.env.NODE_ENV = 'test';
 process.env.DB_PATH = ':memory:';
 process.env.CK_REFUND_WINDOW_DAYS = '30';
 
+const fetch = globalThis.fetch;
+
 const {
   app,
   applyLedger,
@@ -41,7 +43,9 @@ test('hold endpoints include state hints and honor admin gating', async (t) => {
   const server = app.listen(0);
   await once(server, 'listening');
   t.after(async () => {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise(resolve => {
+      server.close(resolve);
+    });
   });
 
   const { port } = server.address();
