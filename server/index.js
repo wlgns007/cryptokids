@@ -6,20 +6,17 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
+import db, { DATA_DIR } from "./db.js";
+import ledgerRoutes from "./routes/ledger.js";
+import { earn, redeem, balanceOf, ensureMemberAccount } from "./ledger/core.js";
 
 const require = createRequire(import.meta.url);
-const Database = require("better-sqlite3");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "cryptokids.db");
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 
@@ -58,6 +55,7 @@ function sendVersioned(res, file, type = "text/html") {
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use("/api", ledgerRoutes);
 
 app.get(["/admin", "/admin.html"], (_req, res) => {
   sendVersioned(res, "admin.html");
@@ -67,7 +65,7 @@ app.get(["/child", "/child.html"], (_req, res) => {
   sendVersioned(res, "child.html");
 });
 
-app.get(["/scan", "/scan.html"], (req, res) => {
+app.get(["/scan", "/scan.html"], async (req, res) => {
   res.type("html");
   res.set("Cache-Control", "no-store");
   const token = (req.query?.t ?? req.query?.token ?? "").toString().trim();
@@ -101,11 +99,9 @@ app.get(["/scan", "/scan.html"], (req, res) => {
 
     let balance = null;
     if (hold.userId) {
-      const row = selectBalanceStmt.get(hold.userId);
-      if (row && row.balance !== undefined && row.balance !== null) {
-        const parsed = Number(row.balance);
-        if (Number.isFinite(parsed)) balance = parsed;
-      }
+      const value = await balanceOf(hold.userId);
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) balance = parsed;
     }
 
     const costValue = Number(hold?.finalCost ?? hold?.quotedCost ?? payload?.data?.cost ?? 0);
@@ -127,7 +123,7 @@ app.get(["/scan", "/scan.html"], (req, res) => {
   }
 
   try {
-    const result = redeemToken({
+    const result = await redeemToken({
       token,
       req,
       actor: typ => (typ === "earn" ? "link_earn" : "link_give"),
@@ -164,9 +160,6 @@ app.set("trust proxy", 1);
 function normId(value) {
   return String(value || "").trim().toLowerCase();
 }
-
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
 
 let holdColumnNames = new Set();
 
@@ -370,13 +363,6 @@ function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-const selectBalanceStmt = db.prepare("SELECT balance FROM balances WHERE user_id = ?");
-const upsertBalanceStmt = db.prepare(`
-  INSERT INTO balances (user_id, balance, updated_at)
-  VALUES (@user_id, @balance, @updated_at)
-  ON CONFLICT(user_id) DO UPDATE SET balance = excluded.balance, updated_at = excluded.updated_at
-`);
-
 const selectMemberStmt = db.prepare(`
   SELECT userId, name, dob, sex, createdAt, updatedAt
   FROM members
@@ -450,12 +436,7 @@ function ensureDefaultMembers() {
 ensureDefaultMembers();
 
 function getBalance(userId) {
-  const row = selectBalanceStmt.get(userId);
-  return row ? Number(row.balance || 0) : 0;
-}
-
-function setBalance(userId, balance) {
-  upsertBalanceStmt.run({ user_id: userId, balance, updated_at: nowSec() });
+  return Number(balanceOf(userId) || 0);
 }
 
 function mapMember(row) {
@@ -495,25 +476,40 @@ function applyLedger({ userId, delta, action, note = null, itemId = null, holdId
   const ua = req?.headers?.["user-agent"] || null;
   const at = Date.now();
   const templatesJson = templates ? JSON.stringify(templates) : null;
+  const normalizedDelta = Number(delta) | 0;
 
   return db.transaction(() => {
     if (tokenInfo?.jti) {
+      const ledgerKey = `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}`;
+      const existingTx = db.get("SELECT id FROM ledger_tx WHERE idempotency_key=?", [ledgerKey]);
+      if (existingTx) {
+        throw new Error("TOKEN_USED");
+      }
       if (checkTokenStmt.get(tokenInfo.jti)) {
         throw new Error("TOKEN_USED");
       }
     }
     const current = getBalance(userId);
-    const next = current + delta;
+    const next = current + normalizedDelta;
     if (next < 0) {
       throw new Error("INSUFFICIENT_FUNDS");
     }
-    setBalance(userId, next);
+    const idempotencyKey = tokenInfo?.jti ? `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}` : undefined;
+    const sourceRef = holdId ?? itemId ?? null;
+    if (normalizedDelta > 0) {
+      earn({ memberId: userId, amount: normalizedDelta, reason: action, sourceId: sourceRef, idempotencyKey });
+    } else if (normalizedDelta < 0) {
+      redeem({ memberId: userId, amount: -normalizedDelta, rewardId: sourceRef ?? action, idempotencyKey });
+    } else {
+      ensureMemberAccount(userId);
+    }
+    const balanceAfter = getBalance(userId);
     insertLedgerStmt.run({
       at,
       userId,
       action,
-      delta,
-      balance_after: next,
+      delta: normalizedDelta,
+      balance_after: balanceAfter,
       itemId,
       holdId,
       templates: templatesJson,
@@ -526,7 +522,7 @@ function applyLedger({ userId, delta, action, note = null, itemId = null, holdId
     if (tokenInfo?.jti) {
       consumeTokenStmt.run(tokenInfo.jti, tokenInfo.typ, at);
     }
-    return next;
+    return balanceAfter;
   })();
 }
 
