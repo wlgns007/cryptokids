@@ -81,6 +81,172 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     return ok;
   }
 
+  function ensureMemberPanelStyles() {
+    if (document.getElementById('memberPanelsStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'memberPanelsStyles';
+    style.textContent = `
+.member-balance-container {
+  display: grid;
+  gap: 12px;
+}
+
+details.member-fold {
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+details.member-fold[open] {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+details.member-fold summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 14px;
+  position: relative;
+  padding-right: 36px;
+}
+
+details.member-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+details.member-fold summary::after {
+  content: '▾';
+  position: absolute;
+  right: 14px;
+  color: var(--muted, #6b7280);
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+details.member-fold[open] summary::after {
+  transform: rotate(-180deg);
+}
+
+details.member-fold .summary-value {
+  font-size: 13px;
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+
+.member-fold-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ledger-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ledger-summary .chip {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent, #2563eb);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.ledger-summary .chip span {
+  color: var(--muted, #6b7280);
+  font-weight: 500;
+}
+
+.member-ledger {
+  display: grid;
+  gap: 8px;
+}
+`;
+    if (document.head) {
+      document.head.appendChild(style);
+    } else if (document.body) {
+      document.body.appendChild(style);
+    }
+  }
+
+  function ensureMemberPanels() {
+    ensureMemberPanelStyles();
+    if (!memberInfoPanel) return;
+    let container = document.getElementById('memberBalanceContainer');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'memberBalanceContainer';
+      container.className = 'stack member-balance-container';
+      if (memberInfoDetails && memberInfoDetails.nextSibling) {
+        memberInfoPanel.insertBefore(container, memberInfoDetails.nextSibling);
+      } else {
+        memberInfoPanel.appendChild(container);
+      }
+    } else if (container.parentElement !== memberInfoPanel) {
+      memberInfoPanel.appendChild(container);
+    }
+
+    if (!container.querySelector('#memberBalanceDetails')) {
+      container.innerHTML = `
+<details id="memberBalanceDetails" class="member-fold">
+  <summary>
+    <span>Balance</span>
+    <span class="summary-value" id="memberBalanceSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberBalanceBody">
+    <div class="muted">Balance info will appear here.</div>
+  </div>
+</details>
+<details id="memberEarnDetails" class="member-fold">
+  <summary>
+    <span>Earn</span>
+    <span class="summary-value" id="memberEarnSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberEarnBody">
+    <div id="memberEarnSummary" class="ledger-summary">
+      <div class="muted">Earn activity will appear here.</div>
+    </div>
+  </div>
+</details>
+<details id="memberRedeemDetails" class="member-fold">
+  <summary>
+    <span>Redeem</span>
+    <span class="summary-value" id="memberRedeemSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body">
+    <div id="memberRedeemSummary" class="ledger-summary">
+      <div class="muted">Redeem activity will appear here.</div>
+    </div>
+    <div id="memberLedger" class="member-ledger muted">Redeemed rewards will appear here.</div>
+  </div>
+</details>
+<details id="memberRefundDetails" class="member-fold">
+  <summary>
+    <span>Refund</span>
+    <span class="summary-value" id="memberRefundSummaryValue">—</span>
+  </summary>
+  <div class="member-fold-body" id="memberRefundBody">
+    <div id="memberRefundSummary" class="ledger-summary">
+      <div class="muted">Refund activity will appear here.</div>
+    </div>
+  </div>
+</details>
+`;
+    }
+  }
+
   if (keyInput) {
     keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
     const saved = storageGet('CK_ADMIN_KEY');
@@ -253,7 +419,23 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   const memberIdInput = $('memberUserId');
   const memberStatusEl = $('memberStatus');
   const memberInfoDetails = $('memberInfoDetails');
-  const memberLedgerSummary = $('memberLedgerSummary');
+  const memberInfoPanel = $('memberInfoPanel');
+
+  ensureMemberPanels();
+
+  const memberBalanceContainer = $('memberBalanceContainer');
+  const memberBalanceDetails = $('memberBalanceDetails');
+  const memberBalanceSummaryValue = $('memberBalanceSummaryValue');
+  const memberBalanceBody = $('memberBalanceBody');
+  const memberEarnDetails = $('memberEarnDetails');
+  const memberEarnSummaryValue = $('memberEarnSummaryValue');
+  const memberEarnSummary = $('memberEarnSummary');
+  const memberRedeemDetails = $('memberRedeemDetails');
+  const memberRedeemSummaryValue = $('memberRedeemSummaryValue');
+  const memberRedeemSummary = $('memberRedeemSummary');
+  const memberRefundDetails = $('memberRefundDetails');
+  const memberRefundSummaryValue = $('memberRefundSummaryValue');
+  const memberRefundSummary = $('memberRefundSummary');
   const memberLedgerHost = $('memberLedger');
   const memberTableBody = $('memberTable')?.querySelector('tbody');
   const memberListStatus = $('memberListStatus');
@@ -285,46 +467,104 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     return info;
   }
 
-  function clearMemberLedger(message = 'Redeem and refund history will appear here.') {
-    if (memberLedgerHost) {
-      memberLedgerHost.innerHTML = '';
-      if (message) {
-        const div = document.createElement('div');
-        div.className = 'muted';
-        div.textContent = message;
-        memberLedgerHost.appendChild(div);
-      }
-    }
-    if (memberLedgerSummary) {
-      memberLedgerSummary.innerHTML = '';
-    }
+  function setPlaceholder(container, text) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!text) return;
+    const div = document.createElement('div');
+    div.className = 'muted';
+    div.textContent = text;
+    container.appendChild(div);
+  }
+
+  function resetSummaryValue(el) {
+    if (el) el.textContent = '—';
+  }
+
+  function collapseDetails(detailsEl) {
+    detailsEl?.removeAttribute('open');
+  }
+
+  function clearMemberLedger(message = 'Redeemed rewards will appear after checking balance.') {
+    setPlaceholder(memberLedgerHost, message);
+    setPlaceholder(memberEarnSummary, 'Earn activity will appear after checking balance.');
+    setPlaceholder(memberRedeemSummary, 'Redeem activity will appear after checking balance.');
+    setPlaceholder(memberRefundSummary, 'Refund activity will appear after checking balance.');
+    if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Click “Check Balance” to load balance details.');
+    resetSummaryValue(memberBalanceSummaryValue);
+    resetSummaryValue(memberEarnSummaryValue);
+    resetSummaryValue(memberRedeemSummaryValue);
+    resetSummaryValue(memberRefundSummaryValue);
+    collapseDetails(memberBalanceDetails);
+    collapseDetails(memberEarnDetails);
+    collapseDetails(memberRedeemDetails);
+    collapseDetails(memberRefundDetails);
     activeRefundContext = null;
   }
 
-  function renderLedgerSummary(summary) {
-    if (!memberLedgerSummary) return;
-    memberLedgerSummary.innerHTML = '';
-    if (!summary) return;
-    const chips = [
-      { key: 'earn', label: 'Earn' },
-      { key: 'redeem', label: 'Redeem' },
-      { key: 'refund', label: 'Refund' }
-    ];
-    for (const chip of chips) {
-      const data = summary[chip.key];
-      if (!data) continue;
-      const el = document.createElement('div');
-      el.className = 'chip';
-      el.textContent = `${chip.label}: ${data.d7 ?? 0} in 7d`;
-      const span = document.createElement('span');
-      span.textContent = `${data.d30 ?? 0} in 30d`;
-      el.appendChild(span);
-      memberLedgerSummary.appendChild(el);
+  function formatTokenValue(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      return `${value ?? 0}`;
     }
+    return num.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 });
+  }
+
+  function renderSummarySection({ summary, valueEl, container, emptyMessage }) {
+    if (valueEl) {
+      if (!summary) {
+        valueEl.textContent = 'No activity';
+      } else {
+        const d7 = formatTokenValue(summary.d7 ?? 0);
+        const d30 = formatTokenValue(summary.d30 ?? 0);
+        valueEl.textContent = `7d ${d7} · 30d ${d30}`;
+      }
+    }
+    if (!container) return;
+    container.innerHTML = '';
+    if (!summary) {
+      setPlaceholder(container, emptyMessage);
+      return;
+    }
+    const rows = [
+      { label: 'Past 7 days', value: summary.d7 ?? 0 },
+      { label: 'Past 30 days', value: summary.d30 ?? 0 }
+    ];
+    for (const row of rows) {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.textContent = row.label;
+      const span = document.createElement('span');
+      span.textContent = `${formatTokenValue(row.value)} tokens`;
+      chip.appendChild(span);
+      container.appendChild(chip);
+    }
+  }
+
+  function renderLedgerSummary(summary) {
+    renderSummarySection({
+      summary: summary?.earn,
+      valueEl: memberEarnSummaryValue,
+      container: memberEarnSummary,
+      emptyMessage: 'No earn activity recorded.'
+    });
+    renderSummarySection({
+      summary: summary?.redeem,
+      valueEl: memberRedeemSummaryValue,
+      container: memberRedeemSummary,
+      emptyMessage: 'No redeemed activity recorded.'
+    });
+    renderSummarySection({
+      summary: summary?.refund,
+      valueEl: memberRefundSummaryValue,
+      container: memberRefundSummary,
+      emptyMessage: 'No refunds recorded.'
+    });
   }
 
   function renderRedeemLedger(redeems = []) {
     if (!memberLedgerHost) return;
+    activeRefundContext = null;
     memberLedgerHost.innerHTML = '';
     if (!Array.isArray(redeems) || !redeems.length) {
       const empty = document.createElement('div');
@@ -452,29 +692,35 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   async function refreshMemberLedger(userId) {
     if (!userId) {
       clearMemberLedger();
-      return;
+      return null;
     }
-    if (memberLedgerHost) {
-      memberLedgerHost.innerHTML = '<div class="muted">Loading redeem history…</div>';
-    }
-    if (memberLedgerSummary) memberLedgerSummary.innerHTML = '';
+    if (memberLedgerHost) setPlaceholder(memberLedgerHost, 'Loading redeemed items…');
+    if (memberEarnSummaryValue) memberEarnSummaryValue.textContent = 'Loading…';
+    if (memberRedeemSummaryValue) memberRedeemSummaryValue.textContent = 'Loading…';
+    if (memberRefundSummaryValue) memberRefundSummaryValue.textContent = 'Loading…';
+    if (memberEarnSummary) setPlaceholder(memberEarnSummary, 'Loading earn activity…');
+    if (memberRedeemSummary) setPlaceholder(memberRedeemSummary, 'Loading redeem activity…');
+    if (memberRefundSummary) setPlaceholder(memberRefundSummary, 'Loading refund activity…');
     try {
       const { res, body } = await adminFetch(`/ck/ledger/${encodeURIComponent(userId)}`);
       if (res.status === 401) {
         clearMemberLedger('Admin key invalid.');
         toast(ADMIN_INVALID_MSG, 'error');
-        return;
+        return null;
       }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'Failed to load ledger');
         throw new Error(msg);
       }
       const data = body && typeof body === 'object' ? body : {};
-      renderLedgerSummary(data.summary);
-      renderRedeemLedger(data.redeems || []);
+      renderLedgerSummary(data.summary || {});
+      renderRedeemLedger(Array.isArray(data.redeems) ? data.redeems : []);
+      return data;
     } catch (err) {
       console.error(err);
-      clearMemberLedger(err.message || 'Failed to load ledger history.');
+      if (memberLedgerHost) setPlaceholder(memberLedgerHost, err.message || 'Failed to load ledger history.');
+      renderLedgerSummary(null);
+      return null;
     }
   }
 
@@ -562,7 +808,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     normalizeMemberInput();
     setMemberStatus('');
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
-    clearMemberLedger('Redeem and refund history will appear here.');
+    clearMemberLedger('Redeemed rewards will appear after checking balance.');
     loadHolds();
   }
 
@@ -577,7 +823,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     if (!userId) return;
     setMemberStatus('');
     setMemberInfoMessage('Loading member info...');
-    clearMemberLedger('Loading redeem history…');
+    clearMemberLedger();
     try {
       const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`);
       if (res.status === 401) {
@@ -597,10 +843,9 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       renderMemberInfo(member);
       if (member) {
         setMemberStatus(`Loaded member ${member.userId}.`);
-        clearMemberLedger('Loading redeem history…');
-        await refreshMemberLedger(member.userId);
+        clearMemberLedger();
       } else {
-        clearMemberLedger('Redeem and refund history will appear here.');
+        clearMemberLedger('Redeemed rewards will appear after checking balance.');
       }
     } catch (err) {
       console.error(err);
@@ -614,6 +859,9 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     const userId = requireMemberId();
     if (!userId) return;
     setMemberStatus('Fetching balance...');
+    if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Loading…';
+    if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Loading balance…');
+    const ledgerPromise = refreshMemberLedger(userId);
     try {
       const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
       if (!res.ok) {
@@ -621,12 +869,29 @@ window.getYouTubeEmbed = getYouTubeEmbed;
         throw new Error(msg);
       }
       const data = body && typeof body === 'object' ? body : {};
-      const balance = Number.isFinite(Number(data.balance)) ? Number(data.balance) : data.balance;
-      setMemberStatus(`Balance: ${balance ?? 0} points.`);
+      const numericBalance = Number(data.balance);
+      const balanceValue = Number.isFinite(numericBalance) ? numericBalance : data.balance ?? 0;
+      const formattedBalance = formatTokenValue(balanceValue ?? 0);
+      if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = `${formattedBalance} tokens`;
+      if (memberBalanceBody) {
+        memberBalanceBody.innerHTML = '';
+        const line = document.createElement('div');
+        line.textContent = `Current balance: ${formattedBalance} tokens.`;
+        memberBalanceBody.appendChild(line);
+        const checked = document.createElement('small');
+        checked.className = 'muted';
+        checked.textContent = `Checked ${new Date().toLocaleString()}`;
+        memberBalanceBody.appendChild(checked);
+      }
+      setMemberStatus(`Balance: ${formattedBalance} tokens.`);
     } catch (err) {
       console.error(err);
       setMemberStatus(err.message || 'Failed to fetch balance.');
+      if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Unavailable';
+      if (memberBalanceBody) setPlaceholder(memberBalanceBody, err.message || 'Balance unavailable.');
       toast(err.message || 'Failed to fetch balance', 'error');
+    } finally {
+      await ledgerPromise;
     }
   });
 

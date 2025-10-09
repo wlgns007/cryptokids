@@ -420,6 +420,64 @@
       font-weight: 500;
     }
 
+    .member-balance-container {
+      gap: 12px;
+    }
+
+    details.member-fold {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    details.member-fold[open] {
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+    }
+
+    details.member-fold summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      padding: 12px 14px;
+      position: relative;
+      padding-right: 36px;
+    }
+
+    details.member-fold summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.member-fold summary::after {
+      content: '▾';
+      position: absolute;
+      right: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      transition: transform 0.2s ease;
+    }
+
+    details.member-fold[open] summary::after {
+      transform: rotate(-180deg);
+    }
+
+    details.member-fold .summary-value {
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .member-fold-body {
+      padding: 0 14px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
     .member-ledger {
       display: flex;
       flex-direction: column;
@@ -766,8 +824,51 @@
           </label>
           <div id="memberInfoPanel" class="stack" style="border:1px solid var(--line); border-radius:12px; padding:12px; background:rgba(37,99,235,0.04);">
             <div id="memberInfoDetails" class="muted">Enter a user ID and click Member Info to view details.</div>
-            <div id="memberLedgerSummary" class="ledger-summary"></div>
-            <div id="memberLedger" class="member-ledger muted">Redeem and refund history will appear here.</div>
+            <div id="memberBalanceContainer" class="stack member-balance-container">
+              <details id="memberBalanceDetails" class="member-fold">
+                <summary>
+                  <span>Balance</span>
+                  <span class="summary-value" id="memberBalanceSummaryValue">—</span>
+                </summary>
+                <div class="member-fold-body" id="memberBalanceBody">
+                  <div class="muted">Balance info will appear here.</div>
+                </div>
+              </details>
+              <details id="memberEarnDetails" class="member-fold">
+                <summary>
+                  <span>Earn</span>
+                  <span class="summary-value" id="memberEarnSummaryValue">—</span>
+                </summary>
+                <div class="member-fold-body" id="memberEarnBody">
+                  <div id="memberEarnSummary" class="ledger-summary">
+                    <div class="muted">Earn activity will appear here.</div>
+                  </div>
+                </div>
+              </details>
+              <details id="memberRedeemDetails" class="member-fold">
+                <summary>
+                  <span>Redeem</span>
+                  <span class="summary-value" id="memberRedeemSummaryValue">—</span>
+                </summary>
+                <div class="member-fold-body">
+                  <div id="memberRedeemSummary" class="ledger-summary">
+                    <div class="muted">Redeem activity will appear here.</div>
+                  </div>
+                  <div id="memberLedger" class="member-ledger muted">Redeemed rewards will appear here.</div>
+                </div>
+              </details>
+              <details id="memberRefundDetails" class="member-fold">
+                <summary>
+                  <span>Refund</span>
+                  <span class="summary-value" id="memberRefundSummaryValue">—</span>
+                </summary>
+                <div class="member-fold-body" id="memberRefundBody">
+                  <div id="memberRefundSummary" class="ledger-summary">
+                    <div class="muted">Refund activity will appear here.</div>
+                  </div>
+                </div>
+              </details>
+            </div>
           </div>
           <small class="muted" id="memberStatus"></small>
         </div>
