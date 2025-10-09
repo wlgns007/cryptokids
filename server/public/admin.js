@@ -419,10 +419,6 @@ details.member-fold .summary-value {
   const memberIdInput = $('memberUserId');
   const memberStatusEl = $('memberStatus');
   const memberInfoDetails = $('memberInfoDetails');
-  const memberInfoPanel = $('memberInfoPanel');
-
-  ensureMemberPanels();
-
   const memberBalanceContainer = $('memberBalanceContainer');
   const memberBalanceDetails = $('memberBalanceDetails');
   const memberBalanceSummaryValue = $('memberBalanceSummaryValue');
@@ -485,12 +481,12 @@ details.member-fold .summary-value {
     detailsEl?.removeAttribute('open');
   }
 
-  function clearMemberLedger(message = 'Redeemed rewards will appear after checking balance.') {
+  function clearMemberLedger(message = 'Redeemed rewards will appear here.') {
     setPlaceholder(memberLedgerHost, message);
-    setPlaceholder(memberEarnSummary, 'Earn activity will appear after checking balance.');
-    setPlaceholder(memberRedeemSummary, 'Redeem activity will appear after checking balance.');
-    setPlaceholder(memberRefundSummary, 'Refund activity will appear after checking balance.');
-    if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Click “Check Balance” to load balance details.');
+    setPlaceholder(memberEarnSummary, 'Earn activity will appear here.');
+    setPlaceholder(memberRedeemSummary, 'Redeem activity will appear here.');
+    setPlaceholder(memberRefundSummary, 'Refund activity will appear here.');
+    if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Balance info will appear here.');
     resetSummaryValue(memberBalanceSummaryValue);
     resetSummaryValue(memberEarnSummaryValue);
     resetSummaryValue(memberRedeemSummaryValue);
@@ -499,6 +495,7 @@ details.member-fold .summary-value {
     collapseDetails(memberEarnDetails);
     collapseDetails(memberRedeemDetails);
     collapseDetails(memberRefundDetails);
+    if (memberBalanceContainer) memberBalanceContainer.hidden = true;
     activeRefundContext = null;
   }
 
@@ -689,11 +686,12 @@ details.member-fold .summary-value {
     activeRefundContext = null;
   }
 
-  async function refreshMemberLedger(userId) {
+  async function refreshMemberLedger(userId, { showPanels = true } = {}) {
     if (!userId) {
       clearMemberLedger();
       return null;
     }
+    if (showPanels && memberBalanceContainer) memberBalanceContainer.hidden = false;
     if (memberLedgerHost) setPlaceholder(memberLedgerHost, 'Loading redeemed items…');
     if (memberEarnSummaryValue) memberEarnSummaryValue.textContent = 'Loading…';
     if (memberRedeemSummaryValue) memberRedeemSummaryValue.textContent = 'Loading…';
@@ -715,6 +713,7 @@ details.member-fold .summary-value {
       const data = body && typeof body === 'object' ? body : {};
       renderLedgerSummary(data.summary || {});
       renderRedeemLedger(Array.isArray(data.redeems) ? data.redeems : []);
+      if (showPanels && memberBalanceContainer) memberBalanceContainer.hidden = false;
       return data;
     } catch (err) {
       console.error(err);
@@ -808,7 +807,7 @@ details.member-fold .summary-value {
     normalizeMemberInput();
     setMemberStatus('');
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
-    clearMemberLedger('Redeemed rewards will appear after checking balance.');
+    clearMemberLedger('Redeemed rewards will appear here.');
     loadHolds();
   }
 
@@ -845,7 +844,7 @@ details.member-fold .summary-value {
         setMemberStatus(`Loaded member ${member.userId}.`);
         clearMemberLedger();
       } else {
-        clearMemberLedger('Redeemed rewards will appear after checking balance.');
+        clearMemberLedger('Redeemed rewards will appear here.');
       }
     } catch (err) {
       console.error(err);
@@ -859,9 +858,14 @@ details.member-fold .summary-value {
     const userId = requireMemberId();
     if (!userId) return;
     setMemberStatus('Fetching balance...');
+    if (memberBalanceContainer) memberBalanceContainer.hidden = false;
+    collapseDetails(memberBalanceDetails);
+    collapseDetails(memberEarnDetails);
+    collapseDetails(memberRedeemDetails);
+    collapseDetails(memberRefundDetails);
     if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Loading…';
     if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Loading balance…');
-    const ledgerPromise = refreshMemberLedger(userId);
+    const ledgerPromise = refreshMemberLedger(userId, { showPanels: true });
     try {
       const { res, body } = await adminFetch(`/balance/${encodeURIComponent(userId)}`);
       if (!res.ok) {
