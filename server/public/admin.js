@@ -938,7 +938,7 @@ details.member-fold .summary-value {
     memberInfoDetails.appendChild(sexEl);
   }
 
-  function memberIdChanged() {
+  function memberIdChanged({ loadActivityNow = true } = {}) {
     normalizeMemberInput();
     setMemberStatus('');
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
@@ -947,10 +947,13 @@ details.member-fold .summary-value {
     loadActivity();
   }
 
-  memberIdInput?.addEventListener('change', memberIdChanged);
+  memberIdInput?.addEventListener('change', (event) => memberIdChanged({ loadActivityNow: event?.isTrusted !== false }));
+  memberIdInput?.addEventListener('input', () => {
+    if (!memberIdInput.value.trim()) resetActivityView();
+  });
   memberIdInput?.addEventListener('blur', normalizeMemberInput);
   memberIdInput?.addEventListener('keyup', (event) => {
-    if (event.key === 'Enter') memberIdChanged();
+    if (event.key === 'Enter') memberIdChanged({ loadActivityNow: event.isTrusted !== false });
   });
 
   $('btnMemberInfo')?.addEventListener('click', async () => {
@@ -1555,6 +1558,11 @@ details.member-fold .summary-value {
   }
 
   const triggerActivityLoad = debounce(() => loadActivity(), 300);
+
+  function resetActivityView(message = 'Enter a user ID to view activity.') {
+    renderActivity([], { emptyMessage: message });
+    if (activityStatus) activityStatus.textContent = message;
+  }
 
   async function loadActivity() {
     if (!activityTableBody) return;
