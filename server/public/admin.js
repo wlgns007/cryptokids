@@ -1315,7 +1315,7 @@ setupScanner({
         <td>${tpl.title}</td>
         <td>${tpl.points}</td>
         <td>${tpl.description || ''}</td>
-        <td>${tpl.youtube_url ? `<a href="${tpl.youtube_url}" target="_blank">Video</a>` : ''}</td>
+        <td>${tpl.youtube_url ? `<a class="video-link" href="${tpl.youtube_url}" target="_blank" rel="noopener" title="Open video"><span aria-hidden="true">🎬</span><span class="sr-only">Video</span></a>` : ''}</td>
         <td>${tpl.active ? 'Yes' : 'No'}</td>
         <td>${tpl.sort_order}</td>
         <td>${formatTime(tpl.updated_at * 1000)}</td>
