@@ -750,6 +750,31 @@
       background: #dc2626;
     }
 
+    .link-button {
+      border: 0;
+      background: none;
+      color: var(--accent, #2563eb);
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+      font: inherit;
+    }
+
+    .link-button:hover,
+    .link-button:focus {
+      text-decoration: none;
+    }
+
+    .activity-highlight {
+      animation: highlightRow 1.5s ease;
+      background: rgba(37, 99, 235, 0.15);
+    }
+
+    @keyframes highlightRow {
+      from { background: rgba(37, 99, 235, 0.3); }
+      to { background: transparent; }
+    }
+
     @media (max-width: 720px) {
       .page {
         padding: 24px 16px 48px;
@@ -1129,6 +1154,57 @@
               <button id="btnQuickAward">Quick award</button>
             </div>
           </div>
+        </div>
+      </section>
+      <section class="card" id="activitySection">
+        <header>
+          <div>
+            <h2>Activity</h2>
+            <p class="muted">Review recent ledger changes and cross-link related transactions.</p>
+          </div>
+        </header>
+        <div class="row" id="activityFilters">
+          <label style="flex:1;">Verb
+            <select id="activityVerb">
+              <option value="all">All</option>
+              <option value="earn">Earn</option>
+              <option value="redeem">Redeem</option>
+              <option value="refund">Refund</option>
+              <option value="adjust">Adjust</option>
+            </select>
+          </label>
+          <label style="flex:1;">User
+            <input id="activityUser" type="text" placeholder="user id">
+          </label>
+          <label style="flex:1;">Actor
+            <input id="activityActor" type="text" placeholder="actor id">
+          </label>
+          <label style="flex:1;">From
+            <input id="activityFrom" type="date">
+          </label>
+          <label style="flex:1;">To
+            <input id="activityTo" type="date">
+          </label>
+          <button type="button" id="btnActivityRefresh">Refresh</button>
+        </div>
+        <small class="muted" id="activityStatus"></small>
+        <div class="table-wrap" style="overflow:auto; max-height:360px;">
+          <table class="table" id="activityTable">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>User</th>
+                <th>Verb</th>
+                <th>Action</th>
+                <th>Δ</th>
+                <th>Balance</th>
+                <th>Actor</th>
+                <th>Parent</th>
+                <th>Tx</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
     </main>

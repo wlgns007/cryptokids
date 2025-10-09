@@ -46,8 +46,13 @@ const REFUND_RATE_LIMIT_PER_HOUR = Number(process.env.CK_REFUND_RATE_LIMIT_PER_H
 const REFUND_RATE_WINDOW_MS = 60 * 60 * 1000;
 const refundRateLimiter = new Map();
 
+const FEATURE_FLAGS = Object.freeze({
+  refunds: (process.env.FEATURE_REFUNDS ?? "true").toString().toLowerCase() !== "false"
+});
+
 let BUILD = (process.env.BUILD_VERSION || process.env.RENDER_GIT_COMMIT || process.env.COMMIT_HASH || "").trim();
 if (!BUILD) {
+  const started = Date.now();
   try {
     BUILD = execSync("git rev-parse --short HEAD").toString().trim();
   } catch {
@@ -627,6 +632,35 @@ const listLedgerByUserStmt = db.prepare(`
 `);
 const checkTokenStmt = db.prepare("SELECT 1 FROM consumed_tokens WHERE jti = ?");
 const consumeTokenStmt = db.prepare("INSERT INTO consumed_tokens (jti, typ, consumed_at) VALUES (?, ?, ?)");
+const listRecentRedeemsStmt = db.prepare(`
+  SELECT id, at, delta
+  FROM ledger
+  WHERE userId = ?
+    AND verb = 'redeem'
+  ORDER BY at DESC, id DESC
+  LIMIT 50
+`);
+const listRecentRefundsStmt = db.prepare(`
+  SELECT id, at, delta, parent_tx_id
+  FROM ledger
+  WHERE userId = ?
+    AND verb = 'refund'
+  ORDER BY at DESC, id DESC
+  LIMIT 50
+`);
+const findRecentHoldsStmt = db.prepare(`
+  SELECT id, status, quotedCost, finalCost, createdAt
+  FROM holds
+  WHERE userId = ?
+  ORDER BY createdAt DESC
+  LIMIT 10
+`);
+const countPendingHoldsStmt = db.prepare(`
+  SELECT COUNT(*) AS pending
+  FROM holds
+  WHERE userId = ?
+    AND status = 'pending'
+`);
 
 function mapLedgerRow(row) {
   if (!row) return null;
@@ -660,6 +694,201 @@ function mapLedgerRow(row) {
     refund_reason: row.refund_reason || null,
     refund_notes: row.refund_notes || null,
     idempotency_key: row.idempotency_key || null
+  };
+}
+
+const telemetry = {
+  startedAt: Date.now(),
+  verbs: new Map()
+};
+
+function recordTelemetry(verb, { ok = true, error = null, durationMs = 0 } = {}) {
+  const key = String(verb || "unknown");
+  if (!telemetry.verbs.has(key)) {
+    telemetry.verbs.set(key, {
+      count: 0,
+      failures: 0,
+      totalDurationMs: 0,
+      errors: new Map()
+    });
+  }
+  const entry = telemetry.verbs.get(key);
+  entry.count += 1;
+  entry.totalDurationMs += Number.isFinite(durationMs) ? Number(durationMs) : 0;
+  if (!ok) {
+    entry.failures += 1;
+    if (error) {
+      const label = String(error);
+      entry.errors.set(label, (entry.errors.get(label) || 0) + 1);
+    }
+  }
+}
+
+function summarizeTelemetry() {
+  const verbs = [];
+  let totalCount = 0;
+  let totalFailures = 0;
+  const aggregateFailures = new Map();
+  for (const [verb, data] of telemetry.verbs.entries()) {
+    totalCount += data.count;
+    totalFailures += data.failures;
+    const avgDuration = data.count ? data.totalDurationMs / data.count : 0;
+    const topFailures = Array.from(data.errors.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([message, count]) => ({ message, count }));
+    verbs.push({
+      verb,
+      count: data.count,
+      failures: data.failures,
+      errorRate: data.count ? data.failures / data.count : 0,
+      avgDurationMs: Math.round(avgDuration * 100) / 100,
+      topFailures
+    });
+    for (const [message, count] of data.errors.entries()) {
+      aggregateFailures.set(message, (aggregateFailures.get(message) || 0) + count);
+    }
+  }
+  const topFailureReasons = Array.from(aggregateFailures.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([message, count]) => ({ message, count }));
+  return {
+    since: telemetry.startedAt,
+    totalCount,
+    totalFailures,
+    errorRate: totalCount ? totalFailures / totalCount : 0,
+    verbs,
+    topFailureReasons
+  };
+}
+
+function getStateHints(userId) {
+  const normalized = normId(userId);
+  if (!normalized) {
+    return {
+      balance: 0,
+      can_redeem: false,
+      max_redeem: 0,
+      max_redeem_for_reward: 0,
+      can_refund: false,
+      max_refund: 0,
+      refundable_redeems: [],
+      refund_window_ms: REFUND_WINDOW_MS,
+      hold_status: "unknown",
+      active_hold_id: null,
+      pending_hold_count: 0,
+      features: FEATURE_FLAGS
+    };
+  }
+
+  const balance = getBalance(normalized);
+  const holds = findRecentHoldsStmt.all(normalized).map(row => ({
+    id: row.id,
+    status: row.status || "pending",
+    quotedCost: Number(row.quotedCost ?? row.points ?? 0) || 0,
+    finalCost: row.finalCost !== undefined && row.finalCost !== null ? Number(row.finalCost) : null,
+    createdAt: Number(row.createdAt) || null
+  }));
+  const pendingHold = holds.find(h => h.status === "pending") || null;
+  const pendingHoldCount = Number(countPendingHoldsStmt.get(normalized)?.pending || 0);
+
+  const now = Date.now();
+  let maxRefund = 0;
+  const refundableRedeems = [];
+  if (FEATURE_FLAGS.refunds) {
+    const redeemRows = listRecentRedeemsStmt.all(normalized);
+    for (const row of redeemRows) {
+      const redeemAmount = Math.abs(Number(row.delta) || 0);
+      if (!redeemAmount) continue;
+      if (REFUND_WINDOW_MS !== null) {
+        const age = now - Number(row.at || 0);
+        if (Number.isFinite(age) && age > REFUND_WINDOW_MS) {
+          continue;
+        }
+      }
+      const totals = sumRefundsByParentStmt.get(String(row.id));
+      const refunded = Math.abs(Number(totals?.total || 0));
+      const remaining = Math.max(0, redeemAmount - refunded);
+      if (remaining > 0) {
+        if (remaining > maxRefund) maxRefund = remaining;
+        refundableRedeems.push({
+          redeemTxId: String(row.id),
+          remaining,
+          redeemed: redeemAmount,
+          at: Number(row.at) || null
+        });
+      }
+    }
+  }
+
+  const canRefund = FEATURE_FLAGS.refunds && maxRefund > 0;
+  const hints = {
+    balance,
+    can_redeem: balance > 0,
+    max_redeem: balance,
+    max_redeem_for_reward: Math.max(0, balance - (pendingHold?.quotedCost || 0)),
+    can_refund: canRefund,
+    max_refund: canRefund ? maxRefund : 0,
+    refundable_redeems: canRefund ? refundableRedeems : [],
+    refund_window_ms: REFUND_WINDOW_MS,
+    hold_status: pendingHold ? "pending" : (holds[0]?.status || "none"),
+    active_hold_id: pendingHold?.id ?? null,
+    pending_hold_count: pendingHoldCount,
+    features: { ...FEATURE_FLAGS }
+  };
+  return hints;
+}
+
+function buildActionResponse({ userId, txRow = null, extras = {} }) {
+  const hints = getStateHints(userId);
+  return {
+    ok: extras.ok !== undefined ? extras.ok : true,
+    txId: txRow?.id ? String(txRow.id) : null,
+    tx: txRow || null,
+    balance: hints.balance,
+    hints,
+    ...extras
+  };
+}
+
+function buildErrorResponse({ err, userId, fallback = "ACTION_FAILED" }) {
+  const code = err?.message || fallback;
+  const hints = userId ? getStateHints(userId) : null;
+  const payload = { error: code };
+  if (err?.remaining !== undefined) payload.remaining_refundable = err.remaining;
+  if (err?.retryAfterMs !== undefined) payload.retry_after_ms = err.retryAfterMs;
+  if (err?.existing) payload.existing = err.existing;
+  if (hints) {
+    payload.balance = hints.balance;
+    payload.hints = hints;
+  }
+  return payload;
+}
+
+function resolveIdempotencyKey(req, bodyKey) {
+  if (req.headers?.["idempotency-key"]) {
+    return String(req.headers["idempotency-key"]).trim() || null;
+  }
+  if (bodyKey) {
+    return String(bodyKey).trim() || null;
+  }
+  return null;
+}
+
+function requireRole(required) {
+  return (req, res, next) => {
+    const provided = (req.headers?.["x-actor-role"] || "").toString().trim().toLowerCase();
+    if (required === "admin") {
+      if (provided !== "admin") {
+        return res.status(403).json({ error: "ROLE_REQUIRED", requiredRole: "admin" });
+      }
+    } else if (required === "parent") {
+      if (provided !== "parent" && provided !== "admin") {
+        return res.status(403).json({ error: "ROLE_REQUIRED", requiredRole: required });
+      }
+    }
+    next();
   };
 }
 
@@ -842,7 +1071,7 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       total += tpl.points * count;
       return { id: tpl.id, title: tpl.title, points: tpl.points, count };
     });
-    const next = applyLedger({
+    const result = applyLedger({
       userId,
       delta: total,
       action: "earn_qr",
@@ -850,17 +1079,19 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       templates: normalized,
       actor: resolvedActor || null,
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ }
+      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      returnRow: true
     });
     return {
       ok: true,
       userId,
       amount: total,
-      balance: next,
+      balance: result.balance,
       action: "earn_qr",
       note: data.note || null,
       templates: normalized,
-      tokenType: payload.typ
+      tokenType: payload.typ,
+      tx: result.row
     };
   }
 
@@ -871,24 +1102,26 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
     if (!userId || amount <= 0) {
       throw createHttpError(400, "invalid_payload");
     }
-    const next = applyLedger({
+    const result = applyLedger({
       userId,
       delta: amount,
       action: "earn_admin_give",
       note: data.note || null,
       actor: resolvedActor || null,
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ }
+      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      returnRow: true
     });
     return {
       ok: true,
       userId,
       amount,
-      balance: next,
+      balance: result.balance,
       action: "earn_admin_give",
       note: data.note || null,
       templates: null,
-      tokenType: payload.typ
+      tokenType: payload.typ,
+      tx: result.row
     };
   }
 
@@ -1700,6 +1933,9 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
   const actorId = (req.headers["x-admin-actor"] || "").toString().trim() || "admin";
   const idempotencyKey = body.idempotency_key ? String(body.idempotency_key).trim() : null;
   const normalizedUser = normId(body.user_id);
+  if (!FEATURE_FLAGS.refunds) {
+    return res.status(403).json(buildErrorResponse({ err: { message: "FEATURE_DISABLED" }, userId: normalizedUser }));
+  }
   try {
     assertRefundRateLimit(actorId);
     console.info("[refund] attempt", {
@@ -1710,6 +1946,7 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
       actorId,
       idempotencyKey
     });
+    const started = Date.now();
     const result = createRefundTransaction({
       userId: body.user_id,
       redeemTxId: body.redeem_tx_id,
@@ -1717,9 +1954,10 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
       reason: body.reason,
       notes: body.notes,
       actorId,
-      idempotencyKey,
+      idempotencyKey: resolveIdempotencyKey(req, idempotencyKey),
       req
     });
+    recordTelemetry("refund", { ok: true, durationMs: Date.now() - started });
     console.info("[refund] success", {
       userId: normalizedUser,
       redeemTxId: body.redeem_tx_id,
@@ -1728,11 +1966,17 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
       remaining: result.remaining,
       actorId
     });
-    res.json({
-      balance: result.balance,
-      refund: result.refund,
-      remaining_refundable: result.remaining
+    const response = buildActionResponse({
+      userId: normalizedUser,
+      txRow: result.refund,
+      extras: {
+        ok: true,
+        refund: result.refund,
+        remaining_refundable: result.remaining,
+        verb: "refund"
+      }
     });
+    res.json(response);
   } catch (err) {
     const status = err?.status || 500;
     if (status === 409 && err?.existing) {
@@ -1742,17 +1986,12 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
         actorId,
         idempotencyKey
       });
-      res.status(409).json({
-        error: err.message || "REFUND_EXISTS",
-        balance: err.balance ?? (normalizedUser ? getBalance(normalizedUser) : null),
-        refund: err.existing,
-        remaining_refundable: err.remaining ?? 0
-      });
+      recordTelemetry("refund", { ok: false, error: err?.message, durationMs: Date.now() - started });
+      res.status(409).json(buildErrorResponse({ err, userId: normalizedUser, fallback: "REFUND_EXISTS" }));
       return;
     }
-    const payload = { error: err?.message || "REFUND_FAILED" };
-    if (err?.remaining !== undefined) payload.remaining_refundable = err.remaining;
-    if (err?.retryAfterMs !== undefined) payload.retry_after_ms = err.retryAfterMs;
+    recordTelemetry("refund", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const payload = buildErrorResponse({ err, userId: normalizedUser, fallback: "REFUND_FAILED" });
     console.error("[refund] failed", {
       userId: normalizedUser,
       redeemTxId: body.redeem_tx_id,
@@ -1768,7 +2007,117 @@ app.get("/ck/ledger/:userId", requireAdminKey, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
   const data = getLedgerViewForUser(userId);
-  res.json(data);
+  const hints = getStateHints(userId);
+  res.json({ ...data, hints });
+});
+
+app.post("/ck/earn", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+  const userId = normId(req.body?.user_id ?? req.body?.userId);
+  const amount = Math.floor(Number(req.body?.amount ?? 0));
+  const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
+  const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_manual";
+  const action = req.body?.action ? String(req.body.action) : "earn_manual";
+  if (!userId || !Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+  }
+  const started = Date.now();
+  try {
+    const result = applyLedger({
+      userId,
+      delta: amount,
+      action,
+      note,
+      actor: actorLabel,
+      req,
+      idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+      returnRow: true,
+      verb: "earn"
+    });
+    recordTelemetry("earn", { ok: true, durationMs: Date.now() - started });
+    const response = buildActionResponse({
+      userId,
+      txRow: result.row,
+      extras: { ok: true, amount, verb: "earn", action }
+    });
+    res.json(response);
+  } catch (err) {
+    recordTelemetry("earn", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const status = err?.status || (err?.message === "INSUFFICIENT_FUNDS" ? 409 : 400);
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "EARN_FAILED" }));
+  }
+});
+
+app.post("/ck/redeem", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+  const userId = normId(req.body?.user_id ?? req.body?.userId);
+  const amount = Math.floor(Number(req.body?.amount ?? 0));
+  const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
+  const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_redeem_manual";
+  const action = req.body?.action ? String(req.body.action) : "spend_manual";
+  if (!userId || !Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+  }
+  const started = Date.now();
+  try {
+    const result = applyLedger({
+      userId,
+      delta: -amount,
+      action,
+      note,
+      actor: actorLabel,
+      req,
+      idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+      returnRow: true,
+      verb: "redeem"
+    });
+    recordTelemetry("redeem", { ok: true, durationMs: Date.now() - started });
+    const response = buildActionResponse({
+      userId,
+      txRow: result.row,
+      extras: { ok: true, amount, verb: "redeem", action }
+    });
+    res.json(response);
+  } catch (err) {
+    recordTelemetry("redeem", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const status = err?.message === "INSUFFICIENT_FUNDS" ? 409 : err?.status || 400;
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "REDEEM_FAILED" }));
+  }
+});
+
+app.post("/ck/adjust", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+  const userId = normId(req.body?.user_id ?? req.body?.userId);
+  const deltaRaw = Number(req.body?.delta ?? 0);
+  const delta = Math.trunc(deltaRaw);
+  const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
+  const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_adjust";
+  if (!userId || !Number.isFinite(delta) || delta === 0) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_DELTA" }, userId }));
+  }
+  const started = Date.now();
+  try {
+    const action = req.body?.action ? String(req.body.action) : delta > 0 ? "adjust_credit" : "adjust_debit";
+    const result = applyLedger({
+      userId,
+      delta,
+      action,
+      note,
+      actor: actorLabel,
+      req,
+      idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+      returnRow: true,
+      verb: "adjust"
+    });
+    recordTelemetry("adjust", { ok: true, durationMs: Date.now() - started });
+    const response = buildActionResponse({
+      userId,
+      txRow: result.row,
+      extras: { ok: true, delta, verb: "adjust", action }
+    });
+    res.json(response);
+  } catch (err) {
+    recordTelemetry("adjust", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const status = err?.status || (err?.message === "INSUFFICIENT_FUNDS" ? 409 : 400);
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "ADJUST_FAILED" }));
+  }
 });
 
 app.get("/api/rewards", (_req, res) => {
@@ -1786,6 +2135,10 @@ app.get("/api/rewards", (_req, res) => {
     youtubeUrl: r.youtube_url || "",
     active: r.active
   })));
+});
+
+app.get("/api/features", (_req, res) => {
+  res.json({ ...FEATURE_FLAGS });
 });
 
 app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
@@ -1891,6 +2244,7 @@ app.post("/api/tokens/give", requireAdminKey, (req, res) => {
 });
 
 app.post("/api/earn/scan", (req, res) => {
+  const started = Date.now();
   try {
     const isAdmin = (req.headers["x-admin-key"] || "").toString().trim() === ADMIN_KEY;
     const result = redeemToken({
@@ -1900,48 +2254,86 @@ app.post("/api/earn/scan", (req, res) => {
       isAdmin,
       allowEarnWithoutAdmin: isAdmin
     });
-    res.json({
-      ok: true,
+    recordTelemetry("earn", { ok: true, durationMs: Date.now() - started });
+    const response = buildActionResponse({
       userId: result.userId,
-      amount: result.amount,
-      balance: result.balance,
-      action: result.action,
-      note: result.note ?? undefined,
-      templates: result.templates ?? undefined
+      txRow: result.tx,
+      extras: {
+        ok: true,
+        userId: result.userId,
+        amount: result.amount,
+        action: result.action,
+        note: result.note ?? undefined,
+        templates: result.templates ?? undefined,
+        tokenType: result.tokenType
+      }
     });
+    res.json(response);
   } catch (err) {
     const message = err?.message || "scan_failed";
     const status = err?.status || (message === "TOKEN_USED" ? 409 : message === "ADMIN_REQUIRED" ? 403 : 400);
-    res.status(status).json({ error: message });
+    recordTelemetry("earn", { ok: false, error: message, durationMs: Date.now() - started });
+    res.status(status).json(buildErrorResponse({ err, userId: null, fallback: message }));
   }
 });
 
 app.post("/api/earn/quick", requireAdminKey, (req, res) => {
   const userId = normId(req.body?.userId);
   const templateId = Number(req.body?.templateId);
-  if (!userId || !templateId) return res.status(400).json({ error: "invalid_payload" });
+  if (!userId || !templateId) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" }, userId }));
+  }
   const tpl = db.prepare("SELECT * FROM earn_templates WHERE id = ?").get(templateId);
-  if (!tpl) return res.status(404).json({ error: "template_not_found" });
-  const next = applyLedger({
-    userId,
-    delta: tpl.points,
-    action: "earn_admin_quick",
-    note: tpl.title,
-    templates: [{ id: tpl.id, title: tpl.title, points: tpl.points, count: 1 }],
-    actor: "admin_quick",
-    req
-  });
-  res.json({ ok: true, userId, amount: tpl.points, balance: next });
+  if (!tpl) {
+    return res.status(404).json(buildErrorResponse({ err: { message: "template_not_found" }, userId }));
+  }
+  const started = Date.now();
+  try {
+    const result = applyLedger({
+      userId,
+      delta: tpl.points,
+      action: "earn_admin_quick",
+      note: tpl.title,
+      templates: [{ id: tpl.id, title: tpl.title, points: tpl.points, count: 1 }],
+      actor: "admin_quick",
+      req,
+      idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+      returnRow: true
+    });
+    const response = buildActionResponse({
+      userId,
+      txRow: result.row,
+      extras: {
+        ok: true,
+        userId,
+        amount: tpl.points,
+        verb: "earn",
+        action: "earn_admin_quick",
+        templates: result.row?.templates || [{ id: tpl.id, title: tpl.title, points: tpl.points, count: 1 }]
+      }
+    });
+    recordTelemetry("earn", { ok: true, durationMs: Date.now() - started });
+    res.json(response);
+  } catch (err) {
+    recordTelemetry("earn", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const status = err?.status || (err?.message === "TOKEN_USED" ? 409 : 400);
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "EARN_FAILED" }));
+  }
 });
 
 app.post("/api/holds", express.json(), (req, res) => {
+  const started = Date.now();
   try {
     const userId = normId(req.body?.userId);
     const itemId = Number(req.body?.itemId);
-    if (!userId || !itemId) return res.status(400).json({ error: "userId and itemId required" });
+    if (!userId || !itemId) {
+      return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" }, userId }));
+    }
 
     const reward = db.prepare("SELECT id, name, price, image_url FROM rewards WHERE id = ? AND active = 1").get(itemId);
-    if (!reward) return res.status(404).json({ error: "reward not found" });
+    if (!reward) {
+      return res.status(404).json(buildErrorResponse({ err: { message: "reward_not_found" }, userId }));
+    }
 
     const id = randomId();
     const createdAt = Date.now();
@@ -1977,7 +2369,7 @@ app.post("/api/holds", express.json(), (req, res) => {
     const sql = `INSERT INTO holds (${columns.join(", ")}) VALUES (${placeholders})`;
     db.prepare(sql).run(...values);
 
-    applyLedger({
+    const ledgerResult = applyLedger({
       userId,
       delta: 0,
       action: "spend_hold",
@@ -1986,15 +2378,32 @@ app.post("/api/holds", express.json(), (req, res) => {
       itemId: String(reward.id),
       templates: null,
       actor: "child",
-      req
+      req,
+      idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+      returnRow: true
     });
 
     const { token } = createToken("spend", { holdId: id, cost: reward.price });
     const qrText = buildQrUrl(req, token);
-    res.status(201).json({ holdId: id, token, qrText });
+    const response = buildActionResponse({
+      userId,
+      txRow: ledgerResult.row,
+      extras: {
+        ok: true,
+        holdId: id,
+        token,
+        qrText,
+        verb: "hold.reserve",
+        quotedCost: reward.price
+      }
+    });
+    recordTelemetry("hold.reserve", { ok: true, durationMs: Date.now() - started });
+    res.status(201).json(response);
   } catch (e) {
     console.error("create hold", e);
-    res.status(500).json({ error: "create hold failed" });
+    const userId = normId(req.body?.userId);
+    recordTelemetry("hold.reserve", { ok: false, error: e?.message, durationMs: Date.now() - started });
+    res.status(500).json(buildErrorResponse({ err: e, userId, fallback: "hold_failed" }));
   }
 });
 
@@ -2016,27 +2425,31 @@ app.get("/api/holds", requireAdminKey, (req, res) => {
 });
 
 app.post("/api/holds/:id/approve", requireAdminKey, (req, res) => {
+  const started = Date.now();
+  let hold = null;
   try {
     const id = String(req.params.id || "");
     const token = String(req.body?.token || "");
     const override = req.body?.finalCost;
-    if (!id || !token) return res.status(400).json({ error: "invalid_payload" });
+    if (!id || !token) {
+      return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" } }));
+    }
     const payload = verifyToken(token);
     if (payload.typ !== "spend") {
-      return res.status(400).json({ error: "unsupported_token" });
+      return res.status(400).json(buildErrorResponse({ err: { message: "unsupported_token" } }));
     }
     if (payload.data?.holdId !== id) {
-      return res.status(400).json({ error: "hold_mismatch" });
+      return res.status(400).json(buildErrorResponse({ err: { message: "hold_mismatch" } }));
     }
     if (checkTokenStmt.get(payload.jti)) {
-      return res.status(409).json({ error: "TOKEN_USED" });
+      return res.status(409).json(buildErrorResponse({ err: { message: "TOKEN_USED" } }));
     }
-    const hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(id);
+    hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(id);
     if (!hold || hold.status !== "pending") {
-      return res.status(404).json({ error: "hold_not_pending" });
+      return res.status(404).json(buildErrorResponse({ err: { message: "hold_not_pending" }, userId: hold?.userId }));
     }
     const cost = override !== undefined && override !== null ? Math.max(0, Math.floor(Number(override))) : Number(hold.quotedCost || 0);
-    const next = applyLedger({
+    const result = applyLedger({
       userId: hold.userId,
       delta: -cost,
       action: "spend_redeemed",
@@ -2046,34 +2459,51 @@ app.post("/api/holds/:id/approve", requireAdminKey, (req, res) => {
       finalCost: cost,
       actor: "admin_redeem",
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ }
+      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      returnRow: true
     });
     db.prepare("UPDATE holds SET status = 'redeemed', finalCost = ?, approvedAt = ?, note = ?, quotedCost = quotedCost WHERE id = ?")
       .run(cost, Date.now(), hold.note || null, hold.id);
-    res.json({ ok: true, balance: next, finalCost: cost });
+    const response = buildActionResponse({
+      userId: hold.userId,
+      txRow: result.row,
+      extras: { ok: true, holdId: id, finalCost: cost, verb: "hold.redeem" }
+    });
+    recordTelemetry("hold.redeem", { ok: true, durationMs: Date.now() - started });
+    res.json(response);
   } catch (err) {
-    const code = err.message === "TOKEN_USED" ? 409 : 400;
-    res.status(code).json({ error: err.message || "approve_failed" });
+    recordTelemetry("hold.redeem", { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const code = err.message === "TOKEN_USED" ? 409 : err.status || 400;
+    res.status(code).json(buildErrorResponse({ err, userId: hold?.userId, fallback: "approve_failed" }));
   }
 });
 
 app.post("/api/holds/:id/cancel", requireAdminKey, (req, res) => {
+  const started = Date.now();
   const id = String(req.params.id || "");
   const hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(id);
   if (!hold || hold.status !== "pending") {
-    return res.status(404).json({ error: "hold_not_pending" });
+    return res.status(404).json(buildErrorResponse({ err: { message: "hold_not_pending" }, userId: hold?.userId }));
   }
   db.prepare("UPDATE holds SET status = 'canceled', finalCost = 0, approvedAt = ? WHERE id = ?").run(Date.now(), id);
-  applyLedger({
+  const result = applyLedger({
     userId: hold.userId,
     delta: 0,
     action: "spend_canceled",
     note: hold.itemName,
     holdId: hold.id,
     actor: "admin_cancel",
-    req
+    req,
+    returnRow: true,
+    idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key)
   });
-  res.json({ ok: true });
+  recordTelemetry("hold.release", { ok: true, durationMs: Date.now() - started });
+  const response = buildActionResponse({
+    userId: hold.userId,
+    txRow: result.row,
+    extras: { ok: true, holdId: id, verb: "hold.release" }
+  });
+  res.json(response);
 });
 
 function buildHistoryQuery(params) {
@@ -2090,10 +2520,18 @@ function buildHistoryQuery(params) {
   } else if (params.type === "refund") {
     where.push("verb = 'refund'");
   }
+  if (params.verb) {
+    where.push("verb = ?");
+    sqlParams.push(params.verb);
+  }
   if (params.source === "task") {
     where.push("action = 'earn_qr'");
   } else if (params.source === "admin") {
     where.push("action IN ('earn_admin_give','earn_admin_quick')");
+  }
+  if (params.actor) {
+    where.push("actor = ?");
+    sqlParams.push(params.actor);
   }
   if (params.from) {
     where.push("at >= ?");
@@ -2120,6 +2558,8 @@ app.get("/api/history", requireAdminKey, (req, res) => {
     userId: req.query.userId,
     type: req.query.type,
     source: req.query.source,
+    verb: req.query.verb,
+    actor: req.query.actor,
     from,
     to,
     limit: req.query.limit,
@@ -2160,6 +2600,10 @@ app.get("/api/history", requireAdminKey, (req, res) => {
     return;
   }
   res.json({ rows, limit: query.limit, offset: query.offset });
+});
+
+app.get("/api/admin/telemetry/core-health", requireAdminKey, (_req, res) => {
+  res.json(summarizeTelemetry());
 });
 
 app.get("/api/history/user/:userId", (req, res) => {
@@ -2244,4 +2688,4 @@ if (process.env.NODE_ENV !== "test") {
   });
 }
 
-export { app, applyLedger, createRefundTransaction, getLedgerViewForUser, mapLedgerRow, getBalance, normId };
+export { app, applyLedger, createRefundTransaction, getLedgerViewForUser, mapLedgerRow, getBalance, normId, getStateHints };
