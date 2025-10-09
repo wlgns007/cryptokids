@@ -944,11 +944,7 @@ details.member-fold .summary-value {
     setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
     clearMemberLedger('Redeemed rewards will appear here.');
     loadHolds();
-    if (loadActivityNow) {
-      loadActivity();
-    } else {
-      resetActivityView();
-    }
+    loadActivity();
   }
 
   memberIdInput?.addEventListener('change', (event) => memberIdChanged({ loadActivityNow: event?.isTrusted !== false }));
@@ -1573,7 +1569,8 @@ details.member-fold .summary-value {
     const memberInfo = getMemberIdInfo();
     const user = (memberInfo?.normalized || '').trim();
     if (!user) {
-      resetActivityView();
+      if (activityStatus) activityStatus.textContent = 'Enter a user ID to view activity.';
+      renderActivity([], { emptyMessage: 'Enter a user ID to view activity.' });
       return;
     }
     const params = new URLSearchParams();
@@ -2477,7 +2474,8 @@ setupScanner({
     if (el) el.addEventListener('change', () => loadActivity());
   });
   if (activityTableBody) {
-    resetActivityView();
+    renderActivity([], { emptyMessage: 'Enter a user ID to view activity.' });
+    if (activityStatus) activityStatus.textContent = 'Enter a user ID to view activity.';
   }
 
   loadFeatureFlagsFromServer();
