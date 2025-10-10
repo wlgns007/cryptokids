@@ -251,7 +251,7 @@ async function ensureSchema() {
     return false;
   };
 
-  const migrate = db.transaction(() => {
+  const migrate = async () => {
     // member table
     if (!tableExists("member")) {
       let legacyMembers = null;
