@@ -248,7 +248,10 @@ async function ensureSchema() {
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
-  const migrate = async () => {
+    return false;
+  };
+
+  const migrate = db.transaction(() => {
     // member table
     if (!tableExists("member")) {
       let legacyMembers = null;
