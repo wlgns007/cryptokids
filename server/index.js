@@ -8,7 +8,7 @@ import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import db, { DATA_DIR } from "./db.js";
 import ledgerRoutes from "./routes/ledger.js";
-import { earn, redeem, balanceOf, ensureMemberAccount } from "./ledger/core.js";
+import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 
 const require = createRequire(import.meta.url);
 
@@ -118,7 +118,8 @@ app.get(["/scan", "/scan.html"], async (req, res) => {
       return;
     }
 
-    const hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(holdId);
+    const holdRow = db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
+    const hold = mapHoldRow(holdRow);
     if (!hold) {
       res.status(404).send(renderSpendApprovalPage({ message: "We couldn't find this reward request. Please ask the child to generate a new QR code." }));
       return;
@@ -188,12 +189,57 @@ function normId(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-let holdColumnNames = new Set();
+function normalizeTimestamp(value, fallback = Date.now()) {
+  if (value === null || value === undefined) return fallback;
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    if (num >= 1e12) return Math.trunc(num);
+    if (num >= 1e9) return Math.trunc(num * 1000);
+    if (num > 0) return Math.trunc(num);
+  }
+  const str = String(value || '').trim();
+  if (!str) return fallback;
+  const parsed = Date.parse(str);
+  if (Number.isNaN(parsed)) return fallback;
+  return parsed;
+}
 
-function refreshHoldColumnNames() {
-  holdColumnNames = new Set(
-    db.prepare("PRAGMA table_info('holds')").all().map(col => col.name)
-  );
+function ensureColumn(db, table, column, type = "INTEGER", defaultValue /* optional */) {
+  // already exists?
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some(c => c.name === column)) return;
+
+  // Build the initial ALTER
+  const hasConstantDefault =
+    defaultValue === null ||
+    typeof defaultValue === "number" ||
+    (typeof defaultValue === "string" && !/[\(\)]|CURRENT_|strftime|julianday|now/i.test(defaultValue));
+
+  const quotedDefault =
+    defaultValue === null ? "NULL" :
+    typeof defaultValue === "number" ? String(defaultValue) :
+    typeof defaultValue === "string" ? `'${defaultValue.replaceAll("'", "''")}'` :
+    undefined;
+
+  let sql = `ALTER TABLE ${table} ADD COLUMN ${column} ${type}`;
+  if (hasConstantDefault && quotedDefault !== undefined) sql += ` DEFAULT ${quotedDefault}`;
+
+  try {
+    db.exec(sql);
+  } catch (e) {
+    // Fallback for "non-constant default" or NOT NULL errors: add column without default
+    if (/non-constant default|NOT NULL/i.test(String(e.message))) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } else {
+      throw e;
+    }
+  }
+
+  // Backfill after add (use unix epoch seconds; adjust if you prefer ms)
+  if (column === "created_at" || column === "updated_at") {
+    const now = Date.now();
+    db.prepare(`UPDATE ${table} SET ${column} = COALESCE(${column}, ?) WHERE ${column} IS NULL OR ${column} = 0`).run(now);
+  }
 }
 
 function randomId() {
@@ -203,268 +249,606 @@ function randomId() {
   return crypto.randomBytes(16).toString("hex");
 }
 
+
 function ensureSchema() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS balances (
-      user_id TEXT PRIMARY KEY,
-      balance INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-
-  const balanceCols = db.prepare(`PRAGMA table_info('balances')`).all();
-  const hasUpdatedAt = balanceCols.some(c => c.name === "updated_at");
-  if (!hasUpdatedAt) {
-    db.exec("ALTER TABLE balances ADD COLUMN updated_at INTEGER DEFAULT 0");
-  }
-  db.exec(`
-    UPDATE balances
-    SET updated_at = strftime('%s','now')
-    WHERE updated_at IS NULL OR updated_at = 0;
-  `);
-
-  const ledgerCols = db.prepare(`PRAGMA table_info(ledger)`).all();
-  const requiredLedgerCols = new Set([
-    "id",
-    "at",
-    "userId",
-    "action",
-    "delta",
-    "balance_after",
-    "itemId",
-    "holdId",
-    "templates",
-    "finalCost",
-    "note",
-    "actor",
-    "ip",
-    "ua"
-  ]);
-  const hasLedger = ledgerCols.length && [...requiredLedgerCols].every(col => ledgerCols.some(c => c.name === col));
-  if (!hasLedger) {
-    if (ledgerCols.length) {
-      const backupName = `ledger_legacy_${Date.now()}`;
-      db.exec(`ALTER TABLE ledger RENAME TO ${backupName}`);
-    }
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS ledger (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        at INTEGER NOT NULL,
-        userId TEXT NOT NULL,
-        action TEXT NOT NULL,
-        delta INTEGER NOT NULL,
-        balance_after INTEGER NOT NULL,
-        itemId TEXT,
-        holdId TEXT,
-        templates TEXT,
-        finalCost INTEGER,
-        note TEXT,
-        actor TEXT,
-        ip TEXT,
-        ua TEXT
-      );
-    `);
-  }
-
-  const ensureLedgerColumn = (name, sql) => {
-    if (!ledgerCols.some(c => c.name === name)) {
-      db.exec(sql);
-      ledgerCols.push({ name });
-      return true;
-    }
-    return false;
+  const tableExists = name =>
+    !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
+  const backupTable = name => {
+    const legacyName = `${name}_legacy_${Date.now()}`;
+    db.exec(`ALTER TABLE ${name} RENAME TO ${legacyName}`);
+    return legacyName;
   };
+  const getColumns = name =>
+    db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
+  const migrate = db.transaction(() => {
+    // member table
+    if (!tableExists("member")) {
+      let legacyMembers = null;
+      if (tableExists("members")) {
+        legacyMembers = backupTable("members");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS member (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          date_of_birth TEXT,
+          sex TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          tags TEXT,
+          campaign_id TEXT,
+          source TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      if (legacyMembers) {
+        const rows = db.prepare("SELECT * FROM " + legacyMembers).all();
+        const insertMember = db.prepare(`
+          INSERT INTO member (id, name, date_of_birth, sex, status, tags, campaign_id, source, created_at, updated_at)
+          VALUES (@id, @name, @date_of_birth, @sex, @status, @tags, @campaign_id, @source, @created_at, @updated_at)
+        `);
+        for (const row of rows) {
+          const id = normId(row.userId || row.id || "");
+          if (!id) continue;
+          insertMember.run({
+            id,
+            name: row.name || id,
+            date_of_birth: row.dob || row.date_of_birth || null,
+            sex: row.sex || null,
+            status: "active",
+            tags: null,
+            campaign_id: null,
+            source: null,
+            created_at: normalizeTimestamp(row.createdAt),
+            updated_at: normalizeTimestamp(row.updatedAt ?? row.createdAt)
+          });
+        }
+      }
+    } else {
+      const memberCols = getColumns("member");
+      if (!memberCols.includes("status")) ensureColumn(db, "member", "status", "TEXT NOT NULL", "active");
+      ensureColumn(db, "member", "tags", "TEXT");
+      ensureColumn(db, "member", "campaign_id", "TEXT");
+      ensureColumn(db, "member", "source", "TEXT");
+      ensureColumn(db, "member", "date_of_birth", "TEXT");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_member_status ON member(status)");
 
-  const addedVerbColumn = ensureLedgerColumn("verb", "ALTER TABLE ledger ADD COLUMN verb TEXT");
-  const addedParentColumn = ensureLedgerColumn(
-    "parent_tx_id",
-    "ALTER TABLE ledger ADD COLUMN parent_tx_id TEXT"
-  );
-  ensureLedgerColumn("refund_reason", "ALTER TABLE ledger ADD COLUMN refund_reason TEXT");
-  ensureLedgerColumn("refund_notes", "ALTER TABLE ledger ADD COLUMN refund_notes TEXT");
-  const addedNotesColumn = ensureLedgerColumn("notes", "ALTER TABLE ledger ADD COLUMN notes TEXT");
-  const addedIdempotencyColumn = ensureLedgerColumn(
-    "idempotency_key",
-    "ALTER TABLE ledger ADD COLUMN idempotency_key TEXT"
-  );
+    // reward table
+    if (!tableExists("reward")) {
+      let legacyRewards = null;
+      if (tableExists("rewards")) {
+        legacyRewards = backupTable("rewards");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reward (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          cost INTEGER NOT NULL,
+          description TEXT DEFAULT '',
+          image_url TEXT DEFAULT '',
+          youtube_url TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          tags TEXT,
+          campaign_id TEXT,
+          source TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      if (legacyRewards) {
+        const rows = db.prepare("SELECT * FROM " + legacyRewards).all();
+        const insertReward = db.prepare(`
+          INSERT INTO reward (id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at)
+          VALUES (@id, @name, @cost, @description, @image_url, @youtube_url, @status, @tags, @campaign_id, @source, @created_at, @updated_at)
+        `);
+        for (const row of rows) {
+          const id = String(row.id ?? "").trim();
+          if (!id) continue;
+          const status = Number(row.active ?? 1) === 1 ? "active" : "disabled";
+          const created = normalizeTimestamp(row.created_at ?? row.createdAt);
+          insertReward.run({
+            id,
+            name: row.name || id,
+            cost: Number(row.price ?? row.cost ?? 0) || 0,
+            description: row.description || "",
+            image_url: row.image_url || row.imageUrl || "",
+            youtube_url: row.youtube_url || row.youtubeUrl || null,
+            status,
+            tags: null,
+            campaign_id: null,
+            source: null,
+            created_at: created,
+            updated_at: normalizeTimestamp(row.updated_at ?? row.updatedAt ?? created)
+          });
+        }
+      }
+    } else {
+      const rewardCols = getColumns("reward");
+      if (!rewardCols.includes("status")) ensureColumn(db, "reward", "status", "TEXT NOT NULL", "active");
+      ensureColumn(db, "reward", "tags", "TEXT");
+      ensureColumn(db, "reward", "campaign_id", "TEXT");
+      ensureColumn(db, "reward", "source", "TEXT");
+      ensureColumn(db, "reward", "cost", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "reward", "updated_at", "INTEGER NOT NULL", 0);
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
 
-  if (addedVerbColumn) {
-    db.exec(`
-      UPDATE ledger
-      SET verb = CASE
-        WHEN delta > 0 THEN 'earn'
-        WHEN delta < 0 THEN 'redeem'
-        ELSE 'adjust'
-      END
-      WHERE verb IS NULL OR verb = ''
-    `);
-  }
+    // hold table
+    if (!tableExists("hold")) {
+      let legacyHolds = null;
+      if (tableExists("holds")) {
+        legacyHolds = backupTable("holds");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hold (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          actor_id TEXT,
+          reward_id TEXT,
+          reward_name TEXT,
+          reward_image_url TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          quoted_amount INTEGER NOT NULL,
+          final_amount INTEGER,
+          note TEXT,
+          metadata TEXT,
+          source TEXT,
+          tags TEXT,
+          campaign_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          released_at INTEGER,
+          redeemed_at INTEGER,
+          expires_at INTEGER,
+          FOREIGN KEY (reward_id) REFERENCES reward(id)
+        );
+      `);
+      if (legacyHolds) {
+        const rows = db.prepare("SELECT * FROM " + legacyHolds).all();
+        const insertHold = db.prepare(`
+          INSERT INTO hold (
+            id,
+            user_id,
+            actor_id,
+            reward_id,
+            reward_name,
+            reward_image_url,
+            status,
+            quoted_amount,
+            final_amount,
+            note,
+            metadata,
+            source,
+            tags,
+            campaign_id,
+            created_at,
+            updated_at,
+            released_at,
+            redeemed_at,
+            expires_at
+          ) VALUES (@id,@user_id,@actor_id,@reward_id,@reward_name,@reward_image_url,@status,@quoted_amount,@final_amount,@note,@metadata,@source,@tags,@campaign_id,@created_at,@updated_at,@released_at,@redeemed_at,@expires_at)
+        `);
+        for (const row of rows) {
+          const id = String(row.id ?? "").trim();
+          if (!id) continue;
+          const userId = normId(row.userId || row.user_id || "");
+          if (!userId) continue;
+          const rawStatus = String(row.status || "pending").trim().toLowerCase();
+          const status =
+            rawStatus === "redeemed"
+              ? "redeemed"
+              : rawStatus === "canceled" || rawStatus === "released"
+              ? "released"
+              : "pending";
+          const approvedAt = row.approvedAt ?? row.approved_at ?? null;
+          const createdAt = normalizeTimestamp(row.createdAt ?? row.created_at);
+          insertHold.run({
+            id,
+            user_id: userId,
+            actor_id: null,
+            reward_id: row.itemId || row.reward_id || null,
+            reward_name: row.itemName || row.reward_name || null,
+            reward_image_url: row.itemImage || row.reward_image_url || null,
+            status,
+            quoted_amount: Number(row.quotedCost ?? row.quoted_amount ?? row.points ?? 0) || 0,
+            final_amount:
+              row.finalCost !== undefined && row.finalCost !== null
+                ? Number(row.finalCost)
+                : row.final_amount !== undefined && row.final_amount !== null
+                ? Number(row.final_amount)
+                : null,
+            note: row.note || null,
+            metadata: null,
+            source: null,
+            tags: null,
+            campaign_id: null,
+            created_at: createdAt,
+            updated_at: normalizeTimestamp(approvedAt ?? createdAt),
+            released_at: status === "released" ? normalizeTimestamp(approvedAt) : null,
+            redeemed_at: status === "redeemed" ? normalizeTimestamp(approvedAt) : null,
+            expires_at: null
+          });
+        }
+      }
+    } else {
+      ensureColumn(db, "hold", "actor_id", "TEXT");
+      ensureColumn(db, "hold", "reward_name", "TEXT");
+      ensureColumn(db, "hold", "reward_image_url", "TEXT");
+      ensureColumn(db, "hold", "quoted_amount", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "hold", "final_amount", "INTEGER");
+      ensureColumn(db, "hold", "metadata", "TEXT");
+      ensureColumn(db, "hold", "source", "TEXT");
+      ensureColumn(db, "hold", "tags", "TEXT");
+      ensureColumn(db, "hold", "campaign_id", "TEXT");
+      ensureColumn(db, "hold", "released_at", "INTEGER");
+      ensureColumn(db, "hold", "redeemed_at", "INTEGER");
+      ensureColumn(db, "hold", "expires_at", "INTEGER");
+      ensureColumn(db, "hold", "updated_at", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "hold", "created_at", "INTEGER NOT NULL", 0);
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
 
-  if (addedNotesColumn) {
-    db.exec(`
-      UPDATE ledger
-      SET notes = note
-      WHERE notes IS NULL
-    `);
-  }
+    // ledger table
+    let legacyLedger = null;
+    if (tableExists("ledger")) {
+      const info = db.prepare("PRAGMA table_info('ledger')").all();
+      const idColumn = info.find(col => col.name === "id");
+      const hasTextId = idColumn && typeof idColumn.type === "string" && idColumn.type.toUpperCase().includes("TEXT");
+      const legacyColumns = new Set(["delta", "reason", "kind", "nonce", "ts", "meta"]);
+      const hasLegacy = info.some(col => legacyColumns.has(col.name));
+      if (!hasTextId || hasLegacy) {
+        legacyLedger = backupTable("ledger");
+      }
+    }
 
-  if (addedParentColumn) {
-    db.exec(`
-      UPDATE ledger
-      SET parent_tx_id = NULL
-      WHERE parent_tx_id IS NULL
-    `);
-  }
+    if (!tableExists("ledger") || legacyLedger) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ledger (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          actor_id TEXT,
+          reward_id TEXT,
+          parent_hold_id TEXT,
+          parent_ledger_id TEXT,
+          verb TEXT NOT NULL,
+          description TEXT,
+          amount INTEGER NOT NULL,
+          balance_after INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'posted',
+          note TEXT,
+          notes TEXT,
+          template_ids TEXT,
+          final_amount INTEGER,
+          metadata TEXT,
+          refund_reason TEXT,
+          refund_notes TEXT,
+          idempotency_key TEXT UNIQUE,
+          source TEXT,
+          tags TEXT,
+          campaign_id TEXT,
+          ip_address TEXT,
+          user_agent TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES member(id),
+          FOREIGN KEY (reward_id) REFERENCES reward(id),
+          FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+          FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+        );
+      `);
+      if (legacyLedger) {
+        const rows = db.prepare("SELECT * FROM " + legacyLedger).all();
+        const insertLedger = db.prepare(`
+          INSERT INTO ledger (
+            id,
+            user_id,
+            actor_id,
+            reward_id,
+            parent_hold_id,
+            parent_ledger_id,
+            verb,
+            description,
+            amount,
+            balance_after,
+            status,
+            note,
+            notes,
+            template_ids,
+            final_amount,
+            metadata,
+            refund_reason,
+            refund_notes,
+            idempotency_key,
+            source,
+            tags,
+            campaign_id,
+            ip_address,
+            user_agent,
+            created_at,
+            updated_at
+          ) VALUES (@id,@user_id,@actor_id,@reward_id,@parent_hold_id,@parent_ledger_id,@verb,@description,@amount,@balance_after,@status,@note,@notes,@template_ids,@final_amount,@metadata,@refund_reason,@refund_notes,@idempotency_key,@source,@tags,@campaign_id,@ip_address,@user_agent,@created_at,@updated_at)
+        `);
+        for (const row of rows) {
+          const id = String(row.id ?? row.ID ?? crypto.randomUUID()).trim();
+          const userId = normId(row.user_id ?? row.userId ?? "");
+          if (!id || !userId) continue;
+          const amount = Number(row.amount ?? row.delta ?? 0) || 0;
+          const balanceAfter = Number(row.balance_after ?? row.balanceAfter ?? row.balance ?? 0) || 0;
+          const templateIds = row.template_ids ?? row.templateIds ?? null;
+          const metadata = row.metadata ?? row.meta ?? null;
+          const tags = row.tags ?? null;
+          const createdAt = normalizeTimestamp(row.created_at ?? row.createdAt ?? row.ts);
+          const updatedAt = normalizeTimestamp(row.updated_at ?? row.updatedAt ?? createdAt);
+          insertLedger.run({
+            id,
+            user_id: userId,
+            actor_id: row.actor_id || row.actorId || row.actor || null,
+            reward_id: row.reward_id || row.itemId || null,
+            parent_hold_id: row.parent_hold_id || row.holdId || null,
+            parent_ledger_id: row.parent_ledger_id || row.parent_tx_id || null,
+            verb:
+              (row.verb || row.kind || "")
+                .toString()
+                .trim() || (amount > 0 ? "earn" : amount < 0 ? "redeem" : "adjust"),
+            description: row.description || row.reason || row.action || null,
+            amount,
+            balance_after: balanceAfter,
+            status: (row.status || row.state || "posted").toString().trim().toLowerCase() || "posted",
+            note: row.note || null,
+            notes: row.notes || null,
+            template_ids: templateIds ? JSON.stringify(templateIds) : null,
+            final_amount:
+              row.final_amount !== undefined && row.final_amount !== null
+                ? Number(row.final_amount)
+                : row.finalCost !== undefined && row.finalCost !== null
+                ? Number(row.finalCost)
+                : null,
+            metadata: metadata ? JSON.stringify(metadata) : null,
+            refund_reason: row.refund_reason || null,
+            refund_notes: row.refund_notes || null,
+            idempotency_key: row.idempotency_key || row.nonce || null,
+            source: row.source || null,
+            tags: tags ? JSON.stringify(tags) : null,
+            campaign_id: row.campaign_id || row.campaignId || null,
+            ip_address: row.ip_address || row.ip || null,
+            user_agent: row.user_agent || row.ua || null,
+            created_at: createdAt,
+            updated_at: updatedAt
+          });
+        }
+      }
+    } else {
+      const ledgerCols = getColumns("ledger");
+      ensureColumn(db, "ledger", "user_id", "TEXT");
+      ensureColumn(db, "ledger", "actor_id", "TEXT");
+      ensureColumn(db, "ledger", "reward_id", "TEXT");
+      ensureColumn(db, "ledger", "parent_hold_id", "TEXT");
+      ensureColumn(db, "ledger", "parent_ledger_id", "TEXT");
+      ensureColumn(db, "ledger", "description", "TEXT");
+      if (!ledgerCols.includes("verb")) ensureColumn(db, "ledger", "verb", "TEXT NOT NULL", "adjust");
+      ensureColumn(db, "ledger", "amount", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "ledger", "balance_after", "INTEGER NOT NULL", 0);
+      if (!ledgerCols.includes("status")) ensureColumn(db, "ledger", "status", "TEXT NOT NULL", "posted");
+      ensureColumn(db, "ledger", "idempotency_key", "TEXT");
+      ensureColumn(db, "ledger", "template_ids", "TEXT");
+      ensureColumn(db, "ledger", "final_amount", "INTEGER");
+      ensureColumn(db, "ledger", "metadata", "TEXT");
+      ensureColumn(db, "ledger", "note", "TEXT");
+      ensureColumn(db, "ledger", "notes", "TEXT");
+      ensureColumn(db, "ledger", "refund_reason", "TEXT");
+      ensureColumn(db, "ledger", "refund_notes", "TEXT");
+      ensureColumn(db, "ledger", "source", "TEXT");
+      ensureColumn(db, "ledger", "tags", "TEXT");
+      ensureColumn(db, "ledger", "campaign_id", "TEXT");
+      ensureColumn(db, "ledger", "ip_address", "TEXT");
+      ensureColumn(db, "ledger", "user_agent", "TEXT");
+      ensureColumn(db, "ledger", "created_at", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "ledger", "updated_at", "INTEGER NOT NULL", 0);
+    }
 
-  if (addedIdempotencyColumn) {
+    if (tableExists("ledger_legacy")) {
+      // no-op placeholder when running repeatedly
+    }
+
+    const oldLedgerCols = getColumns("ledger");
+    if (!oldLedgerCols.includes("amount") && oldLedgerCols.includes("delta")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN delta TO amount");
+    }
+    if (!oldLedgerCols.includes("user_id") && oldLedgerCols.includes("userId")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN userId TO user_id");
+    }
+    if (!oldLedgerCols.includes("description") && oldLedgerCols.includes("action")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN action TO description");
+    }
+    if (!oldLedgerCols.includes("reward_id") && oldLedgerCols.includes("itemId")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN itemId TO reward_id");
+    }
+    if (!oldLedgerCols.includes("parent_hold_id") && oldLedgerCols.includes("holdId")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN holdId TO parent_hold_id");
+    }
+    if (!oldLedgerCols.includes("final_amount") && oldLedgerCols.includes("finalCost")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN finalCost TO final_amount");
+    }
+    if (!oldLedgerCols.includes("note") && oldLedgerCols.includes("note")) {
+      // column already named note, nothing to do
+    }
+    if (!oldLedgerCols.includes("notes") && oldLedgerCols.includes("notes")) {
+      // nothing to do
+    }
+    if (!oldLedgerCols.includes("actor_id") && oldLedgerCols.includes("actor")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN actor TO actor_id");
+    }
+    if (!oldLedgerCols.includes("ip_address") && oldLedgerCols.includes("ip")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN ip TO ip_address");
+    }
+    if (!oldLedgerCols.includes("user_agent") && oldLedgerCols.includes("ua")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN ua TO user_agent");
+    }
+    if (!oldLedgerCols.includes("parent_ledger_id") && oldLedgerCols.includes("parent_tx_id")) {
+      db.exec("ALTER TABLE ledger RENAME COLUMN parent_tx_id TO parent_ledger_id");
+    }
+
     db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
       ON ledger(idempotency_key)
       WHERE idempotency_key IS NOT NULL
     `);
-  }
-
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
-    ON ledger(idempotency_key)
-    WHERE idempotency_key IS NOT NULL
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_ledger_parent_tx ON ledger(parent_tx_id);
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_at ON ledger(userId, verb, at);
-  `);
-
-  const rewardsCols = db.prepare(`PRAGMA table_info('rewards')`).all();
-  if (!rewardsCols.length) {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS rewards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        price INTEGER NOT NULL,
-        description TEXT DEFAULT '',
-        image_url TEXT DEFAULT '',
-        youtube_url TEXT,
-        active INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-      );
+      CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at
+      ON ledger(user_id, verb, created_at, id)
     `);
-  } else {
-    const hasCreatedAt = rewardsCols.some(c => c.name === "created_at");
-    const hasCreatedAtCamel = rewardsCols.some(c => c.name === "createdAt");
-    if (!hasCreatedAt) {
-      db.exec(`ALTER TABLE rewards ADD COLUMN created_at INTEGER DEFAULT 0`);
-    }
-
-    if (!rewardsCols.some(c => c.name === "youtube_url")) {
-      db.exec(`ALTER TABLE rewards ADD COLUMN youtube_url TEXT`);
-    }
-
-    const rowsNeedingBackfill = db
-      .prepare("SELECT COUNT(*) as cnt FROM rewards WHERE created_at IS NULL OR created_at = 0")
-      .get().cnt;
-    if (rowsNeedingBackfill) {
-      if (hasCreatedAtCamel) {
-        db.exec(`
-          UPDATE rewards
-          SET created_at = CASE
-            WHEN created_at IS NOT NULL AND created_at != 0 THEN created_at
-            WHEN createdAt IS NOT NULL THEN createdAt
-            ELSE strftime('%s','now')
-          END
-          WHERE created_at IS NULL OR created_at = 0;
-        `);
-      } else {
-        db.exec(`
-          UPDATE rewards
-          SET created_at = CASE
-            WHEN created_at IS NOT NULL AND created_at != 0 THEN created_at
-            ELSE strftime('%s','now')
-          END
-          WHERE created_at IS NULL OR created_at = 0;
-        `);
-      }
-    }
-  }
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS earn_templates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      points INTEGER NOT NULL,
-      description TEXT DEFAULT '',
-      youtube_url TEXT,
-      active INTEGER NOT NULL DEFAULT 1,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-    );
-  `);
-
-  const holdCols = db.prepare(`PRAGMA table_info(holds)`).all();
-  if (!holdCols.length) {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS holds (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        status TEXT NOT NULL,
-        itemId TEXT,
-        itemName TEXT,
-        itemImage TEXT,
-        quotedCost INTEGER NOT NULL,
-        finalCost INTEGER,
-        note TEXT,
-        createdAt INTEGER NOT NULL,
-        approvedAt INTEGER
-      );
+      CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold
+      ON ledger(parent_hold_id)
     `);
-  } else {
-    const ensure = (name, sql) => {
-      if (!holdCols.some(c => c.name === name)) {
-        db.exec(sql);
-        return true;
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger
+      ON ledger(parent_ledger_id)
+    `);
+
+    // spend_request table
+    if (!tableExists("spend_request")) {
+      let legacySpend = null;
+      if (tableExists("spend_requests")) {
+        legacySpend = backupTable("spend_requests");
       }
-      return false;
-    };
-    ensure("itemImage", "ALTER TABLE holds ADD COLUMN itemImage TEXT");
-    const addedQuoted = ensure("quotedCost", "ALTER TABLE holds ADD COLUMN quotedCost INTEGER NOT NULL DEFAULT 0");
-    ensure("finalCost", "ALTER TABLE holds ADD COLUMN finalCost INTEGER");
-    ensure("note", "ALTER TABLE holds ADD COLUMN note TEXT");
-    ensure("approvedAt", "ALTER TABLE holds ADD COLUMN approvedAt INTEGER");
-    if (!holdCols.some(c => c.name === "status")) {
-      db.exec("ALTER TABLE holds ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS spend_request (
+          id TEXT PRIMARY KEY,
+          token TEXT UNIQUE NOT NULL,
+          user_id TEXT NOT NULL,
+          reward_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          amount INTEGER,
+          title TEXT,
+          image_url TEXT,
+          actor_id TEXT,
+          source TEXT,
+          tags TEXT,
+          campaign_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES member(id),
+          FOREIGN KEY (reward_id) REFERENCES reward(id)
+        );
+      `);
+      if (legacySpend) {
+        const rows = db.prepare("SELECT * FROM " + legacySpend).all();
+        const insertSpend = db.prepare(`
+          INSERT INTO spend_request (
+            id,
+            token,
+            user_id,
+            reward_id,
+            status,
+            amount,
+            title,
+            image_url,
+            actor_id,
+            source,
+            tags,
+            campaign_id,
+            created_at,
+            updated_at
+          ) VALUES (@id,@token,@user_id,@reward_id,@status,@amount,@title,@image_url,@actor_id,@source,@tags,@campaign_id,@created_at,@updated_at)
+        `);
+        for (const row of rows) {
+          const id = String(row.id ?? crypto.randomUUID()).trim();
+          const userId = normId(row.userId || row.user_id || "");
+          if (!id || !userId) continue;
+          insertSpend.run({
+            id,
+            token: row.token,
+            user_id: userId,
+            reward_id: row.itemId || row.reward_id || null,
+            status: String(row.status || "pending").trim().toLowerCase(),
+            amount: row.price ?? row.amount ?? null,
+            title: row.title || null,
+            image_url: row.imageUrl || row.image_url || null,
+            actor_id: null,
+            source: null,
+            tags: null,
+            campaign_id: null,
+            created_at: normalizeTimestamp(row.createdAt),
+            updated_at: normalizeTimestamp(row.updatedAt ?? row.createdAt)
+          });
+        }
+      }
+    } else {
+      ensureColumn(db, "spend_request", "actor_id", "TEXT");
+      ensureColumn(db, "spend_request", "source", "TEXT");
+      ensureColumn(db, "spend_request", "tags", "TEXT");
+      ensureColumn(db, "spend_request", "campaign_id", "TEXT");
+      ensureColumn(db, "spend_request", "amount", "INTEGER");
+      ensureColumn(db, "spend_request", "created_at", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "spend_request", "updated_at", "INTEGER NOT NULL", 0);
     }
-    if (!holdCols.some(c => c.name === "createdAt")) {
-      db.exec("ALTER TABLE holds ADD COLUMN createdAt INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_status ON spend_request(status)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user ON spend_request(user_id)");
+
+    // consumed tokens
+    let consumedCols = [];
+    if (!tableExists("consumed_tokens")) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS consumed_tokens (
+          id TEXT PRIMARY KEY,
+          token TEXT,
+          typ TEXT,
+          request_id TEXT,
+          user_id TEXT,
+          reward_id TEXT,
+          source TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES spend_request(id),
+          FOREIGN KEY (user_id) REFERENCES member(id),
+          FOREIGN KEY (reward_id) REFERENCES reward(id)
+        );
+      `);
+      consumedCols = [
+        "id",
+        "token",
+        "typ",
+        "request_id",
+        "user_id",
+        "reward_id",
+        "source",
+        "created_at",
+        "updated_at"
+      ];
+    } else {
+      consumedCols = getColumns("consumed_tokens");
+      if (!consumedCols.includes("id") && consumedCols.includes("jti")) {
+        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN jti TO id");
+        consumedCols = getColumns("consumed_tokens");
+      }
+      if (!consumedCols.includes("created_at") && consumedCols.includes("consumed_at")) {
+        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
+        consumedCols = getColumns("consumed_tokens");
+      }
+      ensureColumn(db, "consumed_tokens", "token", "TEXT");
+      ensureColumn(db, "consumed_tokens", "typ", "TEXT");
+      ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
+      ensureColumn(db, "consumed_tokens", "user_id", "TEXT");
+      ensureColumn(db, "consumed_tokens", "reward_id", "TEXT");
+      ensureColumn(db, "consumed_tokens", "source", "TEXT");
+      ensureColumn(db, "consumed_tokens", "created_at", "INTEGER NOT NULL", 0);
+      ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER NOT NULL", 0);
     }
-    if (addedQuoted && holdCols.some(c => c.name === 'points')) {
-      db.exec("UPDATE holds SET quotedCost = points WHERE quotedCost = 0");
-    }
-  }
+    db.exec(`
+      UPDATE consumed_tokens
+      SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000),
+          updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000))
+      WHERE created_at IS NULL OR created_at = 0 OR updated_at IS NULL OR updated_at = 0;
+    `);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
+  });
 
-  refreshHoldColumnNames();
+  migrate();
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS members (
-      userId TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      dob TEXT,
-      sex TEXT,
-      createdAt INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-      updatedAt INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-    );
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS consumed_tokens (
-      jti TEXT PRIMARY KEY,
-      typ TEXT NOT NULL,
-      consumed_at INTEGER NOT NULL
-    );
-  `);
 }
 
 ensureSchema();
@@ -474,67 +858,69 @@ function nowSec() {
 }
 
 const selectMemberStmt = db.prepare(`
-  SELECT userId, name, dob, sex, createdAt, updatedAt
-  FROM members
-  WHERE userId = ?
+  SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  WHERE id = ?
 `);
 
 const listMembersStmt = db.prepare(`
-  SELECT userId, name, dob, sex, createdAt, updatedAt
-  FROM members
-  ORDER BY userId ASC
+  SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  ORDER BY id ASC
   LIMIT 200
 `);
 
 const searchMembersStmt = db.prepare(`
-  SELECT userId, name, dob, sex, createdAt, updatedAt
-  FROM members
-  WHERE userId LIKE @like OR LOWER(name) LIKE @like
-  ORDER BY userId ASC
+  SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  WHERE id LIKE @like OR LOWER(name) LIKE @like
+  ORDER BY id ASC
   LIMIT 200
 `);
 
 const insertMemberStmt = db.prepare(`
-  INSERT INTO members (userId, name, dob, sex, createdAt, updatedAt)
-  VALUES (@userId, @name, @dob, @sex, @createdAt, @updatedAt)
+  INSERT INTO member (id, name, date_of_birth, sex, status, created_at, updated_at)
+  VALUES (@id, @name, @date_of_birth, @sex, @status, @created_at, @updated_at)
 `);
 
 const selectMemberExistsStmt = db.prepare(`
   SELECT 1
-  FROM members
-  WHERE userId = ?
+  FROM member
+  WHERE id = ?
 `);
 
 const updateMemberStmt = db.prepare(`
-  UPDATE members
+  UPDATE member
   SET name = @name,
-      dob = @dob,
+      date_of_birth = @date_of_birth,
       sex = @sex,
-      updatedAt = @updatedAt
-  WHERE userId = @userId
+      status = @status,
+      updated_at = @updated_at
+  WHERE id = @id
 `);
 
 const deleteMemberStmt = db.prepare(`
-  DELETE FROM members
-  WHERE userId = ?
+  DELETE FROM member
+  WHERE id = ?
 `);
 
 function ensureDefaultMembers() {
   const defaults = [
-    { userId: "leo", name: "Leo", dob: null, sex: null }
+    { id: "leo", name: "Leo", date_of_birth: null, sex: null, status: "active" }
   ];
 
   const insertMissing = db.transaction(members => {
     for (const member of members) {
-      if (!selectMemberExistsStmt.get(member.userId)) {
+      if (!selectMemberExistsStmt.get(member.id)) {
         const ts = Date.now();
         insertMemberStmt.run({
-          userId: member.userId,
+          id: member.id,
           name: member.name,
-          dob: member.dob,
+          date_of_birth: member.date_of_birth,
           sex: member.sex,
-          createdAt: ts,
-          updatedAt: ts
+          status: member.status || "active",
+          created_at: ts,
+          updated_at: ts
         });
       }
     }
@@ -552,17 +938,20 @@ function getBalance(userId) {
 function mapMember(row) {
   if (!row) return null;
   return {
-    userId: row.userId,
+    userId: row.id,
     name: row.name,
-    dob: row.dob || null,
+    dob: row.date_of_birth || null,
     sex: row.sex || null,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    status: row.status || 'active',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 
 function getMember(userId) {
-  const row = selectMemberStmt.get(userId);
+  const normalized = normId(userId);
+  if (!normalized) return null;
+  const row = selectMemberStmt.get(normalized);
   return mapMember(row);
 }
 
@@ -574,119 +963,164 @@ function listMembers(search) {
   return listMembersStmt.all().map(mapMember);
 }
 
-const insertLedgerStmt = db.prepare(`
-  INSERT INTO ledger (
-    at,
-    userId,
-    action,
-    delta,
-    balance_after,
-    itemId,
-    holdId,
-    templates,
-    finalCost,
-    note,
-    actor,
-    ip,
-    ua,
-    verb,
-    parent_tx_id,
-    refund_reason,
-    refund_notes,
-    notes,
-    idempotency_key
-  )
-  VALUES (
-    @at,
-    @userId,
-    @action,
-    @delta,
-    @balance_after,
-    @itemId,
-    @holdId,
-    @templates,
-    @finalCost,
-    @note,
-    @actor,
-    @ip,
-    @ua,
-    @verb,
-    @parent_tx_id,
-    @refund_reason,
-    @refund_notes,
-    @notes,
-    @idempotency_key
-  )
-`);
 const selectLedgerByIdStmt = db.prepare("SELECT * FROM ledger WHERE id = ?");
 const selectLedgerByKeyStmt = db.prepare("SELECT * FROM ledger WHERE idempotency_key = ?");
 const sumRefundsByParentStmt = db.prepare(
-  "SELECT COALESCE(SUM(delta), 0) AS total FROM ledger WHERE parent_tx_id = ? AND verb = 'refund'"
+  "SELECT COALESCE(SUM(amount), 0) AS total FROM ledger WHERE parent_ledger_id = ? AND verb = 'refund'"
 );
 const listLedgerByUserStmt = db.prepare(`
   SELECT *
   FROM ledger
-  WHERE userId = ?
-  ORDER BY at DESC, id DESC
+  WHERE user_id = ?
+  ORDER BY created_at DESC, id DESC
 `);
-const checkTokenStmt = db.prepare("SELECT 1 FROM consumed_tokens WHERE jti = ?");
-const consumeTokenStmt = db.prepare("INSERT INTO consumed_tokens (jti, typ, consumed_at) VALUES (?, ?, ?)");
+const checkTokenStmt = db.prepare("SELECT 1 FROM consumed_tokens WHERE id = ?");
+const consumeTokenStmt = db.prepare(
+  "INSERT INTO consumed_tokens (id, token, typ, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+);
 const listRecentRedeemsStmt = db.prepare(`
-  SELECT id, at, delta
+  SELECT id, created_at, amount
   FROM ledger
-  WHERE userId = ?
+  WHERE user_id = ?
     AND verb = 'redeem'
-  ORDER BY at DESC, id DESC
+  ORDER BY created_at DESC, id DESC
   LIMIT 50
 `);
 const findRecentHoldsStmt = db.prepare(`
-  SELECT id, status, quotedCost, finalCost, createdAt
-  FROM holds
-  WHERE userId = ?
-  ORDER BY createdAt DESC
+  SELECT id, status, quoted_amount, final_amount, created_at
+  FROM hold
+  WHERE user_id = ?
+  ORDER BY created_at DESC
   LIMIT 10
 `);
 const countPendingHoldsStmt = db.prepare(`
   SELECT COUNT(*) AS pending
-  FROM holds
-  WHERE userId = ?
+  FROM hold
+  WHERE user_id = ?
     AND status = 'pending'
 `);
 
 function mapLedgerRow(row) {
   if (!row) return null;
   let parsedTemplates = null;
-  if (row.templates) {
+  if (row.template_ids) {
     try {
-      parsedTemplates = JSON.parse(row.templates);
+      parsedTemplates = JSON.parse(row.template_ids);
     } catch {
       parsedTemplates = null;
     }
   }
-  const resolvedVerb = row.verb || (row.delta > 0 ? "earn" : row.delta < 0 ? "redeem" : "adjust");
+  let parsedTags = null;
+  if (row.tags) {
+    try {
+      parsedTags = JSON.parse(row.tags);
+    } catch {
+      parsedTags = null;
+    }
+  }
+  const resolvedVerb = row.verb || (row.amount > 0 ? 'earn' : row.amount < 0 ? 'redeem' : 'adjust');
   return {
     id: row.id,
-    at: row.at,
-    userId: row.userId,
-    action: row.action,
+    at: row.created_at,
+    userId: row.user_id,
+    action: row.description,
     verb: resolvedVerb,
-    delta: Number(row.delta),
+    delta: Number(row.amount),
     balance_after: Number(row.balance_after),
-    itemId: row.itemId || null,
-    holdId: row.holdId || null,
+    itemId: row.reward_id || null,
+    holdId: row.parent_hold_id || null,
     templates: parsedTemplates,
-    finalCost: row.finalCost ?? null,
+    finalCost: row.final_amount ?? null,
     note: row.note || null,
     notes: row.notes || null,
-    actor: row.actor || null,
-    ip: row.ip || null,
-    ua: row.ua || null,
-    parent_tx_id: row.parent_tx_id || null,
+    actor: row.actor_id || null,
+    ip: row.ip_address || null,
+    ua: row.user_agent || null,
+    parent_tx_id: row.parent_ledger_id || null,
     refund_reason: row.refund_reason || null,
     refund_notes: row.refund_notes || null,
-    idempotency_key: row.idempotency_key || null
+    idempotency_key: row.idempotency_key || null,
+    status: row.status || 'posted',
+    source: row.source || null,
+    tags: parsedTags,
+    campaign_id: row.campaign_id || null,
+    updated_at: row.updated_at,
+    metadata: row.metadata || null
   };
 }
+
+function mapHoldRow(row) {
+  if (!row) return null;
+  let parsedMetadata = null;
+  if (row.metadata) {
+    try {
+      parsedMetadata = JSON.parse(row.metadata);
+    } catch {
+      parsedMetadata = null;
+    }
+  }
+  return {
+    id: row.id,
+    userId: row.user_id || null,
+    status: row.status || 'pending',
+    quotedCost: Number(row.quoted_amount ?? row.quotedCost ?? 0) || 0,
+    finalCost:
+      row.final_amount !== undefined && row.final_amount !== null
+        ? Number(row.final_amount)
+        : row.finalCost !== undefined && row.finalCost !== null
+        ? Number(row.finalCost)
+        : null,
+    note: row.note || null,
+    rewardId: row.reward_id || null,
+    rewardName: row.reward_name || null,
+    rewardImage: row.reward_image_url || null,
+    itemId: row.reward_id || null,
+    itemName: row.reward_name || null,
+    itemImage: row.reward_image_url || null,
+    actorId: row.actor_id || null,
+    createdAt: Number(row.created_at ?? row.createdAt) || null,
+    updatedAt: Number(row.updated_at ?? row.updatedAt) || null,
+    approvedAt: Number(row.redeemed_at ?? row.approvedAt ?? 0) || null,
+    redeemedAt: Number(row.redeemed_at ?? 0) || null,
+    releasedAt: Number(row.released_at ?? 0) || null,
+    expiresAt: Number(row.expires_at ?? 0) || null,
+    metadata: parsedMetadata
+  };
+}
+
+function mapRewardRow(row) {
+  if (!row) return null;
+  let parsedTags = null;
+  if (row.tags) {
+    try {
+      parsedTags = JSON.parse(row.tags);
+    } catch {
+      parsedTags = null;
+    }
+  }
+  const status = (row.status || "active").toString().trim().toLowerCase() || "active";
+  const cost = Number(row.cost ?? row.price ?? 0) || 0;
+  return {
+    id: row.id,
+    name: row.name || "",
+    title: row.name || "",
+    cost,
+    price: cost,
+    description: row.description || "",
+    image_url: row.image_url || "",
+    imageUrl: row.image_url || "",
+    youtube_url: row.youtube_url || "",
+    youtubeUrl: row.youtube_url || "",
+    status,
+    active: status === "active",
+    tags: parsedTags,
+    campaign_id: row.campaign_id || null,
+    source: row.source || null,
+    created_at: Number(row.created_at ?? 0) || null,
+    updated_at: Number(row.updated_at ?? 0) || null
+  };
+}
+
 
 const telemetry = {
   startedAt: Date.now(),
@@ -776,10 +1210,15 @@ function getStateHints(userId) {
   const balance = getBalance(normalized);
   const holds = findRecentHoldsStmt.all(normalized).map(row => ({
     id: row.id,
-    status: row.status || "pending",
-    quotedCost: Number(row.quotedCost ?? row.points ?? 0) || 0,
-    finalCost: row.finalCost !== undefined && row.finalCost !== null ? Number(row.finalCost) : null,
-    createdAt: Number(row.createdAt) || null
+    status: row.status || 'pending',
+    quotedCost: Number(row.quoted_amount ?? row.quotedCost ?? 0) || 0,
+    finalCost:
+      row.final_amount !== undefined && row.final_amount !== null
+        ? Number(row.final_amount)
+        : row.finalCost !== undefined && row.finalCost !== null
+        ? Number(row.finalCost)
+        : null,
+    createdAt: Number(row.created_at ?? row.createdAt) || null
   }));
   const pendingHold = holds.find(h => h.status === "pending") || null;
   const pendingHoldCount = Number(countPendingHoldsStmt.get(normalized)?.pending || 0);
@@ -790,10 +1229,10 @@ function getStateHints(userId) {
   if (FEATURE_FLAGS.refunds) {
     const redeemRows = listRecentRedeemsStmt.all(normalized);
     for (const row of redeemRows) {
-      const redeemAmount = Math.abs(Number(row.delta) || 0);
+      const redeemAmount = Math.abs(Number(row.amount) || 0);
       if (!redeemAmount) continue;
       if (REFUND_WINDOW_MS !== null) {
-        const age = now - Number(row.at || 0);
+        const age = now - Number(row.created_at || 0);
         if (Number.isFinite(age) && age > REFUND_WINDOW_MS) {
           continue;
         }
@@ -807,7 +1246,7 @@ function getStateHints(userId) {
           redeemTxId: String(row.id),
           remaining,
           redeemed: redeemAmount,
-          at: Number(row.at) || null
+          at: Number(row.created_at || 0) || null
         });
       }
     }
@@ -904,13 +1343,12 @@ function applyLedger({
   returnRow = false
 }) {
   const ip = req?.ip || null;
-  const ua = req?.headers?.["user-agent"] || null;
-  const at = Date.now();
-  const templatesJson = templates ? JSON.stringify(templates) : null;
+  const ua = req?.headers?.['user-agent'] || null;
+  const createdAt = Date.now();
   const normalizedDelta = Number(delta) | 0;
 
   const resolvedVerb =
-    verb || (normalizedDelta > 0 ? "earn" : normalizedDelta < 0 ? "redeem" : "adjust");
+    verb || (normalizedDelta > 0 ? 'earn' : normalizedDelta < 0 ? 'redeem' : 'adjust');
   const explicitLedgerKey = idempotencyKey ? `api:${String(idempotencyKey)}` : null;
 
   if (explicitLedgerKey) {
@@ -925,56 +1363,60 @@ function applyLedger({
   return db.transaction(() => {
     if (tokenInfo?.jti) {
       tokenLedgerKey = `token:${tokenInfo.jti}:${action}:${userId}:${normalizedDelta}`;
-      const existingTx = db.get("SELECT id FROM ledger_tx WHERE idempotency_key=?", [tokenLedgerKey]);
-      if (existingTx) {
-        throw new Error("TOKEN_USED");
-      }
       if (checkTokenStmt.get(tokenInfo.jti)) {
-        throw new Error("TOKEN_USED");
+        throw new Error('TOKEN_USED');
       }
-    }
-    const current = getBalance(userId);
-    const next = current + normalizedDelta;
-    if (next < 0) {
-      throw new Error("INSUFFICIENT_FUNDS");
     }
     const ledgerKey = explicitLedgerKey || tokenLedgerKey || undefined;
-    const sourceRef = holdId ?? itemId ?? null;
-    if (normalizedDelta > 0) {
-      earn({ memberId: userId, amount: normalizedDelta, reason: action, sourceId: sourceRef, idempotencyKey: ledgerKey });
-    } else if (normalizedDelta < 0) {
-      redeem({ memberId: userId, amount: -normalizedDelta, rewardId: sourceRef ?? action, idempotencyKey: ledgerKey });
-    } else {
-      ensureMemberAccount(userId);
-    }
-    const balanceAfter = getBalance(userId);
-    const resolvedNotes = notes ?? null;
-    const result = insertLedgerStmt.run({
-      at,
+    const metadata = tokenInfo?.jti
+      ? { token: tokenInfo.jti, type: tokenInfo.typ || null, raw: tokenInfo.token || null }
+      : null;
+
+    const ledgerResult = recordLedgerEntry({
       userId,
-      action,
-      delta: normalizedDelta,
-      balance_after: balanceAfter,
-      itemId,
-      holdId,
-      templates: templatesJson,
-      finalCost: finalCost ?? null,
-      note,
-      actor,
-      ip,
-      ua,
+      amount: normalizedDelta,
       verb: resolvedVerb,
-      parent_tx_id: parentTxId ? String(parentTxId) : null,
-      refund_reason: refundReason || null,
-      refund_notes: refundNotes || null,
-      notes: resolvedNotes,
-      idempotency_key: ledgerKey || null
+      description: action,
+      rewardId: itemId,
+      parentHoldId: holdId,
+      note,
+      notes: notes ?? null,
+      templateIds: templates,
+      finalAmount: finalCost ?? null,
+      actorId: actor,
+      refundReason,
+      refundNotes,
+      idempotencyKey: ledgerKey,
+      source: tokenInfo?.typ || null,
+      metadata,
+      ipAddress: ip,
+      userAgent: ua,
+      campaignId: null,
+      tags: null,
+      parentLedgerId: parentTxId ? String(parentTxId) : null,
+      createdAt,
+      updatedAt: createdAt
     });
+
     if (tokenInfo?.jti) {
-      consumeTokenStmt.run(tokenInfo.jti, tokenInfo.typ, at);
+      const tokenSource = tokenInfo.source || action || null;
+      consumeTokenStmt.run(
+        tokenInfo.jti,
+        tokenInfo.token || null,
+        tokenInfo.typ || null,
+        tokenSource ? String(tokenSource) : null,
+        createdAt,
+        createdAt
+      );
     }
-    const insertedRow = mapLedgerRow(selectLedgerByIdStmt.get(result.lastInsertRowid));
-    return returnRow ? { balance: balanceAfter, row: insertedRow } : balanceAfter;
+
+    const insertedRow = ledgerResult.row
+      ? mapLedgerRow(ledgerResult.row)
+      : mapLedgerRow(selectLedgerByIdStmt.get(ledgerResult.id));
+
+    return returnRow
+      ? { balance: ledgerResult.balance_after, row: insertedRow }
+      : ledgerResult.balance_after;
   })();
 }
 
@@ -1037,6 +1479,7 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
     throw createHttpError(409, "TOKEN_USED");
   }
   const resolvedActor = typeof actor === "function" ? actor(payload.typ) : actor;
+  const tokenSourceLabel = payload.typ === "earn" ? "earn.qr" : payload.typ === "give" ? "give.qr" : payload.typ;
   if (payload.typ === "earn") {
     if (!isAdmin && !allowEarnWithoutAdmin) {
       throw createHttpError(403, "ADMIN_REQUIRED");
@@ -1070,7 +1513,7 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       templates: normalized,
       actor: resolvedActor || null,
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: tokenSourceLabel },
       returnRow: true
     });
     return {
@@ -1100,7 +1543,7 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       note: data.note || null,
       actor: resolvedActor || null,
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: tokenSourceLabel },
       returnRow: true
     });
     return {
@@ -1246,7 +1689,9 @@ function createRefundTransaction({
 }
 
 function getLedgerViewForUser(userId) {
-  const rows = listLedgerByUserStmt.all(userId).map(mapLedgerRow);
+  const normalized = normId(userId);
+  if (!normalized) return [];
+  const rows = listLedgerByUserStmt.all(normalized).map(mapLedgerRow);
   const refundsByParent = new Map();
   for (const row of rows) {
     if (row.verb === "refund" && row.parent_tx_id) {
@@ -1364,9 +1809,9 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
     statusLabel = "Already redeemed";
     statusDescription = message || "This reward has already been redeemed.";
     statusColor = "#15803d";
-  } else if (normalizedStatus === "canceled") {
+  } else if (normalizedStatus === "released") {
     statusLabel = "Canceled";
-    statusDescription = message || "This reward request was canceled. Ask the child to generate a new QR code if needed.";
+    statusDescription = message || "This reward request was released. Ask the child to generate a new QR code if needed.";
     statusColor = "#b91c1c";
   }
 
@@ -1753,10 +2198,10 @@ app.get("/summary/:userId", (req, res) => {
   const balance = getBalance(userId);
   const sums = db.prepare(`
     SELECT
-      SUM(CASE WHEN action LIKE 'earn_%' THEN delta ELSE 0 END) AS earned,
-      SUM(CASE WHEN action LIKE 'spend_%' THEN ABS(delta) ELSE 0 END) AS spent
+      SUM(CASE WHEN description LIKE 'earn_%' THEN amount ELSE 0 END) AS earned,
+      SUM(CASE WHEN description LIKE 'spend_%' THEN ABS(amount) ELSE 0 END) AS spent
     FROM ledger
-    WHERE userId = ?
+    WHERE user_id = ?
   `).get(userId);
   res.json({
     userId,
@@ -2111,21 +2556,29 @@ app.post("/ck/adjust", requireAdminKey, requireRole("admin"), express.json(), (r
   }
 });
 
-app.get("/api/rewards", (_req, res) => {
-  const rows = db.prepare("SELECT id, name, price, description, image_url, youtube_url, active FROM rewards WHERE active = 1 ORDER BY price ASC, name ASC").all();
-  res.json(rows.map(r => ({
-    id: r.id,
-    name: r.name,
-    title: r.name,
-    cost: r.price,
-    price: r.price,
-    description: r.description || "",
-    image_url: r.image_url || "",
-    imageUrl: r.image_url || "",
-    youtube_url: r.youtube_url || "",
-    youtubeUrl: r.youtube_url || "",
-    active: r.active
-  })));
+app.get("/api/rewards", (req, res) => {
+  const filters = [];
+  const params = [];
+  const query = req.query || {};
+  if (query.status !== undefined && query.status !== null && query.status !== "") {
+    filters.push("status = ?");
+    params.push(String(query.status).trim().toLowerCase());
+  } else if (query.active !== undefined) {
+    const raw = String(query.active).trim().toLowerCase();
+    const isActive = raw === "" || raw === "1" || raw === "true" || raw === "yes" || raw === "active";
+    filters.push("status = ?");
+    params.push(isActive ? "active" : "disabled");
+  }
+  let sql = `
+    SELECT id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at
+    FROM reward
+  `;
+  if (filters.length) {
+    sql += " WHERE " + filters.join(" AND ");
+  }
+  sql += " ORDER BY cost ASC, name ASC";
+  const rows = db.prepare(sql).all(...params).map(mapRewardRow);
+  res.json(rows);
 });
 
 app.get("/api/features", (_req, res) => {
@@ -2135,62 +2588,136 @@ app.get("/api/features", (_req, res) => {
 app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
   try {
     const body = req.body || {};
-    const name = body.name;
-    const cost = body.cost;
+    const name = (body.name || "").toString().trim();
+    const costRaw = body.cost ?? body.price;
     const imageUrl = body.imageUrl ?? body.image_url ?? null;
     const youtubeUrl = body.youtubeUrl ?? body.youtube_url ?? null;
-    const description = body.description ?? "";
-    if (!name || Number.isNaN(Number(cost))) return res.status(400).json({ error: "name and cost required" });
-    const stmt = db.prepare("INSERT INTO rewards (name, price, image_url, youtube_url, description, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)");
-    const info = stmt.run(
-      String(name),
-      Math.floor(Number(cost)),
+    const description = (body.description ?? "").toString().trim();
+    const tagsValue = body.tags;
+    const campaignId = body.campaign_id ?? body.campaignId ?? null;
+    const source = body.source ?? null;
+    const statusRaw = body.status ?? (body.active === 0 || body.active === false ? "disabled" : "active");
+    if (!name) return res.status(400).json({ error: "name_required" });
+    const numericCost = Number(costRaw);
+    if (!Number.isFinite(numericCost)) return res.status(400).json({ error: "invalid_cost" });
+    const cost = Math.trunc(numericCost);
+    const rewardId = (body.id ? String(body.id).trim() : "") || crypto.randomUUID();
+    const now = Date.now();
+    let encodedTags = null;
+    if (tagsValue !== undefined && tagsValue !== null) {
+      if (typeof tagsValue === "string") {
+        encodedTags = tagsValue.trim() || null;
+      } else {
+        try {
+          encodedTags = JSON.stringify(tagsValue);
+        } catch {
+          return res.status(400).json({ error: "invalid_tags" });
+        }
+      }
+    }
+    const insert = db.prepare(`
+      INSERT INTO reward (
+        id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    insert.run(
+      rewardId,
+      name,
+      cost,
+      description,
       imageUrl ? String(imageUrl).trim() || null : null,
       youtubeUrl ? String(youtubeUrl).trim() || null : null,
-      String((description ?? "")).trim(),
-      nowSec()
+      String(statusRaw || "active").trim().toLowerCase() || "active",
+      encodedTags,
+      campaignId ? String(campaignId).trim() || null : null,
+      source ? String(source).trim() || null : null,
+      now,
+      now
     );
-    const row = db.prepare("SELECT id, name, price AS cost, image_url, youtube_url, description, active FROM rewards WHERE id = ?").get(info.lastInsertRowid);
-    if (!row) return res.status(500).json({ error: "create reward failed" });
-    res.status(201).json({
-      ...row,
-      price: row.cost,
-      imageUrl: row.image_url,
-      youtubeUrl: row.youtube_url
-    });
+    const row = db.prepare("SELECT * FROM reward WHERE id = ?").get(rewardId);
+    res.status(201).json(mapRewardRow(row));
   } catch (e) {
     console.error("create reward", e);
-    res.status(500).json({ error: "create reward failed" });
+    const status = e?.code === "SQLITE_CONSTRAINT" ? 409 : 500;
+    res.status(status).json({ error: "create_reward_failed" });
   }
 });
 
 app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
-  const id = Number(req.params.id);
+  const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const body = req.body || {};
-  const name = body.name;
-  const price = body.price;
-  const description = body.description;
-  const imageUrl = body.imageUrl ?? body.image_url;
-  const youtubeUrl = body.youtubeUrl ?? body.youtube_url;
-  const active = body.active;
   const fields = [];
   const params = [];
-  if (name !== undefined) { fields.push("name = ?"); params.push(name); }
-  if (price !== undefined) {
-    if (!Number.isFinite(Number(price))) return res.status(400).json({ error: "invalid_price" });
-    fields.push("price = ?"); params.push(Math.floor(Number(price)));
+  if (body.name !== undefined) {
+    fields.push("name = ?");
+    params.push(String(body.name).trim());
   }
-  if (description !== undefined) { fields.push("description = ?"); params.push(description); }
-  if (imageUrl !== undefined) { fields.push("image_url = ?"); params.push(imageUrl ? String(imageUrl).trim() || null : null); }
-  if (youtubeUrl !== undefined) { fields.push("youtube_url = ?"); params.push(youtubeUrl ? String(youtubeUrl).trim() || null : null); }
-  if (active !== undefined) { fields.push("active = ?"); params.push(active ? 1 : 0); }
+  const costRaw = body.cost ?? body.price;
+  if (costRaw !== undefined) {
+    const numeric = Number(costRaw);
+    if (!Number.isFinite(numeric)) return res.status(400).json({ error: "invalid_cost" });
+    fields.push("cost = ?");
+    params.push(Math.trunc(numeric));
+  }
+  if (body.description !== undefined) {
+    fields.push("description = ?");
+    params.push(String(body.description));
+  }
+  if (body.imageUrl !== undefined || body.image_url !== undefined) {
+    const imageUrl = body.imageUrl ?? body.image_url;
+    fields.push("image_url = ?");
+    params.push(imageUrl ? String(imageUrl).trim() || null : null);
+  }
+  if (body.youtubeUrl !== undefined || body.youtube_url !== undefined) {
+    const youtubeUrl = body.youtubeUrl ?? body.youtube_url;
+    fields.push("youtube_url = ?");
+    params.push(youtubeUrl ? String(youtubeUrl).trim() || null : null);
+  }
+  if (body.status !== undefined) {
+    fields.push("status = ?");
+    params.push(String(body.status).trim().toLowerCase());
+  } else if (body.active !== undefined) {
+    const isActive = body.active === 1 || body.active === true || body.active === "1" || body.active === "true";
+    fields.push("status = ?");
+    params.push(isActive ? "active" : "disabled");
+  }
+  if (body.tags !== undefined) {
+    const tagsValue = body.tags;
+    if (tagsValue === null) {
+      fields.push("tags = ?");
+      params.push(null);
+    } else if (typeof tagsValue === "string") {
+      fields.push("tags = ?");
+      params.push(tagsValue.trim() || null);
+    } else {
+      try {
+        fields.push("tags = ?");
+        params.push(JSON.stringify(tagsValue));
+      } catch {
+        return res.status(400).json({ error: "invalid_tags" });
+      }
+    }
+  }
+  if (body.campaign_id !== undefined || body.campaignId !== undefined) {
+    const campaignId = body.campaign_id ?? body.campaignId;
+    fields.push("campaign_id = ?");
+    params.push(campaignId ? String(campaignId).trim() || null : null);
+  }
+  if (body.source !== undefined) {
+    const source = body.source;
+    fields.push("source = ?");
+    params.push(source ? String(source).trim() || null : null);
+  }
   if (!fields.length) return res.status(400).json({ error: "no_fields" });
-  const sql = `UPDATE rewards SET ${fields.join(", ")} WHERE id = ?`;
+  fields.push("updated_at = ?");
+  params.push(Date.now());
+  const sql = `UPDATE reward SET ${fields.join(", ")} WHERE id = ?`;
   params.push(id);
   const info = db.prepare(sql).run(...params);
   if (!info.changes) return res.status(404).json({ error: "not_found" });
-  res.json({ ok: true });
+  const updated = db.prepare("SELECT * FROM reward WHERE id = ?").get(id);
+  res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
 app.post("/api/tokens/earn", (req, res) => {
@@ -2315,66 +2842,67 @@ app.post("/api/earn/quick", requireAdminKey, (req, res) => {
 app.post("/api/holds", express.json(), (req, res) => {
   const started = Date.now();
   try {
-    const userId = normId(req.body?.userId);
-    const itemId = Number(req.body?.itemId);
-    if (!userId || !itemId) {
+    const userId = normId(req.body?.userId ?? req.body?.user_id);
+    const rewardIdRaw = req.body?.itemId ?? req.body?.rewardId ?? req.body?.reward_id;
+    const noteRaw = req.body?.note;
+    if (!userId || rewardIdRaw === undefined || rewardIdRaw === null) {
       return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" }, userId }));
     }
-
-    const reward = db.prepare("SELECT id, name, price, image_url FROM rewards WHERE id = ? AND active = 1").get(itemId);
+    const rewardId = String(rewardIdRaw).trim();
+    const reward = db.prepare(`
+      SELECT id, name, cost, image_url
+      FROM reward
+      WHERE id = ? AND status = 'active'
+    `).get(rewardId);
     if (!reward) {
       return res.status(404).json(buildErrorResponse({ err: { message: "reward_not_found" }, userId }));
     }
-
     const id = randomId();
-    const createdAt = Date.now();
-    if (!holdColumnNames.size) {
-      refreshHoldColumnNames();
-    }
-
-    const columns = [];
-    const values = [];
-
-    const pushIf = (name, value) => {
-      if (holdColumnNames.has(name)) {
-        columns.push(name);
-        values.push(value);
-      }
-    };
-
-    pushIf("id", id);
-    pushIf("userId", userId);
-    pushIf("status", "pending");
-    pushIf("itemId", String(reward.id));
-    pushIf("itemName", reward.name);
-    pushIf("itemImage", reward.image_url || "");
-    pushIf("quotedCost", reward.price);
-    pushIf("points", reward.price);
-    pushIf("createdAt", createdAt);
-
-    if (!columns.length) {
-      throw new Error("holds_table_invalid");
-    }
-
-    const placeholders = columns.map(() => "?").join(", ");
-    const sql = `INSERT INTO holds (${columns.join(", ")}) VALUES (${placeholders})`;
-    db.prepare(sql).run(...values);
-
+    const now = Date.now();
+    const quoted = Number(reward.cost ?? reward.price ?? 0) || 0;
+    const sourceLabel = req.body?.source ? String(req.body.source) : null;
+    db.prepare(`
+      INSERT INTO hold (
+        id,
+        user_id,
+        reward_id,
+        reward_name,
+        reward_image_url,
+        status,
+        quoted_amount,
+        final_amount,
+        note,
+        source,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?, ?)
+    `).run(
+      id,
+      userId,
+      reward.id,
+      reward.name,
+      reward.image_url || '',
+      quoted,
+      noteRaw ? String(noteRaw) : null,
+      sourceLabel,
+      now,
+      now
+    );
+    const insertedHold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
     const ledgerResult = applyLedger({
       userId,
       delta: 0,
-      action: "spend_hold",
-      note: reward.name,
+      action: 'spend_hold',
+      note: insertedHold.rewardName || reward.name,
       holdId: id,
-      itemId: String(reward.id),
+      itemId: insertedHold.rewardId || reward.id,
       templates: null,
-      actor: "child",
+      actor: 'child',
       req,
       idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
       returnRow: true
     });
-
-    const { token } = createToken("spend", { holdId: id, cost: reward.price });
+    const { token } = createToken('spend', { holdId: id, cost: insertedHold.quotedCost });
     const qrText = buildQrUrl(req, token);
     const response = buildActionResponse({
       userId,
@@ -2384,115 +2912,137 @@ app.post("/api/holds", express.json(), (req, res) => {
         holdId: id,
         token,
         qrText,
-        verb: "hold.reserve",
-        quotedCost: reward.price
+        verb: 'hold.reserve',
+        quotedCost: insertedHold.quotedCost
       }
     });
-    recordTelemetry("hold.reserve", { ok: true, durationMs: Date.now() - started });
+    recordTelemetry('hold.reserve', { ok: true, durationMs: Date.now() - started });
     res.status(201).json(response);
   } catch (e) {
-    console.error("create hold", e);
-    const userId = normId(req.body?.userId);
-    recordTelemetry("hold.reserve", { ok: false, error: e?.message, durationMs: Date.now() - started });
-    res.status(500).json(buildErrorResponse({ err: e, userId, fallback: "hold_failed" }));
+    console.error('create hold', e);
+    const userId = normId(req.body?.userId ?? req.body?.user_id);
+    recordTelemetry('hold.reserve', { ok: false, error: e?.message, durationMs: Date.now() - started });
+    res.status(500).json(buildErrorResponse({ err: e, userId, fallback: 'hold_failed' }));
   }
 });
 
-app.get("/api/holds", requireAdminKey, (req, res) => {
-  const status = (req.query?.status || "pending").toString();
-  const allowed = ["pending", "redeemed", "canceled", "all"];
+app.get('/api/holds', requireAdminKey, (req, res) => {
+  const status = (req.query?.status || 'pending').toString().toLowerCase();
+  const allowed = ['pending', 'redeemed', 'released', 'all'];
   if (!allowed.includes(status)) {
-    return res.status(400).json({ error: "invalid_status" });
+    return res.status(400).json({ error: 'invalid_status' });
   }
-  let sql = "SELECT * FROM holds";
+  let sql = 'SELECT * FROM hold';
   const params = [];
-  if (status !== "all") {
-    sql += " WHERE status = ?";
+  if (status !== 'all') {
+    sql += ' WHERE status = ?';
     params.push(status);
   }
-  sql += " ORDER BY createdAt DESC";
-  const rows = db.prepare(sql).all(...params);
+  sql += ' ORDER BY created_at DESC';
+  const rows = db.prepare(sql).all(...params).map(mapHoldRow);
   res.json(rows);
 });
 
-app.post("/api/holds/:id/approve", requireAdminKey, (req, res) => {
+app.post('/api/holds/:id/approve', requireAdminKey, (req, res) => {
   const started = Date.now();
   let hold = null;
   try {
-    const id = String(req.params.id || "");
-    const token = String(req.body?.token || "");
-    const override = req.body?.finalCost;
+    const id = String(req.params.id || '');
+    const token = String(req.body?.token || '');
+    const override = req.body?.finalCost ?? req.body?.final_cost;
     if (!id || !token) {
-      return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" } }));
+      return res.status(400).json(buildErrorResponse({ err: { message: 'invalid_payload' } }));
     }
     const payload = verifyToken(token);
-    if (payload.typ !== "spend") {
-      return res.status(400).json(buildErrorResponse({ err: { message: "unsupported_token" } }));
+    if (payload.typ !== 'spend') {
+      return res.status(400).json(buildErrorResponse({ err: { message: 'unsupported_token' } }));
     }
     if (payload.data?.holdId !== id) {
-      return res.status(400).json(buildErrorResponse({ err: { message: "hold_mismatch" } }));
+      return res.status(400).json(buildErrorResponse({ err: { message: 'hold_mismatch' } }));
     }
     if (checkTokenStmt.get(payload.jti)) {
-      return res.status(409).json(buildErrorResponse({ err: { message: "TOKEN_USED" } }));
+      return res.status(409).json(buildErrorResponse({ err: { message: 'TOKEN_USED' } }));
     }
-    hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(id);
-    if (!hold || hold.status !== "pending") {
-      return res.status(404).json(buildErrorResponse({ err: { message: "hold_not_pending" }, userId: hold?.userId }));
+    hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+    if (!hold || hold.status !== 'pending') {
+      return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
     }
-    const cost = override !== undefined && override !== null ? Math.max(0, Math.floor(Number(override))) : Number(hold.quotedCost || 0);
+    const cost = override !== undefined && override !== null
+      ? Math.max(0, Math.floor(Number(override)))
+      : hold.quotedCost;
     const result = applyLedger({
       userId: hold.userId,
       delta: -cost,
-      action: "spend_redeemed",
-      note: hold.itemName,
-      itemId: hold.itemId,
+      action: 'spend_redeemed',
+      note: hold.rewardName || hold.note,
+      itemId: hold.rewardId,
       holdId: hold.id,
       finalCost: cost,
-      actor: "admin_redeem",
+      actor: 'admin_redeem',
       req,
-      tokenInfo: { jti: payload.jti, typ: payload.typ },
+      tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: 'hold.approve' },
       returnRow: true
     });
-    db.prepare("UPDATE holds SET status = 'redeemed', finalCost = ?, approvedAt = ?, note = ?, quotedCost = quotedCost WHERE id = ?")
-      .run(cost, Date.now(), hold.note || null, hold.id);
+    const now = Date.now();
+    db.prepare(`
+      UPDATE hold
+      SET status = 'redeemed',
+          final_amount = ?,
+          note = ?,
+          updated_at = ?,
+          redeemed_at = ?,
+          source = COALESCE(source, 'admin')
+      WHERE id = ?
+    `).run(cost, hold.note || null, now, now, id);
+    hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
     const response = buildActionResponse({
       userId: hold.userId,
       txRow: result.row,
-      extras: { ok: true, holdId: id, finalCost: cost, verb: "hold.redeem" }
+      extras: { ok: true, holdId: id, finalCost: cost, verb: 'hold.redeem' }
     });
-    recordTelemetry("hold.redeem", { ok: true, durationMs: Date.now() - started });
+    recordTelemetry('hold.redeem', { ok: true, durationMs: Date.now() - started });
     res.json(response);
   } catch (err) {
-    recordTelemetry("hold.redeem", { ok: false, error: err?.message, durationMs: Date.now() - started });
-    const code = err.message === "TOKEN_USED" ? 409 : err.status || 400;
-    res.status(code).json(buildErrorResponse({ err, userId: hold?.userId, fallback: "approve_failed" }));
+    recordTelemetry('hold.redeem', { ok: false, error: err?.message, durationMs: Date.now() - started });
+    const code = err.message === 'TOKEN_USED' ? 409 : err.status || 400;
+    res.status(code).json(buildErrorResponse({ err, userId: hold?.userId, fallback: 'approve_failed' }));
   }
 });
 
-app.post("/api/holds/:id/cancel", requireAdminKey, (req, res) => {
+app.post('/api/holds/:id/cancel', requireAdminKey, (req, res) => {
   const started = Date.now();
-  const id = String(req.params.id || "");
-  const hold = db.prepare("SELECT * FROM holds WHERE id = ?").get(id);
-  if (!hold || hold.status !== "pending") {
-    return res.status(404).json(buildErrorResponse({ err: { message: "hold_not_pending" }, userId: hold?.userId }));
+  const id = String(req.params.id || '');
+  let hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+  if (!hold || hold.status !== 'pending') {
+    return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
   }
-  db.prepare("UPDATE holds SET status = 'canceled', finalCost = 0, approvedAt = ? WHERE id = ?").run(Date.now(), id);
+  const now = Date.now();
+  db.prepare(`
+    UPDATE hold
+    SET status = 'released',
+        final_amount = 0,
+        updated_at = ?,
+        released_at = ?,
+        note = COALESCE(note, ?)
+    WHERE id = ?
+  `).run(now, now, hold.note || null, id);
+  hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
   const result = applyLedger({
     userId: hold.userId,
     delta: 0,
-    action: "spend_canceled",
-    note: hold.itemName,
+    action: 'spend_released',
+    note: hold.rewardName || hold.note,
     holdId: hold.id,
-    actor: "admin_cancel",
+    actor: 'admin_cancel',
     req,
     returnRow: true,
     idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key)
   });
-  recordTelemetry("hold.release", { ok: true, durationMs: Date.now() - started });
+  recordTelemetry('hold.release', { ok: true, durationMs: Date.now() - started });
   const response = buildActionResponse({
     userId: hold.userId,
     txRow: result.row,
-    extras: { ok: true, holdId: id, verb: "hold.release" }
+    extras: { ok: true, holdId: id, verb: 'hold.release' }
   });
   res.json(response);
 });
@@ -2501,43 +3051,43 @@ function buildHistoryQuery(params) {
   const where = [];
   const sqlParams = [];
   if (params.userId) {
-    where.push("userId = ?");
+    where.push("user_id = ?");
     sqlParams.push(normId(params.userId));
   }
-  if (params.type === "earn") {
+  if (params.type === 'earn') {
     where.push("verb = 'earn'");
-  } else if (params.type === "spend") {
+  } else if (params.type === 'spend') {
     where.push("verb = 'redeem'");
-  } else if (params.type === "refund") {
+  } else if (params.type === 'refund') {
     where.push("verb = 'refund'");
   }
   if (params.verb) {
     where.push("verb = ?");
     sqlParams.push(params.verb);
   }
-  if (params.source === "task") {
-    where.push("action = 'earn_qr'");
-  } else if (params.source === "admin") {
-    where.push("action IN ('earn_admin_give','earn_admin_quick')");
+  if (params.source === 'task') {
+    where.push("description = 'earn_qr'");
+  } else if (params.source === 'admin') {
+    where.push("description IN ('earn_admin_give','earn_admin_quick')");
   }
   if (params.actor) {
-    where.push("actor = ?");
+    where.push("actor_id = ?");
     sqlParams.push(params.actor);
   }
   if (params.from) {
-    where.push("at >= ?");
+    where.push("created_at >= ?");
     sqlParams.push(params.from);
   }
   if (params.to) {
-    where.push("at <= ?");
+    where.push("created_at <= ?");
     sqlParams.push(params.to);
   }
   const limit = Math.min(500, Math.max(1, Number(params.limit) || 50));
   const offset = Math.max(0, Number(params.offset) || 0);
-  let sql = "SELECT * FROM ledger";
-  if (where.length) sql += ` WHERE ${where.join(" AND ")}`;
-  sql += " ORDER BY at DESC, id DESC";
-  sql += " LIMIT ? OFFSET ?";
+  let sql = 'SELECT * FROM ledger';
+  if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+  sql += ' ORDER BY created_at DESC, id DESC';
+  sql += ' LIMIT ? OFFSET ?';
   sqlParams.push(limit, offset);
   return { sql, params: sqlParams, limit, offset };
 }
@@ -2602,10 +3152,10 @@ app.get("/api/history/user/:userId", (req, res) => {
   if (!userId) return res.status(400).json({ error: "userId required" });
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
   const rows = db.prepare(`
-    SELECT at, action, delta, balance_after, note
+    SELECT created_at AS at, description AS action, amount AS delta, balance_after, note
     FROM ledger
-    WHERE userId = ?
-    ORDER BY at DESC, id DESC
+    WHERE user_id = ?
+    ORDER BY created_at DESC, id DESC
     LIMIT ?
   `).all(userId, limit);
   res.json({ rows });
@@ -2679,4 +3229,14 @@ if (process.env.NODE_ENV !== "test") {
   });
 }
 
-export { app, applyLedger, createRefundTransaction, getLedgerViewForUser, mapLedgerRow, getBalance, normId, getStateHints };
+export {
+  app,
+  applyLedger,
+  createRefundTransaction,
+  getLedgerViewForUser,
+  mapLedgerRow,
+  getBalance,
+  normId,
+  getStateHints,
+  ensureSchema
+};
