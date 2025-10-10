@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test \"server/tests/**/*.js\"",
+    "prestart": "node scripts/prestart-check.mjs",
     "start": "node server/index.js",
     "check": "node --check server/index.js",
     "dev": "node --watch server/index.js",
