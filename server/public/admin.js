@@ -1477,7 +1477,7 @@ details.member-fold .summary-value {
         const msg = presentError(body?.error, 'Cancel failed');
         throw new Error(msg);
       }
-      toast('Hold canceled');
+      toast('Hold released');
       applyStateHints(body?.hints || null);
       loadHolds();
     } catch (err) {
