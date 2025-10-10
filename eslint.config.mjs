@@ -42,6 +42,20 @@ export default [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
+      globals: nodeGlobalSet,
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module"
+      }
+    },
+    rules: {}
+  },
+
+  {
+    files: ["**/*.cjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "commonjs",
       globals: nodeGlobalSet
     },
     rules: {}
@@ -53,7 +67,11 @@ export default [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
-      globals: nodeGlobals
+      globals: nodeGlobals,
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module"
+      }
     },
     rules: {
       "no-empty": "off",
