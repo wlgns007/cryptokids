@@ -389,7 +389,7 @@ function ensureSchema() {
         "cost",
         "ALTER TABLE reward ADD COLUMN cost INTEGER NOT NULL DEFAULT 0"
       );
-      ensureColumn("reward", rewardCols, "updated_at", "ALTER TABLE reward ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+      ensureColumn("reward", rewardCols, "updated_at", "ALTER TABLE reward ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
 
@@ -545,13 +545,13 @@ function ensureSchema() {
         "hold",
         holdCols,
         "updated_at",
-        "ALTER TABLE hold ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE hold ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
       ensureColumn(
         "hold",
         holdCols,
         "created_at",
-        "ALTER TABLE hold ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE hold ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
@@ -783,13 +783,13 @@ function ensureSchema() {
         "ledger",
         ledgerCols,
         "created_at",
-        "ALTER TABLE ledger ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE ledger ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
       ensureColumn(
         "ledger",
         ledgerCols,
         "updated_at",
-        "ALTER TABLE ledger ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE ledger ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
     }
 
@@ -949,13 +949,13 @@ function ensureSchema() {
         "spend_request",
         spendCols,
         "created_at",
-        "ALTER TABLE spend_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE spend_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
       ensureColumn(
         "spend_request",
         spendCols,
         "updated_at",
-        "ALTER TABLE spend_request ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE spend_request ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_status ON spend_request(status)");
@@ -1041,13 +1041,13 @@ function ensureSchema() {
         "consumed_tokens",
         consumedCols,
         "created_at",
-        "ALTER TABLE consumed_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE consumed_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
       ensureColumn(
         "consumed_tokens",
         consumedCols,
         "updated_at",
-        "ALTER TABLE consumed_tokens ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"
+        "ALTER TABLE consumed_tokens ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
       );
     }
     db.exec(`
