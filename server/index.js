@@ -817,47 +817,49 @@ function rebuildLedgerTableIfLegacy() {
         );
       `);
       if (legacySpend) {
-        const rows = db.prepare("SELECT * FROM " + legacySpend).all();
-        const insertSpend = db.prepare(`
-  INSERT INTO spend_request (
-    id,
-    token,
-    user_id,
-    reward_id,
-    status,
-    amount,
-    title,
-    image_url,
-    actor_id,
-    source,
-    tags,
-    campaign_id,
-    created_at,
-    updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-`);
+  const rows = db.prepare(`SELECT * FROM ${legacySpend}`).all();
 
-        for (const row of rows) {
-  const id = String(row.id ?? crypto.randomUUID()).trim();
-  const userId = normId(row.userId || row.user_id || "");
-  if (!id || !userId) continue;
+  const insertSpend = db.prepare(`
+    INSERT INTO spend_request (
+      id,
+      token,
+      user_id,
+      reward_id,
+      status,
+      amount,
+      title,
+      image_url,
+      actor_id,
+      source,
+      tags,
+      campaign_id,
+      created_at,
+      updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const insertMany = db.transaction((rows) => {
+    for (const r of rows) {
+      insertSpend.run(
+        r.id,
+        r.token,
+        r.user_id,
+        r.reward_id ?? null,
+        r.status ?? 'pending',
+        r.amount ?? null,
+        r.title ?? null,
+        r.image_url ?? null,
+        r.actor_id ?? null,
+        r.source ?? null,
+        r.tags ?? null,
+        r.campaign_id ?? null,
+        r.created_at ?? Date.now(),
+        r.updated_at ?? Date.now()
+      );
+    }
+  });
 
-  insertSpend.run(
-    id,
-    row.token,
-    userId,
-    row.itemId || row.reward_id || null,
-    String(row.status || "pending").trim().toLowerCase(),
-    row.price ?? row.amount ?? null,
-    row.title || null,
-    row.imageUrl || row.image_url || null,
-    null, // actor_id (unknown for legacy)
-    null, // source
-    null, // tags
-    null, // campaign_id
-    normalizeTimestamp(row.createdAt),
-    normalizeTimestamp(row.updatedAt ?? row.createdAt)
-  );
+  insertMany(rows);
+  dropTable(legacySpend);
 }
 
       }
