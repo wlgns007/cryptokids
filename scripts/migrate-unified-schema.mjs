@@ -626,7 +626,7 @@ function ensureConsumedTokensTable() {
 async function main() {
   log(`Migrating database at ${DB_PATH}`);
   const { ensureSchema } = await import("../server/index.js");
-  ensureSchema();
+  await ensureSchema();
 
   const migration = db.transaction(() => {
     ensureRewardTable();
