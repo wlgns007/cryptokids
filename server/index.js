@@ -31,7 +31,7 @@ const REFUND_REASON_VALUES = [
   "quality_issue",
   "staff_error"
 ];
-export const REFUND_REASONS = new Set(REFUND_REASON_VALUES);
+const REFUND_REASONS = new Set(REFUND_REASON_VALUES);
 
 const REFUND_WINDOW_DAYS_RAW = process.env.CK_REFUND_WINDOW_DAYS;
 const REFUND_WINDOW_DAYS =
@@ -228,8 +228,6 @@ function ensureSchema() {
       columns.push(name);
       return true;
     }
-    return false;
-  };
 
   const migrate = db.transaction(() => {
     // member table
@@ -1668,7 +1666,7 @@ function assertRefundRateLimit(actorId) {
   refundRateLimiter.set(key, recent);
 }
 
-export function __resetRefundRateLimiter() {
+function __resetRefundRateLimiter() {
   refundRateLimiter.clear();
 }
 
