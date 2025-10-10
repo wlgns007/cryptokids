@@ -2,5 +2,11 @@
   "name": "cryptokids-server",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "guard:schema": "node -e \"const s=require('fs').readFileSync('server/index.js','utf8'); if(/\\bawait\\b/.test(s)){ console.error('❌ Found `await` in server/index.js — startup/migrations must be synchronous.'); process.exit(1);} console.log('✅ schema guard ok');\"",
+    "check": "node --check server/index.js",
+    "prestart": "npm run guard:schema && node scripts/prestart-check.mjs",
+    "start": "node server/index.js"
+  }
 }

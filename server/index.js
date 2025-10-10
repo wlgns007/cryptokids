@@ -1146,13 +1146,13 @@ const ensureTables = sqliteTransaction(() => {
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
   };
 
-  await migrate();
+migrate();
 
   db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
 }
 
-await ensureSchema();
-
+ensureSchema();
+ensureTables();
 function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
