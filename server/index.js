@@ -658,64 +658,86 @@ async function ensureSchema() {
       "UPDATE ledger SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
     );
 
-    if (tableExists("ledger_legacy")) {
-      // no-op placeholder when running repeatedly
-    }
 
-    const oldLedgerCols = getColumns("ledger");
-    if (!oldLedgerCols.includes("amount") && oldLedgerCols.includes("delta")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN delta TO amount");
-    }
-    if (!oldLedgerCols.includes("user_id") && oldLedgerCols.includes("userId")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN userId TO user_id");
-    }
-    if (!oldLedgerCols.includes("description") && oldLedgerCols.includes("action")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN action TO description");
-    }
-    if (!oldLedgerCols.includes("reward_id") && oldLedgerCols.includes("itemId")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN itemId TO reward_id");
-    }
-    if (!oldLedgerCols.includes("parent_hold_id") && oldLedgerCols.includes("holdId")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN holdId TO parent_hold_id");
-    }
-    if (!oldLedgerCols.includes("final_amount") && oldLedgerCols.includes("finalCost")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN finalCost TO final_amount");
-    }
-    if (!oldLedgerCols.includes("note") && oldLedgerCols.includes("note")) {
-      // column already named note, nothing to do
-    }
-    if (!oldLedgerCols.includes("notes") && oldLedgerCols.includes("notes")) {
-      // nothing to do
-    }
-    if (!oldLedgerCols.includes("actor_id") && oldLedgerCols.includes("actor")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN actor TO actor_id");
-    }
-    if (!oldLedgerCols.includes("ip_address") && oldLedgerCols.includes("ip")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN ip TO ip_address");
-    }
-    if (!oldLedgerCols.includes("user_agent") && oldLedgerCols.includes("ua")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN ua TO user_agent");
-    }
-    if (!oldLedgerCols.includes("parent_ledger_id") && oldLedgerCols.includes("parent_tx_id")) {
-      db.exec("ALTER TABLE ledger RENAME COLUMN parent_tx_id TO parent_ledger_id");
-    }
+const sqliteTransaction = handler => db.transaction(handler);
 
-    db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
-      ON ledger(idempotency_key)
-      WHERE idempotency_key IS NOT NULL
-    `);
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at
-      ON ledger(user_id, verb, created_at, id)
-    `);
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold
-      ON ledger(parent_hold_id)
-    `);
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger
-      ON ledger(parent_ledger_id)
+function rebuildLedgerTableIfLegacy() {
+  const info = db.prepare("PRAGMA table_info('ledger')").all();
+  if (!info.length) return;
+  const idColumn = info.find(col => col.name === "id");
+  const hasTextId = idColumn && typeof idColumn.type === "string" && idColumn.type.toUpperCase().includes("TEXT");
+  const legacyColumns = new Set(["delta", "reason", "kind", "nonce", "ts", "meta"]);
+  const hasLegacy = info.some(col => legacyColumns.has(col.name));
+  if (hasTextId && !hasLegacy) return;
+
+  const legacyName = `ledger_legacy_${Date.now()}`;
+  db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      actor_id TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      verb TEXT NOT NULL,
+      description TEXT,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'posted',
+      note TEXT,
+      notes TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT UNIQUE,
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+
+  const rows = db.prepare(`SELECT * FROM ${legacyName}`).all();
+  if (rows.length) {
+    const insert = db.prepare(`
+      INSERT INTO ledger (
+        id,
+        user_id,
+        actor_id,
+        reward_id,
+        parent_hold_id,
+        parent_ledger_id,
+        verb,
+        description,
+        amount,
+        balance_after,
+        status,
+        note,
+        notes,
+        template_ids,
+        final_amount,
+        metadata,
+        refund_reason,
+        refund_notes,
+        idempotency_key,
+        source,
+        tags,
+        campaign_id,
+        ip_address,
+        user_agent,
+        created_at,
+        updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
 
     // spend_request table
@@ -869,6 +891,7 @@ async function ensureSchema() {
 
   await migrate();
 
+  db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
 }
 
 await ensureSchema();
