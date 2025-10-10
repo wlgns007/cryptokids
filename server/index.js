@@ -296,11 +296,16 @@ async function ensureSchema() {
         }
       }
     } else {
-      await ensureColumn(db, "member", "status", "TEXT");
-      await ensureColumn(db, "member", "tags", "TEXT");
-      await ensureColumn(db, "member", "campaign_id", "TEXT");
-      await ensureColumn(db, "member", "source", "TEXT");
-      await ensureColumn(db, "member", "date_of_birth", "TEXT");
+      ensureColumn(
+db, "member", "status", "TEXT");
+      ensureColumn(
+db, "member", "tags", "TEXT");
+      ensureColumn(
+db, "member", "campaign_id", "TEXT");
+      ensureColumn(
+db, "member", "source", "TEXT");
+      ensureColumn(
+db, "member", "date_of_birth", "TEXT");
     }
     db.exec(
       "UPDATE member SET status = 'active' WHERE status IS NULL OR status = ''"
@@ -357,12 +362,18 @@ async function ensureSchema() {
         }
       }
     } else {
-      await ensureColumn(db, "reward", "status", "TEXT");
-      await ensureColumn(db, "reward", "tags", "TEXT");
-      await ensureColumn(db, "reward", "campaign_id", "TEXT");
-      await ensureColumn(db, "reward", "source", "TEXT");
-      await ensureColumn(db, "reward", "cost", "INTEGER");
-      await ensureColumn(db, "reward", "updated_at", "INTEGER");
+      ensureColumn(
+db, "reward", "status", "TEXT");
+      ensureColumn(
+db, "reward", "tags", "TEXT");
+      ensureColumn(
+db, "reward", "campaign_id", "TEXT");
+      ensureColumn(
+db, "reward", "source", "TEXT");
+      ensureColumn(
+db, "reward", "cost", "INTEGER");
+      ensureColumn(
+db, "reward", "updated_at", "INTEGER");
     }
     db.exec(
       "UPDATE reward SET status = 'active' WHERE status IS NULL OR status = ''"
@@ -473,20 +484,34 @@ async function ensureSchema() {
         }
       }
     } else {
-      await ensureColumn(db, "hold", "actor_id", "TEXT");
-      await ensureColumn(db, "hold", "reward_name", "TEXT");
-      await ensureColumn(db, "hold", "reward_image_url", "TEXT");
-      await ensureColumn(db, "hold", "quoted_amount", "INTEGER");
-      await ensureColumn(db, "hold", "final_amount", "INTEGER");
-      await ensureColumn(db, "hold", "metadata", "TEXT");
-      await ensureColumn(db, "hold", "source", "TEXT");
-      await ensureColumn(db, "hold", "tags", "TEXT");
-      await ensureColumn(db, "hold", "campaign_id", "TEXT");
-      await ensureColumn(db, "hold", "released_at", "INTEGER");
-      await ensureColumn(db, "hold", "redeemed_at", "INTEGER");
-      await ensureColumn(db, "hold", "expires_at", "INTEGER");
-      await ensureColumn(db, "hold", "updated_at", "INTEGER");
-      await ensureColumn(db, "hold", "created_at", "INTEGER");
+      ensureColumn(
+db, "hold", "actor_id", "TEXT");
+      ensureColumn(
+db, "hold", "reward_name", "TEXT");
+      ensureColumn(
+db, "hold", "reward_image_url", "TEXT");
+      ensureColumn(
+db, "hold", "quoted_amount", "INTEGER");
+      ensureColumn(
+db, "hold", "final_amount", "INTEGER");
+      ensureColumn(
+db, "hold", "metadata", "TEXT");
+      ensureColumn(
+db, "hold", "source", "TEXT");
+      ensureColumn(
+db, "hold", "tags", "TEXT");
+      ensureColumn(
+db, "hold", "campaign_id", "TEXT");
+      ensureColumn(
+db, "hold", "released_at", "INTEGER");
+      ensureColumn(
+db, "hold", "redeemed_at", "INTEGER");
+      ensureColumn(
+db, "hold", "expires_at", "INTEGER");
+      ensureColumn(
+db, "hold", "updated_at", "INTEGER");
+      ensureColumn(
+db, "hold", "created_at", "INTEGER");
     }
     db.exec("UPDATE hold SET quoted_amount = COALESCE(quoted_amount, 0)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
@@ -621,31 +646,56 @@ async function ensureSchema() {
         }
       }
     } else {
-      await ensureColumn(db, "ledger", "user_id", "TEXT");
-      await ensureColumn(db, "ledger", "actor_id", "TEXT");
-      await ensureColumn(db, "ledger", "reward_id", "TEXT");
-      await ensureColumn(db, "ledger", "parent_hold_id", "TEXT");
-      await ensureColumn(db, "ledger", "parent_ledger_id", "TEXT");
-      await ensureColumn(db, "ledger", "description", "TEXT");
-      await ensureColumn(db, "ledger", "verb", "TEXT");
-      await ensureColumn(db, "ledger", "amount", "INTEGER");
-      await ensureColumn(db, "ledger", "balance_after", "INTEGER");
-      await ensureColumn(db, "ledger", "status", "TEXT");
-      await ensureColumn(db, "ledger", "idempotency_key", "TEXT");
-      await ensureColumn(db, "ledger", "template_ids", "TEXT");
-      await ensureColumn(db, "ledger", "final_amount", "INTEGER");
-      await ensureColumn(db, "ledger", "metadata", "TEXT");
-      await ensureColumn(db, "ledger", "note", "TEXT");
-      await ensureColumn(db, "ledger", "notes", "TEXT");
-      await ensureColumn(db, "ledger", "refund_reason", "TEXT");
-      await ensureColumn(db, "ledger", "refund_notes", "TEXT");
-      await ensureColumn(db, "ledger", "source", "TEXT");
-      await ensureColumn(db, "ledger", "tags", "TEXT");
-      await ensureColumn(db, "ledger", "campaign_id", "TEXT");
-      await ensureColumn(db, "ledger", "ip_address", "TEXT");
-      await ensureColumn(db, "ledger", "user_agent", "TEXT");
-      await ensureColumn(db, "ledger", "created_at", "INTEGER");
-      await ensureColumn(db, "ledger", "updated_at", "INTEGER");
+      ensureColumn(
+db, "ledger", "user_id", "TEXT");
+      ensureColumn(
+db, "ledger", "actor_id", "TEXT");
+      ensureColumn(
+db, "ledger", "reward_id", "TEXT");
+      ensureColumn(
+db, "ledger", "parent_hold_id", "TEXT");
+      ensureColumn(
+db, "ledger", "parent_ledger_id", "TEXT");
+      ensureColumn(
+db, "ledger", "description", "TEXT");
+      ensureColumn(
+db, "ledger", "verb", "TEXT");
+      ensureColumn(
+db, "ledger", "amount", "INTEGER");
+      ensureColumn(
+db, "ledger", "balance_after", "INTEGER");
+      ensureColumn(
+db, "ledger", "status", "TEXT");
+      ensureColumn(
+db, "ledger", "idempotency_key", "TEXT");
+      ensureColumn(
+db, "ledger", "template_ids", "TEXT");
+      ensureColumn(
+db, "ledger", "final_amount", "INTEGER");
+      ensureColumn(
+db, "ledger", "metadata", "TEXT");
+      ensureColumn(
+db, "ledger", "note", "TEXT");
+      ensureColumn(
+db, "ledger", "notes", "TEXT");
+      ensureColumn(
+db, "ledger", "refund_reason", "TEXT");
+      ensureColumn(
+db, "ledger", "refund_notes", "TEXT");
+      ensureColumn(
+db, "ledger", "source", "TEXT");
+      ensureColumn(
+db, "ledger", "tags", "TEXT");
+      ensureColumn(
+db, "ledger", "campaign_id", "TEXT");
+      ensureColumn(
+db, "ledger", "ip_address", "TEXT");
+      ensureColumn(
+db, "ledger", "user_agent", "TEXT");
+      ensureColumn(
+db, "ledger", "created_at", "INTEGER");
+      ensureColumn(
+db, "ledger", "updated_at", "INTEGER");
     }
     db.exec("UPDATE ledger SET verb = 'adjust' WHERE verb IS NULL OR verb = ''");
     db.exec("UPDATE ledger SET amount = 0 WHERE amount IS NULL");
@@ -809,13 +859,20 @@ function rebuildLedgerTableIfLegacy() {
         }
       }
     } else {
-      await ensureColumn(db, "spend_request", "actor_id", "TEXT");
-      await ensureColumn(db, "spend_request", "source", "TEXT");
-      await ensureColumn(db, "spend_request", "tags", "TEXT");
-      await ensureColumn(db, "spend_request", "campaign_id", "TEXT");
-      await ensureColumn(db, "spend_request", "amount", "INTEGER");
-      await ensureColumn(db, "spend_request", "created_at", "INTEGER");
-      await ensureColumn(db, "spend_request", "updated_at", "INTEGER");
+      ensureColumn(
+db, "spend_request", "actor_id", "TEXT");
+      ensureColumn(
+db, "spend_request", "source", "TEXT");
+      ensureColumn(
+db, "spend_request", "tags", "TEXT");
+      ensureColumn(
+db, "spend_request", "campaign_id", "TEXT");
+      ensureColumn(
+db, "spend_request", "amount", "INTEGER");
+      ensureColumn(
+db, "spend_request", "created_at", "INTEGER");
+      ensureColumn(
+db, "spend_request", "updated_at", "INTEGER");
     }
     db.exec(
       "UPDATE spend_request SET status = 'pending' WHERE status IS NULL OR status = ''"
@@ -869,14 +926,22 @@ function rebuildLedgerTableIfLegacy() {
         db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
         consumedCols = getColumns("consumed_tokens");
       }
-      await ensureColumn(db, "consumed_tokens", "token", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "typ", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "user_id", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "reward_id", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "source", "TEXT");
-      await ensureColumn(db, "consumed_tokens", "created_at", "INTEGER");
-      await ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER");
+      ensureColumn(
+db, "consumed_tokens", "token", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "typ", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "request_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "user_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "reward_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "source", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "created_at", "INTEGER");
+      ensureColumn(
+db, "consumed_tokens", "updated_at", "INTEGER");
     }
   }
 
