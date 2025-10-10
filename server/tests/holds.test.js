@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 process.env.NODE_ENV = 'test';
-process.env.DB_PATH = ':memory:';
+const TEST_DB = path.join(process.cwd(), 'data', `test-holds-${randomUUID()}.db`);
+process.env.DB_PATH = TEST_DB;
 process.env.CK_REFUND_WINDOW_DAYS = '30';
 
 const fetch = globalThis.fetch;
@@ -15,30 +19,41 @@ const {
 } = await import('../index.js');
 import db from '../db.js';
 
+test.after(() => {
+  fs.rmSync(TEST_DB, { force: true });
+});
+
 function resetDatabase() {
   db.exec('PRAGMA foreign_keys = OFF;');
   db.exec(`
     DELETE FROM ledger;
-    DELETE FROM ledger_tx;
-    DELETE FROM ledger_postings;
-    DELETE FROM balances;
-    DELETE FROM accounts WHERE id != 'liability:CK';
+    DELETE FROM hold;
+    DELETE FROM reward;
+    DELETE FROM member;
+    DELETE FROM spend_request;
     DELETE FROM consumed_tokens;
-    DELETE FROM holds;
-    DELETE FROM rewards;
   `);
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec("INSERT OR IGNORE INTO accounts (id, owner_type, owner_id, token) VALUES ('liability:CK','program',NULL,'CK')");
   __resetRefundRateLimiter();
+}
+
+function insertMember(id, name = id) {
+  const now = Date.now();
+  db.prepare(
+    'INSERT OR REPLACE INTO member (id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, name, 'active', now, now);
 }
 
 test('hold endpoints include state hints and honor admin gating', async (t) => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
   applyLedger({ userId: 'kid', delta: 150, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
 
-  const rewardStmt = db.prepare('INSERT INTO rewards (name, price, description, image_url, active) VALUES (?, ?, ?, ?, ?)');
-  const rewardResult = rewardStmt.run('Lego Set', 50, 'Blocks', '', 1);
-  const rewardId = Number(rewardResult.lastInsertRowid);
+  const rewardId = 'lego-set';
+  const now = Date.now();
+  db.prepare(
+    'INSERT INTO reward (id, name, cost, description, image_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)' 
+  ).run(rewardId, 'Lego Set', 50, 'Blocks', '', 'active', now, now);
 
   const server = app.listen(0);
   await once(server, 'listening');
@@ -124,5 +139,5 @@ test('hold endpoints include state hints and honor admin gating', async (t) => {
   assert.equal(cancelBody.hints.balance, 100);
   assert.equal(cancelBody.hints.pending_hold_count, 0);
   assert.equal(cancelBody.hints.active_hold_id, null);
-  assert.ok(['canceled', 'none'].includes(cancelBody.hints.hold_status));
+  assert.ok(['released', 'none'].includes(cancelBody.hints.hold_status));
 });

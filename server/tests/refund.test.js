@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 process.env.NODE_ENV = 'test';
-process.env.DB_PATH = ':memory:';
+const TEST_DB = path.join(process.cwd(), 'data', `test-refund-${randomUUID()}.db`);
+process.env.DB_PATH = TEST_DB;
 process.env.CK_REFUND_WINDOW_DAYS = '30';
 
 const {
@@ -14,23 +18,34 @@ const {
 } = await import('../index.js');
 import db from '../db.js';
 
+test.after(() => {
+  fs.rmSync(TEST_DB, { force: true });
+});
+
 function resetDatabase() {
   db.exec('PRAGMA foreign_keys = OFF;');
   db.exec(`
     DELETE FROM ledger;
-    DELETE FROM ledger_tx;
-    DELETE FROM ledger_postings;
-    DELETE FROM balances;
-    DELETE FROM accounts WHERE id != 'liability:CK';
+    DELETE FROM hold;
+    DELETE FROM reward;
+    DELETE FROM member;
+    DELETE FROM spend_request;
     DELETE FROM consumed_tokens;
   `);
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec("INSERT OR IGNORE INTO accounts (id, owner_type, owner_id, token) VALUES ('liability:CK','program',NULL,'CK')");
   __resetRefundRateLimiter();
+}
+
+function insertMember(id, name = id) {
+  const now = Date.now();
+  db.prepare(
+    'INSERT OR REPLACE INTO member (id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, name, 'active', now, now);
 }
 
 test('partial refunds and over-refund guard', () => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
   applyLedger({ userId: 'kid', delta: 100, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
   const redeem = applyLedger({
     userId: 'kid',
@@ -90,6 +105,8 @@ test('partial refunds and over-refund guard', () => {
 
 test('rejects mismatched users and invalid parents', () => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
+  insertMember('other', 'Other Tester');
   applyLedger({ userId: 'kid', delta: 80, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
   const redeem = applyLedger({
     userId: 'kid',
@@ -151,6 +168,7 @@ test('rejects mismatched users and invalid parents', () => {
 
 test('idempotency returns existing refund details', () => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
   applyLedger({ userId: 'kid', delta: 50, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
   const redeem = applyLedger({
     userId: 'kid',
@@ -197,6 +215,7 @@ test('idempotency returns existing refund details', () => {
 
 test('enforces refund window', () => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
   applyLedger({ userId: 'kid', delta: 40, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
   const redeem = applyLedger({
     userId: 'kid',
@@ -210,7 +229,7 @@ test('enforces refund window', () => {
   const redeemRow = redeem.row;
   const thirtyOneDays = 31 * 24 * 60 * 60 * 1000;
   const past = Date.now() - thirtyOneDays;
-  db.prepare('UPDATE ledger SET at = ? WHERE id = ?').run(past, redeemRow.id);
+  db.prepare('UPDATE ledger SET created_at = ?, updated_at = ? WHERE id = ?').run(past, past, redeemRow.id);
 
   assert.throws(
     () =>
@@ -227,6 +246,7 @@ test('enforces refund window', () => {
 
 test('state hints surface refund capacity', () => {
   resetDatabase();
+  insertMember('kid', 'Kid Tester');
   applyLedger({ userId: 'kid', delta: 100, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
   const redeemResult = applyLedger({
     userId: 'kid',
