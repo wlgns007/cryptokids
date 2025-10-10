@@ -143,10 +143,10 @@ function ensureRewardTable() {
     db.exec("ALTER TABLE reward ADD COLUMN source TEXT");
   }
   if (!rewardCols.includes("created_at")) {
-    db.exec("ALTER TABLE reward ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE reward ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
   }
   if (!rewardCols.includes("updated_at")) {
-    db.exec("ALTER TABLE reward ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE reward ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
   }
 
   if (legacyTable) {
@@ -302,8 +302,8 @@ function ensureHoldTable() {
     if (!holdCols.includes("released_at")) db.exec("ALTER TABLE hold ADD COLUMN released_at INTEGER");
     if (!holdCols.includes("redeemed_at")) db.exec("ALTER TABLE hold ADD COLUMN redeemed_at INTEGER");
     if (!holdCols.includes("expires_at")) db.exec("ALTER TABLE hold ADD COLUMN expires_at INTEGER");
-    if (!holdCols.includes("created_at")) db.exec("ALTER TABLE hold ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
-    if (!holdCols.includes("updated_at")) db.exec("ALTER TABLE hold ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+    if (!holdCols.includes("created_at")) db.exec("ALTER TABLE hold ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
+    if (!holdCols.includes("updated_at")) db.exec("ALTER TABLE hold ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
   }
 
   fillTimestamps("hold");
@@ -430,8 +430,8 @@ function ensureLedgerTable() {
     if (!ledgerCols.includes("campaign_id")) db.exec("ALTER TABLE ledger ADD COLUMN campaign_id TEXT");
     if (!ledgerCols.includes("ip_address")) db.exec("ALTER TABLE ledger ADD COLUMN ip_address TEXT");
     if (!ledgerCols.includes("user_agent")) db.exec("ALTER TABLE ledger ADD COLUMN user_agent TEXT");
-    if (!ledgerCols.includes("created_at")) db.exec("ALTER TABLE ledger ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
-    if (!ledgerCols.includes("updated_at")) db.exec("ALTER TABLE ledger ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+    if (!ledgerCols.includes("created_at")) db.exec("ALTER TABLE ledger ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
+    if (!ledgerCols.includes("updated_at")) db.exec("ALTER TABLE ledger ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
     const oldCols = new Set(ledgerCols);
     if (!oldCols.has("amount") && oldCols.has("delta")) db.exec("ALTER TABLE ledger RENAME COLUMN delta TO amount");
     if (!oldCols.has("user_id") && oldCols.has("userId")) db.exec("ALTER TABLE ledger RENAME COLUMN userId TO user_id");
@@ -524,8 +524,8 @@ function ensureSpendRequestTable() {
     if (!cols.includes("tags")) db.exec("ALTER TABLE spend_request ADD COLUMN tags TEXT");
     if (!cols.includes("campaign_id")) db.exec("ALTER TABLE spend_request ADD COLUMN campaign_id TEXT");
     if (!cols.includes("amount")) db.exec("ALTER TABLE spend_request ADD COLUMN amount INTEGER");
-    if (!cols.includes("created_at")) db.exec("ALTER TABLE spend_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
-    if (!cols.includes("updated_at")) db.exec("ALTER TABLE spend_request ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+    if (!cols.includes("created_at")) db.exec("ALTER TABLE spend_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
+    if (!cols.includes("updated_at")) db.exec("ALTER TABLE spend_request ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
   }
 
   fillTimestamps("spend_request");
@@ -613,8 +613,8 @@ function ensureConsumedTokensTable() {
     if (!cols.includes("user_id")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN user_id TEXT");
     if (!cols.includes("reward_id")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN reward_id TEXT");
     if (!cols.includes("source")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN source TEXT");
-    if (!cols.includes("created_at")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
-    if (!cols.includes("updated_at")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+    if (!cols.includes("created_at")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
+    if (!cols.includes("updated_at")) db.exec("ALTER TABLE consumed_tokens ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
   }
 
   fillTimestamps("consumed_tokens");
