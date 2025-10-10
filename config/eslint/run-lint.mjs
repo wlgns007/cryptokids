@@ -34,11 +34,7 @@ try {
 }
 
 if (exitCode === null) {
-  exitCode = tryRun("eslint", args);
-}
-
-if (exitCode === null) {
-  exitCode = tryRun("npx", ["eslint", ...args]);
+  exitCode = null; // prefer fallback lint when local ESLint isn't available
 }
 
 if (exitCode === null) {

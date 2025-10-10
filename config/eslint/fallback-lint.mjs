@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import os from "node:os";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -77,8 +79,24 @@ function collectFiles(startPaths, matchers, fileList = []) {
   return fileList;
 }
 
-function checkSyntax({ filePath }) {
-  const result = spawnSync(process.execPath, ["--check", filePath], { encoding: "utf8" });
+function checkSyntax({ filePath, ext }) {
+  const isModule = MODULE_EXTENSIONS.has(ext);
+  let result;
+
+  if (isModule) {
+    const source = fs.readFileSync(filePath, "utf8");
+    const tempName = `eslint-check-${crypto.randomUUID()}${ext}`;
+    const tempPath = path.join(os.tmpdir(), tempName);
+    try {
+      fs.writeFileSync(tempPath, source, "utf8");
+      result = spawnSync(process.execPath, ["--check", tempPath], { encoding: "utf8" });
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
+  } else {
+    result = spawnSync(process.execPath, ["--check", filePath], { encoding: "utf8" });
+  }
+
   if ((result.status ?? 1) === 0) {
     return null;
   }

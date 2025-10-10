@@ -1,21 +1,21 @@
 // CryptoKids Parents Shop API (refactored)
 import express from "express";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
+import { dirname, join } from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
-import { createRequire } from "node:module";
 import db, { DATA_DIR } from "./db.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 
-const require = createRequire(import.meta.url);
-
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
+const rootPackage = JSON.parse(
+  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(DATA_DIR, "uploads");
+const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
@@ -59,15 +59,14 @@ if (!BUILD) {
   }
 }
 if (!BUILD) {
-  const pkg = require("../package.json");
-  BUILD = pkg.version || "dev";
+  BUILD = rootPackage?.version || "dev";
 }
 
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PUBLIC_DIR = join(__dirname, "public");
 const versionCache = new Map();
 function loadVersioned(file) {
   if (!versionCache.has(file)) {
-    const raw = fs.readFileSync(path.join(PUBLIC_DIR, file), "utf8");
+    const raw = fs.readFileSync(join(PUBLIC_DIR, file), "utf8");
     versionCache.set(file, raw.replace(/__BUILD__/g, BUILD));
   }
   return versionCache.get(file);
@@ -212,7 +211,33 @@ function randomId() {
 }
 
 
-function ensureSchema() {
+async function ensureColumn(db, table, column, type = "INTEGER") {
+  // 1) column already exists?
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some(c => c.name === column)) return;
+
+  // 2) add column WITHOUT DEFAULT (SQLite ALTER only allows literal defaults; skip entirely)
+  const sql = `ALTER TABLE ${table} ADD COLUMN ${column} ${type}`;
+  try {
+    db.exec(sql);
+  } catch (e) {
+    // If something truly blocks (e.g., duplicate), rethrow
+    throw new Error(`[ensureColumn] ${table}.${column}: ${e.message}`);
+  }
+
+  // 3) backfill common timestamp columns in one go (epoch seconds)
+  if (column === "created_at" || column === "updated_at") {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `UPDATE ${table}
+         SET ${column} = COALESCE(${column}, ?)
+       WHERE ${column} IS NULL OR ${column} = 0`
+    ).run(now);
+  }
+}
+
+
+async function ensureSchema() {
   const tableExists = name =>
     !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
   const backupTable = name => {
@@ -222,16 +247,9 @@ function ensureSchema() {
   };
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
-  const ensureColumn = (table, columns, name, sql) => {
-    if (!columns.includes(name)) {
-      db.exec(sql);
-      columns.push(name);
-      return true;
-    }
 
-  const migrate = db.transaction(() => {
+  const migrate = async () => {
     // member table
-    let memberCols = [];
     if (!tableExists("member")) {
       let legacyMembers = null;
       if (tableExists("members")) {
@@ -251,18 +269,6 @@ function ensureSchema() {
           updated_at INTEGER NOT NULL
         );
       `);
-      memberCols = [
-        "id",
-        "name",
-        "date_of_birth",
-        "sex",
-        "status",
-        "tags",
-        "campaign_id",
-        "source",
-        "created_at",
-        "updated_at"
-      ];
       if (legacyMembers) {
         const rows = db.prepare("SELECT * FROM " + legacyMembers).all();
         const insertMember = db.prepare(`
@@ -287,27 +293,18 @@ function ensureSchema() {
         }
       }
     } else {
-      memberCols = getColumns("member");
-      ensureColumn(
-        "member",
-        memberCols,
-        "status",
-        "ALTER TABLE member ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
-      );
-      ensureColumn("member", memberCols, "tags", "ALTER TABLE member ADD COLUMN tags TEXT");
-      ensureColumn("member", memberCols, "campaign_id", "ALTER TABLE member ADD COLUMN campaign_id TEXT");
-      ensureColumn("member", memberCols, "source", "ALTER TABLE member ADD COLUMN source TEXT");
-      ensureColumn(
-        "member",
-        memberCols,
-        "date_of_birth",
-        "ALTER TABLE member ADD COLUMN date_of_birth TEXT"
-      );
+      await ensureColumn(db, "member", "status", "TEXT");
+      await ensureColumn(db, "member", "tags", "TEXT");
+      await ensureColumn(db, "member", "campaign_id", "TEXT");
+      await ensureColumn(db, "member", "source", "TEXT");
+      await ensureColumn(db, "member", "date_of_birth", "TEXT");
     }
+    db.exec(
+      "UPDATE member SET status = 'active' WHERE status IS NULL OR status = ''"
+    );
     db.exec("CREATE INDEX IF NOT EXISTS idx_member_status ON member(status)");
 
     // reward table
-    let rewardCols = [];
     if (!tableExists("reward")) {
       let legacyRewards = null;
       if (tableExists("rewards")) {
@@ -329,20 +326,6 @@ function ensureSchema() {
           updated_at INTEGER NOT NULL
         );
       `);
-      rewardCols = [
-        "id",
-        "name",
-        "cost",
-        "description",
-        "image_url",
-        "youtube_url",
-        "status",
-        "tags",
-        "campaign_id",
-        "source",
-        "created_at",
-        "updated_at"
-      ];
       if (legacyRewards) {
         const rows = db.prepare("SELECT * FROM " + legacyRewards).all();
         const insertReward = db.prepare(`
@@ -371,28 +354,25 @@ function ensureSchema() {
         }
       }
     } else {
-      rewardCols = getColumns("reward");
-      ensureColumn(
-        "reward",
-        rewardCols,
-        "status",
-        "ALTER TABLE reward ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
-      );
-      ensureColumn("reward", rewardCols, "tags", "ALTER TABLE reward ADD COLUMN tags TEXT");
-      ensureColumn("reward", rewardCols, "campaign_id", "ALTER TABLE reward ADD COLUMN campaign_id TEXT");
-      ensureColumn("reward", rewardCols, "source", "ALTER TABLE reward ADD COLUMN source TEXT");
-      ensureColumn(
-        "reward",
-        rewardCols,
-        "cost",
-        "ALTER TABLE reward ADD COLUMN cost INTEGER NOT NULL DEFAULT 0"
-      );
-      ensureColumn("reward", rewardCols, "updated_at", "ALTER TABLE reward ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)");
+      await ensureColumn(db, "reward", "status", "TEXT");
+      await ensureColumn(db, "reward", "tags", "TEXT");
+      await ensureColumn(db, "reward", "campaign_id", "TEXT");
+      await ensureColumn(db, "reward", "source", "TEXT");
+      await ensureColumn(db, "reward", "cost", "INTEGER");
+      await ensureColumn(db, "reward", "updated_at", "INTEGER");
     }
+    db.exec(
+      "UPDATE reward SET status = 'active' WHERE status IS NULL OR status = ''"
+    );
+    db.exec(
+      "UPDATE reward SET cost = 0 WHERE cost IS NULL"
+    );
+    db.exec(
+      "UPDATE reward SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
+    );
     db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
 
     // hold table
-    let holdCols = [];
     if (!tableExists("hold")) {
       let legacyHolds = null;
       if (tableExists("holds")) {
@@ -422,27 +402,6 @@ function ensureSchema() {
           FOREIGN KEY (reward_id) REFERENCES reward(id)
         );
       `);
-      holdCols = [
-        "id",
-        "user_id",
-        "actor_id",
-        "reward_id",
-        "reward_name",
-        "reward_image_url",
-        "status",
-        "quoted_amount",
-        "final_amount",
-        "note",
-        "metadata",
-        "source",
-        "tags",
-        "campaign_id",
-        "created_at",
-        "updated_at",
-        "released_at",
-        "redeemed_at",
-        "expires_at"
-      ];
       if (legacyHolds) {
         const rows = db.prepare("SELECT * FROM " + legacyHolds).all();
         const insertHold = db.prepare(`
@@ -511,51 +470,25 @@ function ensureSchema() {
         }
       }
     } else {
-      holdCols = getColumns("hold");
-      ensureColumn("hold", holdCols, "actor_id", "ALTER TABLE hold ADD COLUMN actor_id TEXT");
-      ensureColumn("hold", holdCols, "reward_name", "ALTER TABLE hold ADD COLUMN reward_name TEXT");
-      ensureColumn(
-        "hold",
-        holdCols,
-        "reward_image_url",
-        "ALTER TABLE hold ADD COLUMN reward_image_url TEXT"
-      );
-      ensureColumn(
-        "hold",
-        holdCols,
-        "quoted_amount",
-        "ALTER TABLE hold ADD COLUMN quoted_amount INTEGER NOT NULL DEFAULT 0"
-      );
-      ensureColumn(
-        "hold",
-        holdCols,
-        "final_amount",
-        "ALTER TABLE hold ADD COLUMN final_amount INTEGER"
-      );
-      ensureColumn("hold", holdCols, "metadata", "ALTER TABLE hold ADD COLUMN metadata TEXT");
-      ensureColumn("hold", holdCols, "source", "ALTER TABLE hold ADD COLUMN source TEXT");
-      ensureColumn("hold", holdCols, "tags", "ALTER TABLE hold ADD COLUMN tags TEXT");
-      ensureColumn("hold", holdCols, "campaign_id", "ALTER TABLE hold ADD COLUMN campaign_id TEXT");
-      ensureColumn("hold", holdCols, "released_at", "ALTER TABLE hold ADD COLUMN released_at INTEGER");
-      ensureColumn("hold", holdCols, "redeemed_at", "ALTER TABLE hold ADD COLUMN redeemed_at INTEGER");
-      ensureColumn("hold", holdCols, "expires_at", "ALTER TABLE hold ADD COLUMN expires_at INTEGER");
-      ensureColumn(
-        "hold",
-        holdCols,
-        "updated_at",
-        "ALTER TABLE hold ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
-      ensureColumn(
-        "hold",
-        holdCols,
-        "created_at",
-        "ALTER TABLE hold ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
+      await ensureColumn(db, "hold", "actor_id", "TEXT");
+      await ensureColumn(db, "hold", "reward_name", "TEXT");
+      await ensureColumn(db, "hold", "reward_image_url", "TEXT");
+      await ensureColumn(db, "hold", "quoted_amount", "INTEGER");
+      await ensureColumn(db, "hold", "final_amount", "INTEGER");
+      await ensureColumn(db, "hold", "metadata", "TEXT");
+      await ensureColumn(db, "hold", "source", "TEXT");
+      await ensureColumn(db, "hold", "tags", "TEXT");
+      await ensureColumn(db, "hold", "campaign_id", "TEXT");
+      await ensureColumn(db, "hold", "released_at", "INTEGER");
+      await ensureColumn(db, "hold", "redeemed_at", "INTEGER");
+      await ensureColumn(db, "hold", "expires_at", "INTEGER");
+      await ensureColumn(db, "hold", "updated_at", "INTEGER");
+      await ensureColumn(db, "hold", "created_at", "INTEGER");
     }
+    db.exec("UPDATE hold SET quoted_amount = COALESCE(quoted_amount, 0)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
 
     // ledger table
-    let ledgerCols = [];
     let legacyLedger = null;
     if (tableExists("ledger")) {
       const info = db.prepare("PRAGMA table_info('ledger')").all();
@@ -603,34 +536,6 @@ function ensureSchema() {
           FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
         );
       `);
-      ledgerCols = [
-        "id",
-        "user_id",
-        "actor_id",
-        "reward_id",
-        "parent_hold_id",
-        "parent_ledger_id",
-        "verb",
-        "description",
-        "amount",
-        "balance_after",
-        "status",
-        "note",
-        "notes",
-        "template_ids",
-        "final_amount",
-        "metadata",
-        "refund_reason",
-        "refund_notes",
-        "idempotency_key",
-        "source",
-        "tags",
-        "campaign_id",
-        "ip_address",
-        "user_agent",
-        "created_at",
-        "updated_at"
-      ];
       if (legacyLedger) {
         const rows = db.prepare("SELECT * FROM " + legacyLedger).all();
         const insertLedger = db.prepare(`
@@ -713,83 +618,42 @@ function ensureSchema() {
         }
       }
     } else {
-      ledgerCols = getColumns("ledger");
-      ensureColumn("ledger", ledgerCols, "user_id", "ALTER TABLE ledger ADD COLUMN user_id TEXT");
-      ensureColumn("ledger", ledgerCols, "actor_id", "ALTER TABLE ledger ADD COLUMN actor_id TEXT");
-      ensureColumn("ledger", ledgerCols, "reward_id", "ALTER TABLE ledger ADD COLUMN reward_id TEXT");
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "parent_hold_id",
-        "ALTER TABLE ledger ADD COLUMN parent_hold_id TEXT"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "parent_ledger_id",
-        "ALTER TABLE ledger ADD COLUMN parent_ledger_id TEXT"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "description",
-        "ALTER TABLE ledger ADD COLUMN description TEXT"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "verb",
-        "ALTER TABLE ledger ADD COLUMN verb TEXT NOT NULL DEFAULT 'adjust'"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "amount",
-        "ALTER TABLE ledger ADD COLUMN amount INTEGER NOT NULL DEFAULT 0"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "balance_after",
-        "ALTER TABLE ledger ADD COLUMN balance_after INTEGER NOT NULL DEFAULT 0"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "status",
-        "ALTER TABLE ledger ADD COLUMN status TEXT NOT NULL DEFAULT 'posted'"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "idempotency_key",
-        "ALTER TABLE ledger ADD COLUMN idempotency_key TEXT"
-      );
-      ensureColumn("ledger", ledgerCols, "template_ids", "ALTER TABLE ledger ADD COLUMN template_ids TEXT");
-      ensureColumn("ledger", ledgerCols, "final_amount", "ALTER TABLE ledger ADD COLUMN final_amount INTEGER");
-      ensureColumn("ledger", ledgerCols, "metadata", "ALTER TABLE ledger ADD COLUMN metadata TEXT");
-      ensureColumn("ledger", ledgerCols, "note", "ALTER TABLE ledger ADD COLUMN note TEXT");
-      ensureColumn("ledger", ledgerCols, "notes", "ALTER TABLE ledger ADD COLUMN notes TEXT");
-      ensureColumn("ledger", ledgerCols, "refund_reason", "ALTER TABLE ledger ADD COLUMN refund_reason TEXT");
-      ensureColumn("ledger", ledgerCols, "refund_notes", "ALTER TABLE ledger ADD COLUMN refund_notes TEXT");
-      ensureColumn("ledger", ledgerCols, "source", "ALTER TABLE ledger ADD COLUMN source TEXT");
-      ensureColumn("ledger", ledgerCols, "tags", "ALTER TABLE ledger ADD COLUMN tags TEXT");
-      ensureColumn("ledger", ledgerCols, "campaign_id", "ALTER TABLE ledger ADD COLUMN campaign_id TEXT");
-      ensureColumn("ledger", ledgerCols, "ip_address", "ALTER TABLE ledger ADD COLUMN ip_address TEXT");
-      ensureColumn("ledger", ledgerCols, "user_agent", "ALTER TABLE ledger ADD COLUMN user_agent TEXT");
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "created_at",
-        "ALTER TABLE ledger ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
-      ensureColumn(
-        "ledger",
-        ledgerCols,
-        "updated_at",
-        "ALTER TABLE ledger ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
+      await ensureColumn(db, "ledger", "user_id", "TEXT");
+      await ensureColumn(db, "ledger", "actor_id", "TEXT");
+      await ensureColumn(db, "ledger", "reward_id", "TEXT");
+      await ensureColumn(db, "ledger", "parent_hold_id", "TEXT");
+      await ensureColumn(db, "ledger", "parent_ledger_id", "TEXT");
+      await ensureColumn(db, "ledger", "description", "TEXT");
+      await ensureColumn(db, "ledger", "verb", "TEXT");
+      await ensureColumn(db, "ledger", "amount", "INTEGER");
+      await ensureColumn(db, "ledger", "balance_after", "INTEGER");
+      await ensureColumn(db, "ledger", "status", "TEXT");
+      await ensureColumn(db, "ledger", "idempotency_key", "TEXT");
+      await ensureColumn(db, "ledger", "template_ids", "TEXT");
+      await ensureColumn(db, "ledger", "final_amount", "INTEGER");
+      await ensureColumn(db, "ledger", "metadata", "TEXT");
+      await ensureColumn(db, "ledger", "note", "TEXT");
+      await ensureColumn(db, "ledger", "notes", "TEXT");
+      await ensureColumn(db, "ledger", "refund_reason", "TEXT");
+      await ensureColumn(db, "ledger", "refund_notes", "TEXT");
+      await ensureColumn(db, "ledger", "source", "TEXT");
+      await ensureColumn(db, "ledger", "tags", "TEXT");
+      await ensureColumn(db, "ledger", "campaign_id", "TEXT");
+      await ensureColumn(db, "ledger", "ip_address", "TEXT");
+      await ensureColumn(db, "ledger", "user_agent", "TEXT");
+      await ensureColumn(db, "ledger", "created_at", "INTEGER");
+      await ensureColumn(db, "ledger", "updated_at", "INTEGER");
     }
+    db.exec("UPDATE ledger SET verb = 'adjust' WHERE verb IS NULL OR verb = ''");
+    db.exec("UPDATE ledger SET amount = 0 WHERE amount IS NULL");
+    db.exec("UPDATE ledger SET balance_after = 0 WHERE balance_after IS NULL");
+    db.exec("UPDATE ledger SET status = 'posted' WHERE status IS NULL OR status = ''");
+    db.exec(
+      "UPDATE ledger SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000) WHERE created_at IS NULL OR created_at = 0"
+    );
+    db.exec(
+      "UPDATE ledger SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
+    );
 
     if (tableExists("ledger_legacy")) {
       // no-op placeholder when running repeatedly
@@ -852,7 +716,6 @@ function ensureSchema() {
     `);
 
     // spend_request table
-    let spendCols = [];
     if (!tableExists("spend_request")) {
       let legacySpend = null;
       if (tableExists("spend_requests")) {
@@ -878,22 +741,6 @@ function ensureSchema() {
           FOREIGN KEY (reward_id) REFERENCES reward(id)
         );
       `);
-      spendCols = [
-        "id",
-        "token",
-        "user_id",
-        "reward_id",
-        "status",
-        "amount",
-        "title",
-        "image_url",
-        "actor_id",
-        "source",
-        "tags",
-        "campaign_id",
-        "created_at",
-        "updated_at"
-      ];
       if (legacySpend) {
         const rows = db.prepare("SELECT * FROM " + legacySpend).all();
         const insertSpend = db.prepare(`
@@ -937,25 +784,23 @@ function ensureSchema() {
         }
       }
     } else {
-      spendCols = getColumns("spend_request");
-      ensureColumn("spend_request", spendCols, "actor_id", "ALTER TABLE spend_request ADD COLUMN actor_id TEXT");
-      ensureColumn("spend_request", spendCols, "source", "ALTER TABLE spend_request ADD COLUMN source TEXT");
-      ensureColumn("spend_request", spendCols, "tags", "ALTER TABLE spend_request ADD COLUMN tags TEXT");
-      ensureColumn("spend_request", spendCols, "campaign_id", "ALTER TABLE spend_request ADD COLUMN campaign_id TEXT");
-      ensureColumn("spend_request", spendCols, "amount", "ALTER TABLE spend_request ADD COLUMN amount INTEGER");
-      ensureColumn(
-        "spend_request",
-        spendCols,
-        "created_at",
-        "ALTER TABLE spend_request ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
-      ensureColumn(
-        "spend_request",
-        spendCols,
-        "updated_at",
-        "ALTER TABLE spend_request ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
+      await ensureColumn(db, "spend_request", "actor_id", "TEXT");
+      await ensureColumn(db, "spend_request", "source", "TEXT");
+      await ensureColumn(db, "spend_request", "tags", "TEXT");
+      await ensureColumn(db, "spend_request", "campaign_id", "TEXT");
+      await ensureColumn(db, "spend_request", "amount", "INTEGER");
+      await ensureColumn(db, "spend_request", "created_at", "INTEGER");
+      await ensureColumn(db, "spend_request", "updated_at", "INTEGER");
     }
+    db.exec(
+      "UPDATE spend_request SET status = 'pending' WHERE status IS NULL OR status = ''"
+    );
+    db.exec(
+      "UPDATE spend_request SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000) WHERE created_at IS NULL OR created_at = 0"
+    );
+    db.exec(
+      "UPDATE spend_request SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
+    );
     db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_status ON spend_request(status)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user ON spend_request(user_id)");
 
@@ -999,54 +844,14 @@ function ensureSchema() {
         db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
         consumedCols = getColumns("consumed_tokens");
       }
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "token",
-        "ALTER TABLE consumed_tokens ADD COLUMN token TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "typ",
-        "ALTER TABLE consumed_tokens ADD COLUMN typ TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "request_id",
-        "ALTER TABLE consumed_tokens ADD COLUMN request_id TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "user_id",
-        "ALTER TABLE consumed_tokens ADD COLUMN user_id TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "reward_id",
-        "ALTER TABLE consumed_tokens ADD COLUMN reward_id TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "source",
-        "ALTER TABLE consumed_tokens ADD COLUMN source TEXT"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "created_at",
-        "ALTER TABLE consumed_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
-      ensureColumn(
-        "consumed_tokens",
-        consumedCols,
-        "updated_at",
-        "ALTER TABLE consumed_tokens ADD COLUMN updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)"
-      );
+      await ensureColumn(db, "consumed_tokens", "token", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "typ", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "user_id", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "reward_id", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "source", "TEXT");
+      await ensureColumn(db, "consumed_tokens", "created_at", "INTEGER");
+      await ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER");
     }
     db.exec(`
       UPDATE consumed_tokens
@@ -1057,13 +862,13 @@ function ensureSchema() {
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-  });
+  };
 
-  migrate();
+  await migrate();
 
 }
 
-ensureSchema();
+await ensureSchema();
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -3420,7 +3225,7 @@ app.post("/admin/upload-image64", requireAdminKey, (req, res) => {
   const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" })[mime] || "png";
   const hash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
   const filename = `rw_${hash}.${ext}`;
-  const filePath = path.join(UPLOAD_DIR, filename);
+  const filePath = join(UPLOAD_DIR, filename);
   if (!fs.existsSync(filePath)) {
     fs.writeFileSync(filePath, buffer);
   }
@@ -3450,5 +3255,6 @@ export {
   getBalance,
   normId,
   getStateHints,
-  ensureSchema
+  ensureSchema,
+  __resetRefundRateLimiter
 };
