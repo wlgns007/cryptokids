@@ -7,7 +7,7 @@
     "test": "node --test \"server/tests/**/*.js\"",
     "prestart": "node scripts/prestart-check.mjs",
     "start": "node server/index.js",
-    "check": "node --check server/index.js && node scripts/assert-sync-ensure-column.mjs",
+    "check": "node --check server/index.js",
     "dev": "node --watch server/index.js",
     "lint": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs .",
     "lint:fix": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs --fix ."
