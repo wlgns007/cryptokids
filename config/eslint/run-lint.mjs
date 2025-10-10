@@ -42,6 +42,11 @@ if (exitCode === null) {
 }
 
 if (exitCode === null) {
+  const { fallbackLint } = await import("./fallback-lint.mjs");
+  exitCode = await fallbackLint({ args });
+}
+
+if (exitCode === null) {
   console.error(
     "Unable to find an ESLint executable. Install it locally or make sure it is available on PATH."
   );
