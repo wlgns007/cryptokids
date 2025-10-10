@@ -1,21 +1,21 @@
 // CryptoKids Parents Shop API (refactored)
 import express from "express";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
+import { dirname, join } from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
-import { createRequire } from "node:module";
 import db, { DATA_DIR } from "./db.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 
-const require = createRequire(import.meta.url);
-
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
+const rootPackage = JSON.parse(
+  fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(DATA_DIR, "uploads");
+const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
@@ -59,15 +59,14 @@ if (!BUILD) {
   }
 }
 if (!BUILD) {
-  const pkg = require("../package.json");
-  BUILD = pkg.version || "dev";
+  BUILD = rootPackage?.version || "dev";
 }
 
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PUBLIC_DIR = join(__dirname, "public");
 const versionCache = new Map();
 function loadVersioned(file) {
   if (!versionCache.has(file)) {
-    const raw = fs.readFileSync(path.join(PUBLIC_DIR, file), "utf8");
+    const raw = fs.readFileSync(join(PUBLIC_DIR, file), "utf8");
     versionCache.set(file, raw.replace(/__BUILD__/g, BUILD));
   }
   return versionCache.get(file);
@@ -228,6 +227,9 @@ function ensureSchema() {
       columns.push(name);
       return true;
     }
+
+    return false;
+  };
 
   const migrate = db.transaction(() => {
     // member table
@@ -3420,7 +3422,7 @@ app.post("/admin/upload-image64", requireAdminKey, (req, res) => {
   const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" })[mime] || "png";
   const hash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
   const filename = `rw_${hash}.${ext}`;
-  const filePath = path.join(UPLOAD_DIR, filename);
+  const filePath = join(UPLOAD_DIR, filename);
   if (!fs.existsSync(filePath)) {
     fs.writeFileSync(filePath, buffer);
   }
@@ -3450,5 +3452,6 @@ export {
   getBalance,
   normId,
   getStateHints,
-  ensureSchema
+  ensureSchema,
+  __resetRefundRateLimiter
 };
