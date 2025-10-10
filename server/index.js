@@ -819,44 +819,47 @@ function rebuildLedgerTableIfLegacy() {
       if (legacySpend) {
         const rows = db.prepare("SELECT * FROM " + legacySpend).all();
         const insertSpend = db.prepare(`
-          INSERT INTO spend_request (
-            id,
-            token,
-            user_id,
-            reward_id,
-            status,
-            amount,
-            title,
-            image_url,
-            actor_id,
-            source,
-            tags,
-            campaign_id,
-            created_at,
-            updated_at
-          ) VALUES (@id,@token,@user_id,@reward_id,@status,@amount,@title,@image_url,@actor_id,@source,@tags,@campaign_id,@created_at,@updated_at)
-        `);
+  INSERT INTO spend_request (
+    id,
+    token,
+    user_id,
+    reward_id,
+    status,
+    amount,
+    title,
+    image_url,
+    actor_id,
+    source,
+    tags,
+    campaign_id,
+    created_at,
+    updated_at
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+`);
+
         for (const row of rows) {
-          const id = String(row.id ?? crypto.randomUUID()).trim();
-          const userId = normId(row.userId || row.user_id || "");
-          if (!id || !userId) continue;
-          insertSpend.run({
-            id,
-            token: row.token,
-            user_id: userId,
-            reward_id: row.itemId || row.reward_id || null,
-            status: String(row.status || "pending").trim().toLowerCase(),
-            amount: row.price ?? row.amount ?? null,
-            title: row.title || null,
-            image_url: row.imageUrl || row.image_url || null,
-            actor_id: null,
-            source: null,
-            tags: null,
-            campaign_id: null,
-            created_at: normalizeTimestamp(row.createdAt),
-            updated_at: normalizeTimestamp(row.updatedAt ?? row.createdAt)
-          });
-        }
+  const id = String(row.id ?? crypto.randomUUID()).trim();
+  const userId = normId(row.userId || row.user_id || "");
+  if (!id || !userId) continue;
+
+  insertSpend.run(
+    id,
+    row.token,
+    userId,
+    row.itemId || row.reward_id || null,
+    String(row.status || "pending").trim().toLowerCase(),
+    row.price ?? row.amount ?? null,
+    row.title || null,
+    row.imageUrl || row.image_url || null,
+    null, // actor_id (unknown for legacy)
+    null, // source
+    null, // tags
+    null, // campaign_id
+    normalizeTimestamp(row.createdAt),
+    normalizeTimestamp(row.updatedAt ?? row.createdAt)
+  );
+}
+
       }
     } else {
       ensureColumn(
