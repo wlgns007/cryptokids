@@ -251,6 +251,50 @@ const ensureTables = db.transaction(() => {
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
+  // --- Ledger schema hardener (runs safely multiple times) ---
+  function ensureLedgerSchema() {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        type TEXT NOT NULL DEFAULT 'adjust',
+        amount INTEGER NOT NULL DEFAULT 0,
+        balance_after INTEGER,
+        reason TEXT,
+        metadata TEXT,
+        related_id TEXT,
+        campaign_id TEXT,
+        actor_id TEXT,
+        source TEXT,
+        status TEXT DEFAULT 'ok',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    const cols = new Set(getColumns("ledger"));
+    const addCol = (name, ddl) => {
+      if (!cols.has(name)) {
+        db.exec(`ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`);
+        cols.add(name);
+      }
+    };
+    addCol("user_id", "TEXT");
+    addCol("type", "TEXT NOT NULL DEFAULT 'adjust'");
+    addCol("amount", "INTEGER NOT NULL DEFAULT 0");
+    addCol("created_at", "INTEGER NOT NULL");
+    addCol("updated_at", "INTEGER NOT NULL");
+    addCol("balance_after", "INTEGER");
+    addCol("reason", "TEXT");
+    addCol("metadata", "TEXT");
+    addCol("related_id", "TEXT");
+    addCol("campaign_id", "TEXT");
+    addCol("actor_id", "TEXT");
+    addCol("source", "TEXT");
+    addCol("status", "TEXT DEFAULT 'ok'");
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
+  }
+
   // --- Identifier helpers for SQLite DDL ---
   function isSafeIdent(s) {
     return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
@@ -265,6 +309,8 @@ const ensureTables = db.transaction(() => {
     db.exec("DROP TABLE IF EXISTS " + quoteIdent(name));
     return true;
   };
+
+  ensureLedgerSchema();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS member (
