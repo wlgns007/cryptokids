@@ -271,27 +271,6 @@ function addCol(table, col, type, {
   }
 }
 
-
-  const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
-  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defaultSql}, backfill=${backfillSql})`);
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`);
-
-  if (backfillSql) {
-    db.exec(`UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`);
-  }
-}
-
-function ensureSystemMember() {
-  const exists = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
-  if (!exists) {
-    const ts = Date.now();
-    db.prepare(`
-      INSERT INTO member (id, name, status, created_at, updated_at)
-      VALUES ('system', 'System', 'active', ?, ?)
-    `).run(ts, ts);
-  }
-}
-
 function rebuildLedgerTableIfLegacy() {
   const hasLedger = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
   if (!hasLedger) return false;
@@ -836,7 +815,7 @@ const ensureSchema = db.transaction(() => {
   ensureDefaultMembers();
   ensureSystemMember();
 
-  rebuildLedgerTableIfLegacy();
+  rebuildLedgerTableIfLegacy(); // runs once or no-ops
 
   ensureTables();
   ensureConsumedTokens();
