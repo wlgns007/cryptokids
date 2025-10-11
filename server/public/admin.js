@@ -1975,22 +1975,22 @@ setupScanner({
     updateReward(item.id, payload);
   }
 
-  const rewardsActiveBtn = $('btnShowActiveRewards');
   const rewardsInactiveBtn = $('btnShowInactiveRewards');
   let rewardsStatusFilter = 'active';
+  let rewardsToggleInitialized = false;
 
-  function updateRewardsToggleButtons() {
-    const showActive = rewardsStatusFilter === 'active';
-    if (rewardsActiveBtn) {
-      rewardsActiveBtn.disabled = showActive;
-      rewardsActiveBtn.setAttribute('aria-pressed', showActive ? 'true' : 'false');
-      rewardsActiveBtn.classList.toggle('is-selected', showActive);
+  function updateRewardsToggleButton() {
+    if (!rewardsInactiveBtn) return;
+    const showingDisabled = rewardsStatusFilter === 'disabled';
+    if (!rewardsToggleInitialized) {
+      rewardsInactiveBtn.hidden = true;
+      return;
     }
-    if (rewardsInactiveBtn) {
-      rewardsInactiveBtn.disabled = !showActive;
-      rewardsInactiveBtn.setAttribute('aria-pressed', showActive ? 'false' : 'true');
-      rewardsInactiveBtn.classList.toggle('is-selected', !showActive);
-    }
+    rewardsInactiveBtn.hidden = false;
+    rewardsInactiveBtn.disabled = false;
+    rewardsInactiveBtn.setAttribute('aria-pressed', showingDisabled ? 'true' : 'false');
+    rewardsInactiveBtn.classList.toggle('is-selected', showingDisabled);
+    rewardsInactiveBtn.textContent = showingDisabled ? 'Show Active Rewards' : 'Show Deactivated Rewards';
   }
 
   async function loadRewards() {
@@ -2000,10 +2000,7 @@ setupScanner({
     const filterValue = $('filterRewards')?.value?.toLowerCase?.() || '';
     list.innerHTML = '<div class="muted">Loading...</div>';
     if (statusEl) statusEl.textContent = '';
-    if (rewardsStatusFilter !== 'disabled') {
-      rewardsHasDisabled = false;
-      updateRewardsToggleButton();
-    }
+    updateRewardsToggleButton();
     try {
       const params = new URLSearchParams();
       if (rewardsStatusFilter && rewardsStatusFilter !== 'all') {
@@ -2014,6 +2011,8 @@ setupScanner({
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
         list.innerHTML = '<div class="muted">Admin key invalid.</div>';
+        rewardsToggleInitialized = false;
+        updateRewardsToggleButton();
         return;
       }
       if (!res.ok){
@@ -2034,6 +2033,8 @@ setupScanner({
         status: (item.status || (item.active ? 'active' : 'disabled') || 'active').toString().toLowerCase(),
         active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0
       }));
+      rewardsToggleInitialized = true;
+      updateRewardsToggleButton();
       const filtered = normalized.filter(it => {
         const matchesFilter = !filterValue || it.name.toLowerCase().includes(filterValue);
         if (!matchesFilter) return false;
@@ -2192,7 +2193,7 @@ setupScanner({
       const msg = err.message || 'Failed to load rewards';
       if (statusEl) statusEl.textContent = msg;
       if (list) list.innerHTML = `<div class="muted">${msg}</div>`;
-      rewardsHasDisabled = false;
+      rewardsToggleInitialized = false;
       updateRewardsToggleButton();
     }
   }
@@ -2203,15 +2204,9 @@ setupScanner({
   });
   $('filterRewards')?.addEventListener('input', loadRewards);
 
-  rewardsActiveBtn?.addEventListener('click', () => {
-    rewardsStatusFilter = 'active';
-    updateRewardsToggleButtons();
-    loadRewards();
-  });
-
   rewardsInactiveBtn?.addEventListener('click', () => {
-    rewardsStatusFilter = 'disabled';
-    updateRewardsToggleButtons();
+    rewardsStatusFilter = rewardsStatusFilter === 'disabled' ? 'active' : 'disabled';
+    updateRewardsToggleButton();
     loadRewards();
   });
 
@@ -2291,7 +2286,7 @@ setupScanner({
     loadRewards?.(); // refresh the list if available
   });
 
-  updateRewardsToggleButtons();
+  updateRewardsToggleButton();
 
   // image upload
   const drop = $('drop');
