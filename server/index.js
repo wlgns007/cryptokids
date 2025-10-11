@@ -236,6 +236,41 @@ async function ensureColumn(db, table, column, type = "INTEGER") {
   }
 }
 
+// Safe column add: never uses NOT NULL on ALTER; supports default and backfill.
+function addCol(table, col, type, {
+  defaultSql = null,     // e.g., "'posted'" or "0" or "CURRENT_TIMESTAMP"
+  backfillSql = null,    // e.g., "'posted'" or "unixepoch('now')" or "0"
+  ifNotExists = true
+} = {}) {
+  const hasCol = !!db.prepare(`PRAGMA table_info(${table})`).all()
+    .some(r => r.name === col);
+  if (ifNotExists && hasCol) return;
+
+  // 1) Add column as NULLABLE, with DEFAULT only if you want new rows to get it.
+  const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
+  const defLog = defaultSql ?? "null";
+  const backfillLog = backfillSql ?? "null";
+  const alterSql = `ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`;
+  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defLog}, backfill=${backfillLog})`);
+  try {
+    db.exec(alterSql);
+  } catch (err) {
+    console.error(`[ensureLedgerSchema] Failed SQL: ${alterSql}`);
+    throw err;
+  }
+
+  // 2) Backfill existing rows so the app logic has non-null data to work with.
+  if (backfillSql) {
+    const updateSql = `UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`;
+    try {
+      db.exec(updateSql);
+    } catch (err) {
+      console.error(`[ensureLedgerSchema] Failed SQL: ${updateSql}`);
+      throw err;
+    }
+  }
+}
+
 
 // BEGIN ensureTables
 const ensureTables = db.transaction(() => {
@@ -248,49 +283,66 @@ const ensureTables = db.transaction(() => {
     db.exec("ALTER TABLE " + quoteIdent(name) + " RENAME TO " + quoteIdent(legacyName));
     return legacyName;
   };
-  const getColumns = name =>
-    db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
-
   // --- Ledger schema hardener (runs safely multiple times) ---
   function ensureLedgerSchema() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS ledger (
         id TEXT PRIMARY KEY,
-        user_id TEXT,
-        type TEXT NOT NULL DEFAULT 'adjust',
-        amount INTEGER NOT NULL DEFAULT 0,
-        balance_after INTEGER,
-        reason TEXT,
-        metadata TEXT,
-        related_id TEXT,
-        campaign_id TEXT,
+        user_id TEXT NOT NULL,
         actor_id TEXT,
+        reward_id TEXT,
+        parent_hold_id TEXT,
+        parent_ledger_id TEXT,
+        verb TEXT NOT NULL,
+        description TEXT,
+        amount INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'posted',
+        note TEXT,
+        notes TEXT,
+        template_ids TEXT,
+        final_amount INTEGER,
+        metadata TEXT,
+        refund_reason TEXT,
+        refund_notes TEXT,
+        idempotency_key TEXT UNIQUE,
         source TEXT,
-        status TEXT DEFAULT 'ok',
+        tags TEXT,
+        campaign_id TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES member(id),
+        FOREIGN KEY (reward_id) REFERENCES reward(id),
+        FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+        FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
       );
     `);
-    const cols = new Set(getColumns("ledger"));
-    const addCol = (name, ddl) => {
-      if (!cols.has(name)) {
-        db.exec(`ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`);
-        cols.add(name);
-      }
-    };
-    addCol("user_id", "TEXT");
-    addCol("type", "TEXT NOT NULL DEFAULT 'adjust'");
-    addCol("amount", "INTEGER NOT NULL DEFAULT 0");
-    addCol("created_at", "INTEGER NOT NULL");
-    addCol("updated_at", "INTEGER NOT NULL");
-    addCol("balance_after", "INTEGER");
-    addCol("reason", "TEXT");
-    addCol("metadata", "TEXT");
-    addCol("related_id", "TEXT");
-    addCol("campaign_id", "TEXT");
-    addCol("actor_id", "TEXT");
-    addCol("source", "TEXT");
-    addCol("status", "TEXT DEFAULT 'ok'");
+
+    addCol('ledger', 'status', 'TEXT',        { defaultSql: "'posted'", backfillSql: "'posted'" });
+    addCol('ledger', 'source', 'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
+    addCol('ledger', 'tags',   'TEXT',        { defaultSql: "'[]'",     backfillSql: "'[]'" });
+    addCol('ledger', 'metadata','TEXT',       { defaultSql: "NULL",     backfillSql: "NULL" });
+
+    addCol('ledger', 'amount',        'INTEGER', { defaultSql: "0",    backfillSql: "0" });
+    addCol('ledger', 'balance_after', 'INTEGER', { defaultSql: "0",    backfillSql: "0" });
+    addCol('ledger', 'final_amount',  'INTEGER', { defaultSql: "NULL", backfillSql: "NULL" });
+
+    addCol('ledger', 'reward_id',       'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'parent_hold_id',  'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'parent_ledger_id','TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'campaign_id',     'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'actor_id',        'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'ip_address',      'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'user_agent',      'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'refund_reason',   'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'refund_notes',    'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+    addCol('ledger', 'idempotency_key', 'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+
+    addCol('ledger', 'created_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
+    addCol('ledger', 'updated_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
+
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
   }
