@@ -413,6 +413,7 @@ const ensureTables = db.transaction(() => {
     return true;
   };
 
+  rebuildLedgerTableIfLegacy();
   ensureLedgerSchema();
 
   db.exec(`
@@ -555,58 +556,39 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
       id TEXT PRIMARY KEY,
+      token TEXT UNIQUE NOT NULL,
       user_id TEXT NOT NULL,
-      actor_id TEXT,
       reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      amount INTEGER,
+      title TEXT,
+      image_url TEXT,
+      actor_id TEXT,
       source TEXT,
       tags TEXT,
       campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+      FOREIGN KEY (reward_id) REFERENCES reward(id)
     );
   `);
-function rebuildLedgerTableIfLegacy() {
-  // If ledger table doesn't exist (first run), nothing to upgrade.
-  const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
-  if (!table) return;
+  ensureColumn(db, "spend_request", "token", "TEXT");
+  ensureColumn(db, "spend_request", "user_id", "TEXT");
+  ensureColumn(db, "spend_request", "reward_id", "TEXT");
+  ensureColumn(db, "spend_request", "status", "TEXT");
+  ensureColumn(db, "spend_request", "amount", "INTEGER");
+  ensureColumn(db, "spend_request", "title", "TEXT");
+  ensureColumn(db, "spend_request", "image_url", "TEXT");
+  ensureColumn(db, "spend_request", "actor_id", "TEXT");
+  ensureColumn(db, "spend_request", "source", "TEXT");
+  ensureColumn(db, "spend_request", "tags", "TEXT");
+  ensureColumn(db, "spend_request", "campaign_id", "TEXT");
+  ensureColumn(db, "spend_request", "created_at", "INTEGER");
+  ensureColumn(db, "spend_request", "updated_at", "INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_token ON spend_request(token)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user_status ON spend_request(user_id, status)");
 
-  // Check if current ledger schema is legacy
-  const cols = db.prepare("PRAGMA table_info('ledger')").all().map(c => c.name);
-  const desired = new Set([
-    "id","user_id","actor_id","reward_id","parent_hold_id","parent_ledger_id","verb",
-    "description","amount","balance_after","status","note","notes","template_ids",
-    "final_amount","metadata","refund_reason","refund_notes","idempotency_key",
-    "source","tags","campaign_id","ip_address","user_agent","created_at","updated_at"
-  ]);
-  const isLegacy = cols.some(c => !desired.has(c)) || desired.size !== cols.length;
-  if (!isLegacy) return;
-
-  // 1) Rename old table
-  const legacyName = `ledger_legacy_${Date.now()}`;
-  db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
-
-  // 2) Recreate new ledger table with the desired schema
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
       id TEXT PRIMARY KEY,
@@ -641,68 +623,7 @@ function rebuildLedgerTableIfLegacy() {
       FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
     );
   `);
-
-  // 3) Copy data from legacy -> new with safe defaults/mapping
-  const legacyCols = db.prepare(`PRAGMA table_info('${legacyName}')`).all().map(c => c.name);
-  const has = (c) => legacyCols.includes(c);
-  const selectExprs = [
-    has("id") ? "id" : "lower(hex(randomblob(16))) AS id",
-    "user_id",
-    has("actor_id") ? "actor_id" : "NULL AS actor_id",
-    has("reward_id") ? "reward_id" : "NULL AS reward_id",
-    "NULL AS parent_hold_id",
-    has("parent_ledger_id") ? "parent_ledger_id" : "NULL AS parent_ledger_id",
-    has("verb") ? "verb" : "'adjust' AS verb",
-    has("description") ? "description" : "NULL AS description",
-    has("amount") ? "amount" : "0 AS amount",
-    has("balance_after") ? "balance_after" : "0 AS balance_after",
-    has("status") ? "COALESCE(NULLIF(status,''),'posted')" : "'posted' AS status",
-    has("note") ? "note" : "NULL AS note",
-    has("notes") ? "notes" : "NULL AS notes",
-    has("template_ids") ? "template_ids" : "NULL AS template_ids",
-    has("final_amount") ? "final_amount" : "NULL AS final_amount",
-    has("metadata") ? "metadata" : "NULL AS metadata",
-    has("refund_reason") ? "refund_reason" : "NULL AS refund_reason",
-    has("refund_notes") ? "refund_notes" : "NULL AS refund_notes",
-    has("idempotency_key") ? "idempotency_key" : "NULL AS idempotency_key",
-    has("source") ? "source" : "NULL AS source",
-    has("tags") ? "tags" : "NULL AS tags",
-    has("campaign_id") ? "campaign_id" : "NULL AS campaign_id",
-    has("ip_address") ? "ip_address" : "NULL AS ip_address",
-    has("user_agent") ? "user_agent" : "NULL AS user_agent",
-    has("created_at")
-      ? "CASE WHEN created_at IS NULL OR created_at=0 THEN strftime('%s','now')*1000 ELSE created_at END AS created_at"
-      : "strftime('%s','now')*1000 AS created_at",
-    has("updated_at")
-      ? "CASE WHEN updated_at IS NULL OR updated_at=0 THEN strftime('%s','now')*1000 ELSE updated_at END AS updated_at"
-      : "strftime('%s','now')*1000 AS updated_at"
-  ].join(", ");
-
-  db.exec(`
-    INSERT INTO ledger (
-      id,user_id,actor_id,reward_id,parent_hold_id,parent_ledger_id,verb,description,
-      amount,balance_after,status,note,notes,template_ids,final_amount,metadata,
-      refund_reason,refund_notes,idempotency_key,source,tags,campaign_id,ip_address,
-      user_agent,created_at,updated_at
-    )
-    SELECT ${selectExprs} FROM ${legacyName};
-  `);
-
-  // 4) Indexes on the new ledger
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency ON ledger(idempotency_key) WHERE idempotency_key IS NOT NULL");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at ON ledger(user_id, verb, created_at, id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold ON ledger(parent_hold_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger ON ledger(parent_ledger_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON ledger(user_id, created_at)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
-
-  // 5) Drop the legacy table
-  if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
-  db.exec("DROP TABLE IF EXISTS " + quoteIdent(legacyName));
-
-}
-
-rebuildLedgerTableIfLegacy();
+  
 // ---- consumed_tokens (create or evolve) ----
 let consumedCols = [];
 const hasConsumed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
@@ -831,7 +752,19 @@ function ensureDefaultMembers() {
   insertMissing(defaults);
 }
 
+function ensureSystemMember() {
+  const exists = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
+  if (!exists) {
+    const ts = Date.now();
+    db.prepare(`
+      INSERT INTO member (id, name, status, created_at, updated_at)
+      VALUES ('system', 'System', 'active', ?, ?)
+    `).run(ts, ts);
+  }
+}
+
 ensureDefaultMembers();
+ensureSystemMember();
 
 function getBalance(userId) {
   return Number(balanceOf(userId) || 0);
