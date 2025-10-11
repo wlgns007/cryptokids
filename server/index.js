@@ -247,10 +247,7 @@ const ensureTables = db.transaction(() => {
     return legacyName;
   };
   const getColumns = name =>
-    db
-      .prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')")
-      .all()
-      .map(col => col.name);
+    db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
   const dropTable = name => {
     if (!name) return false;
@@ -389,10 +386,42 @@ const ensureTables = db.transaction(() => {
       FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
     );
   `);
-
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON ledger(user_id, created_at)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
   rebuildLedgerTableIfLegacy();
+  ensureColumn(db, "ledger", "actor_id", "TEXT");
+  ensureColumn(db, "ledger", "reward_id", "TEXT");
+  ensureColumn(db, "ledger", "parent_hold_id", "TEXT");
+  ensureColumn(db, "ledger", "parent_ledger_id", "TEXT");
+  ensureColumn(db, "ledger", "verb", "TEXT");
+  ensureColumn(db, "ledger", "description", "TEXT");
+  ensureColumn(db, "ledger", "amount", "INTEGER");
+  ensureColumn(db, "ledger", "balance_after", "INTEGER");
+  ensureColumn(db, "ledger", "status", "TEXT");
+  ensureColumn(db, "ledger", "note", "TEXT");
+  ensureColumn(db, "ledger", "notes", "TEXT");
+  ensureColumn(db, "ledger", "template_ids", "TEXT");
+  ensureColumn(db, "ledger", "final_amount", "INTEGER");
+  ensureColumn(db, "ledger", "metadata", "TEXT");
+  ensureColumn(db, "ledger", "refund_reason", "TEXT");
+  ensureColumn(db, "ledger", "refund_notes", "TEXT");
+  ensureColumn(db, "ledger", "idempotency_key", "TEXT");
+  ensureColumn(db, "ledger", "source", "TEXT");
+  ensureColumn(db, "ledger", "tags", "TEXT");
+  ensureColumn(db, "ledger", "campaign_id", "TEXT");
+  ensureColumn(db, "ledger", "ip_address", "TEXT");
+  ensureColumn(db, "ledger", "user_agent", "TEXT");
+  ensureColumn(db, "ledger", "created_at", "INTEGER");
+  ensureColumn(db, "ledger", "updated_at", "INTEGER");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+    ON ledger(idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at
+    ON ledger(user_id, verb, created_at, id)
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold ON ledger(parent_hold_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger ON ledger(parent_ledger_id)");
 
   const existingSpendRequest = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'spend_request'")
@@ -580,6 +609,10 @@ function rebuildLedgerTableIfLegacy() {
         insertMany(rows);
         dropTable(legacySpend);
       }
+
+        insertMany(rows);
+        dropTable(legacySpend);
+      }
     } else {
       ensureColumn(
 db, "spend_request", "actor_id", "TEXT");
@@ -671,6 +704,109 @@ db, "consumed_tokens", "updated_at", "INTEGER");
 }
 
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      actor_id TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      verb TEXT NOT NULL,
+      description TEXT,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'posted',
+      note TEXT,
+      notes TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT UNIQUE,
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+  rebuildLedgerTableIfLegacy();
+  ensureColumn(db, "ledger", "actor_id", "TEXT");
+  ensureColumn(db, "ledger", "reward_id", "TEXT");
+  ensureColumn(db, "ledger", "parent_hold_id", "TEXT");
+  ensureColumn(db, "ledger", "parent_ledger_id", "TEXT");
+  ensureColumn(db, "ledger", "verb", "TEXT");
+  ensureColumn(db, "ledger", "description", "TEXT");
+  ensureColumn(db, "ledger", "amount", "INTEGER");
+  ensureColumn(db, "ledger", "balance_after", "INTEGER");
+  ensureColumn(db, "ledger", "status", "TEXT");
+  ensureColumn(db, "ledger", "note", "TEXT");
+  ensureColumn(db, "ledger", "notes", "TEXT");
+  ensureColumn(db, "ledger", "template_ids", "TEXT");
+  ensureColumn(db, "ledger", "final_amount", "INTEGER");
+  ensureColumn(db, "ledger", "metadata", "TEXT");
+  ensureColumn(db, "ledger", "refund_reason", "TEXT");
+  ensureColumn(db, "ledger", "refund_notes", "TEXT");
+  ensureColumn(db, "ledger", "idempotency_key", "TEXT");
+  ensureColumn(db, "ledger", "source", "TEXT");
+  ensureColumn(db, "ledger", "tags", "TEXT");
+  ensureColumn(db, "ledger", "campaign_id", "TEXT");
+  ensureColumn(db, "ledger", "ip_address", "TEXT");
+  ensureColumn(db, "ledger", "user_agent", "TEXT");
+  ensureColumn(db, "ledger", "created_at", "INTEGER");
+  ensureColumn(db, "ledger", "updated_at", "INTEGER");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+    ON ledger(idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at
+    ON ledger(user_id, verb, created_at, id)
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold ON ledger(parent_hold_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger ON ledger(parent_ledger_id)");
+
+  const existingSpendRequest = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'spend_request'")
+    .get();
+  if (!existingSpendRequest) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS spend_request (
+        id TEXT PRIMARY KEY,
+        token TEXT UNIQUE NOT NULL,
+        user_id TEXT NOT NULL,
+        reward_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        amount INTEGER,
+        title TEXT,
+        image_url TEXT,
+        actor_id TEXT,
+        source TEXT,
+        tags TEXT,
+        campaign_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES member(id),
+        FOREIGN KEY (reward_id) REFERENCES reward(id)
+      );
+    `);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
+  }
+});
+
+  migrate();
+}
 
 ensureSchema();
 ensureTables();
