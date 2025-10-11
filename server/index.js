@@ -2204,12 +2204,13 @@ app.post("/api/members", requireAdminKey, (req, res) => {
   const now = Date.now();
   try {
     insertMemberStmt.run({
-      userId,
+      id: userId,
       name,
-      dob: dob || null,
+      date_of_birth: dob || null,
       sex: sex || null,
-      createdAt: now,
-      updatedAt: now
+      status: "active",
+      created_at: now,
+      updated_at: now
     });
   } catch (err) {
     if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
@@ -2241,11 +2242,12 @@ app.patch("/api/members/:userId", requireAdminKey, (req, res) => {
   if (!name) return res.status(400).json({ error: "name required" });
   try {
     updateMemberStmt.run({
-      userId,
+      id: userId,
       name,
-      dob: dob || null,
+      date_of_birth: dob || null,
       sex: sex || null,
-      updatedAt: Date.now()
+      status: existing.status || "active",
+      updated_at: Date.now()
     });
   } catch (err) {
     console.error("updateMember failed", err);
@@ -2692,6 +2694,21 @@ app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
+app.delete("/api/rewards/:id", requireAdminKey, (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "invalid_id" });
+  try {
+    const info = db.prepare("DELETE FROM reward WHERE id = ?").run(id);
+    if (!info.changes) return res.status(404).json({ error: "not_found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("delete reward", err);
+    const code = err?.code === "SQLITE_CONSTRAINT_FOREIGNKEY" ? 409 : 500;
+    const error = code === 409 ? "reward_in_use" : "delete_reward_failed";
+    res.status(code).json({ error });
+  }
+});
+
 app.post("/api/tokens/earn", (req, res) => {
   try {
     const userId = normId(req.body?.userId);
@@ -2900,15 +2917,24 @@ app.post("/api/holds", express.json(), (req, res) => {
 
 app.get('/api/holds', requireAdminKey, (req, res) => {
   const status = (req.query?.status || 'pending').toString().toLowerCase();
+  const userId = normId(req.query?.userId ?? req.query?.user_id);
   const allowed = ['pending', 'redeemed', 'released', 'all'];
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: 'invalid_status' });
   }
   let sql = 'SELECT * FROM hold';
+  const filters = [];
   const params = [];
   if (status !== 'all') {
-    sql += ' WHERE status = ?';
+    filters.push('status = ?');
     params.push(status);
+  }
+  if (userId) {
+    filters.push('LOWER(user_id) = ?');
+    params.push(userId);
+  }
+  if (filters.length) {
+    sql += ' WHERE ' + filters.join(' AND ');
   }
   sql += ' ORDER BY created_at DESC';
   const rows = db.prepare(sql).all(...params).map(mapHoldRow);

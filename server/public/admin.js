@@ -1325,7 +1325,9 @@ details.member-fold .summary-value {
     }
     $('holdsStatus').textContent = 'Loading...';
     try {
-      const { res, body } = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
+      const params = new URLSearchParams({ status });
+      if (normalizedUser) params.set('userId', normalizedUser);
+      const { res, body } = await adminFetch(`/api/holds?${params.toString()}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         $('holdsStatus').textContent = 'Admin key invalid.';
@@ -1337,8 +1339,7 @@ details.member-fold .summary-value {
         throw new Error(msg);
       }
       const rows = Array.isArray(body) ? body : [];
-      const filtered = rows.filter(row => String(row.userId || '').trim().toLowerCase() === normalizedUser);
-      if (!filtered.length) {
+      if (!rows.length) {
         const row = document.createElement('tr');
         const cell = document.createElement('td');
         cell.colSpan = 6;
@@ -1350,7 +1351,7 @@ details.member-fold .summary-value {
         return;
       }
       const frag = document.createDocumentFragment();
-      for (const row of filtered) {
+      for (const row of rows) {
         const tr = document.createElement('tr');
         tr.dataset.holdId = row.id;
         tr.innerHTML = `
@@ -1373,7 +1374,7 @@ details.member-fold .summary-value {
         frag.appendChild(tr);
       }
       holdsTable.appendChild(frag);
-      const count = filtered.length;
+      const count = rows.length;
       const suffix = count === 1 ? '' : 's';
       $('holdsStatus').textContent = `Showing ${count} hold${suffix} for "${rawUserId}".`;
     } catch (err) {
@@ -1824,6 +1825,24 @@ setupScanner({
     updateReward(item.id, payload);
   }
 
+  const rewardsActiveBtn = $('btnShowActiveRewards');
+  const rewardsInactiveBtn = $('btnShowInactiveRewards');
+  let rewardsStatusFilter = 'active';
+
+  function updateRewardsToggleButtons() {
+    const showActive = rewardsStatusFilter === 'active';
+    if (rewardsActiveBtn) {
+      rewardsActiveBtn.disabled = showActive;
+      rewardsActiveBtn.setAttribute('aria-pressed', showActive ? 'true' : 'false');
+      rewardsActiveBtn.classList.toggle('is-selected', showActive);
+    }
+    if (rewardsInactiveBtn) {
+      rewardsInactiveBtn.disabled = !showActive;
+      rewardsInactiveBtn.setAttribute('aria-pressed', showActive ? 'false' : 'true');
+      rewardsInactiveBtn.classList.toggle('is-selected', !showActive);
+    }
+  }
+
   async function loadRewards() {
     const list = $('rewardsList');
     if (!list) return;
@@ -1832,7 +1851,12 @@ setupScanner({
     list.innerHTML = '<div class="muted">Loading...</div>';
     if (statusEl) statusEl.textContent = '';
     try {
-      const { res, body } = await adminFetch('/api/rewards');
+      const params = new URLSearchParams();
+      if (rewardsStatusFilter && rewardsStatusFilter !== 'all') {
+        params.set('status', rewardsStatusFilter === 'active' ? 'active' : 'disabled');
+      }
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const { res, body } = await adminFetch(`/api/rewards${qs}`);
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
         list.innerHTML = '<div class="muted">Admin key invalid.</div>';
@@ -1853,9 +1877,16 @@ setupScanner({
         image_url: item.image_url || item.imageUrl || '',
         youtubeUrl: item.youtubeUrl || item.youtube_url || '',
         youtube_url: item.youtube_url || item.youtubeUrl || '',
-        active: Number(item.active ?? 1) ? 1 : 0
+        status: (item.status || (item.active ? 'active' : 'disabled') || 'active').toString().toLowerCase(),
+        active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0
       }));
-      const filtered = normalized.filter(it => !filterValue || it.name.toLowerCase().includes(filterValue));
+      const filtered = normalized.filter(it => {
+        const matchesFilter = !filterValue || it.name.toLowerCase().includes(filterValue);
+        if (!matchesFilter) return false;
+        if (rewardsStatusFilter === 'active') return it.status !== 'disabled';
+        if (rewardsStatusFilter === 'disabled') return it.status === 'disabled';
+        return true;
+      });
       const showUrls = document.getElementById('adminShowUrls')?.checked;
       for (const item of filtered) {
         const card = document.createElement('div');
@@ -1973,16 +2004,36 @@ setupScanner({
         editBtn.addEventListener('click', () => editReward(item));
         actions.appendChild(editBtn);
 
-        const toggleBtn = document.createElement('button');
-        toggleBtn.textContent = item.active ? 'Deactivate' : 'Activate';
-        toggleBtn.addEventListener('click', () => updateReward(item.id, { active: item.active ? 0 : 1 }));
-        actions.appendChild(toggleBtn);
+        const isDisabled = item.status === 'disabled' || !item.active;
+        if (rewardsStatusFilter === 'disabled') {
+          const reactivateBtn = document.createElement('button');
+          reactivateBtn.textContent = 'Reactivate';
+          reactivateBtn.addEventListener('click', () => updateReward(item.id, { active: 1 }));
+          actions.appendChild(reactivateBtn);
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.textContent = 'Delete permanently';
+          deleteBtn.addEventListener('click', () => deleteReward(item.id));
+          actions.appendChild(deleteBtn);
+        } else {
+          const toggleBtn = document.createElement('button');
+          toggleBtn.textContent = isDisabled ? 'Activate' : 'Deactivate';
+          toggleBtn.addEventListener('click', () => updateReward(item.id, { active: isDisabled ? 1 : 0 }));
+          actions.appendChild(toggleBtn);
+        }
 
         card.appendChild(actions);
 
         list.appendChild(card);
       }
-      if (!filtered.length) list.innerHTML = '<div class="muted">No rewards match.</div>';
+      if (!filtered.length) {
+        const emptyLabel = rewardsStatusFilter === 'disabled' ? 'No deactivated rewards.' : 'No rewards match.';
+        list.innerHTML = `<div class="muted">${emptyLabel}</div>`;
+      }
+      if (statusEl) {
+        const label = rewardsStatusFilter === 'disabled' ? 'deactivated' : 'active';
+        statusEl.textContent = `Showing ${filtered.length} ${label} reward${filtered.length === 1 ? '' : 's'}.`;
+      }
     } catch (err) {
       const msg = err.message || 'Failed to load rewards';
       if (statusEl) statusEl.textContent = msg;
@@ -1991,6 +2042,18 @@ setupScanner({
   }
   $('btnLoadRewards')?.addEventListener('click', loadRewards);
   $('filterRewards')?.addEventListener('input', loadRewards);
+
+  rewardsActiveBtn?.addEventListener('click', () => {
+    rewardsStatusFilter = 'active';
+    updateRewardsToggleButtons();
+    loadRewards();
+  });
+
+  rewardsInactiveBtn?.addEventListener('click', () => {
+    rewardsStatusFilter = 'disabled';
+    updateRewardsToggleButtons();
+    loadRewards();
+  });
 
   async function updateReward(id, body) {
     try {
@@ -2008,6 +2071,30 @@ setupScanner({
       loadRewards();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
+    }
+  }
+
+  async function deleteReward(id) {
+    if (!confirm('Delete this reward permanently?')) return;
+    try {
+      const { res, body } = await adminFetch(`/api/rewards/${id}`, { method: 'DELETE' });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (res.status === 409) {
+        toast('Reward is referenced by existing records.', 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Delete failed');
+        throw new Error(msg);
+      }
+      toast('Reward deleted');
+      loadRewards();
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Delete failed', 'error');
     }
   }
 
@@ -2043,6 +2130,8 @@ setupScanner({
     if (descEl) descEl.value = '';
     loadRewards?.(); // refresh the list if available
   });
+
+  updateRewardsToggleButtons();
 
   // image upload
   const drop = $('drop');
