@@ -236,82 +236,315 @@ async function ensureColumn(db, table, column, type = "INTEGER") {
   }
 }
 
+// Safe column add: never uses NOT NULL on ALTER; supports default and backfill.
+function addCol(table, col, type, {
+  defaultSql = null,
+  backfillSql = null,
+  ifNotExists = true
+} = {}) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  const hasCol = cols.some(r => r.name === col);
+  if (ifNotExists && hasCol) return;
 
-// BEGIN ensureTables
-const ensureTables = db.transaction(() => {
-  const tableExists = name =>
-    !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
-  const backupTable = name => {
-    const legacyName = `${name}_legacy_${Date.now()}`;
-    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
-    if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
-    db.exec("ALTER TABLE " + quoteIdent(name) + " RENAME TO " + quoteIdent(legacyName));
-    return legacyName;
-  };
-  const getColumns = name =>
-    db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
+  const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
+  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defaultSql}, backfill=${backfillSql})`);
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`);
 
-  // --- Ledger schema hardener (runs safely multiple times) ---
-  function ensureLedgerSchema() {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS ledger (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        type TEXT NOT NULL DEFAULT 'adjust',
-        amount INTEGER NOT NULL DEFAULT 0,
-        balance_after INTEGER,
-        reason TEXT,
-        metadata TEXT,
-        related_id TEXT,
-        campaign_id TEXT,
-        actor_id TEXT,
-        source TEXT,
-        status TEXT DEFAULT 'ok',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-    `);
-    const cols = new Set(getColumns("ledger"));
-    const addCol = (name, ddl) => {
-      if (!cols.has(name)) {
-        db.exec(`ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`);
-        cols.add(name);
-      }
-    };
-    addCol("user_id", "TEXT");
-    addCol("type", "TEXT NOT NULL DEFAULT 'adjust'");
-    addCol("amount", "INTEGER NOT NULL DEFAULT 0");
-    addCol("created_at", "INTEGER NOT NULL");
-    addCol("updated_at", "INTEGER NOT NULL");
-    addCol("balance_after", "INTEGER");
-    addCol("reason", "TEXT");
-    addCol("metadata", "TEXT");
-    addCol("related_id", "TEXT");
-    addCol("campaign_id", "TEXT");
-    addCol("actor_id", "TEXT");
-    addCol("source", "TEXT");
-    addCol("status", "TEXT DEFAULT 'ok'");
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
+  if (backfillSql) {
+    db.exec(`UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`);
   }
+}
 
-  // --- Identifier helpers for SQLite DDL ---
-  function isSafeIdent(s) {
-    return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+function ensureSystemMember() {
+  const exists = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
+  if (!exists) {
+    const ts = Date.now();
+    db.prepare(`
+      INSERT INTO member (id, name, status, created_at, updated_at)
+      VALUES ('system', 'System', 'active', ?, ?)
+    `).run(ts, ts);
   }
-  function quoteIdent(s) {
-    return '"' + String(s).replace(/"/g, '""') + '"';
-  }
+}
 
-  const dropTable = name => {
-    if (!name) return false;
-    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
-    db.exec("DROP TABLE IF EXISTS " + quoteIdent(name));
-    return true;
+function rebuildLedgerTableIfLegacy() {
+  const hasLedger = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
+  if (!hasLedger) return false;
+
+  const info = db.prepare("PRAGMA table_info(ledger)").all();
+  const cols = info.map(c => c.name);
+  const idCol = info.find(c => c.name === 'id');
+  const idIsText = idCol ? String(idCol.type || '').toUpperCase().includes('TEXT') : false;
+  const isLegacy = (
+    !idIsText ||
+    cols.includes('userId') ||
+    cols.includes('action') ||
+    cols.includes('at') ||
+    cols.includes('delta') ||
+    cols.includes('kind') ||
+    cols.includes('ts')
+  );
+  if (!isLegacy) return false;
+
+  const descriptionExpr = cols.includes('description') ? 'L.description' : 'NULL';
+  const has = name => cols.includes(name);
+  const safe = name => `L.${name}`;
+  const coalesceExpr = (names, fallback = 'NULL') => {
+    const parts = names.filter(has).map(safe);
+    if (fallback !== undefined) parts.push(fallback);
+    if (parts.length === 0) return fallback;
+    if (parts.length === 1) return parts[0];
+    return `COALESCE(${parts.join(', ')})`;
   };
 
-  ensureLedgerSchema();
+  const idExpr = has('id') ? `CAST(${safe('id')} AS TEXT)` : "lower(hex(randomblob(16)))";
+  const userExpr = coalesceExpr(['user_id', 'userId'], "'system'");
+  const verbExpr = coalesceExpr(['verb', 'action', 'kind'], "'adjust'");
+  const amountExpr = coalesceExpr(['amount', 'delta'], '0');
+  const balanceExpr = has('balance_after') ? safe('balance_after') : coalesceExpr(['balance_after']);
+  const templateExpr = coalesceExpr(['template_ids', 'templates']);
+  const finalAmountExpr = coalesceExpr(['final_amount', 'finalCost']);
+  const metadataExpr = coalesceExpr(['metadata', 'meta']);
+  const noteExpr = has('note') ? safe('note') : 'NULL';
+  const notesExpr = has('notes') ? safe('notes') : 'NULL';
+  const refundReasonExpr = coalesceExpr(['refund_reason']);
+  const refundNotesExpr = coalesceExpr(['refund_notes']);
+  const idempotencyExpr = coalesceExpr(['idempotency_key', 'nonce']);
+  const sourceExpr = coalesceExpr(['source']);
+  const campaignExpr = coalesceExpr(['campaign_id']);
+  const actorExpr = coalesceExpr(['actor_id', 'actor']);
+  const ipExpr = coalesceExpr(['ip_address', 'ip']);
+  const uaExpr = coalesceExpr(['user_agent', 'ua']);
+  const statusExpr = coalesceExpr(['status'], "'posted'");
+  const tagsExpr = has('tags')
+    ? `CASE WHEN ${safe('tags')} IS NULL OR ${safe('tags')} = '' THEN '[]' ELSE ${safe('tags')} END`
+    : "'[]'";
+  const createdExpr = coalesceExpr(['created_at', 'at', 'ts'], "strftime('%s','now')*1000");
+  const updatedExpr = coalesceExpr(['updated_at', 'created_at', 'at', 'ts'], "strftime('%s','now')*1000");
 
+  const rewardExprParts = [];
+  if (has('reward_id')) {
+    rewardExprParts.push(
+      `WHEN ${safe('reward_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = ${safe('reward_id')}) THEN ${safe('reward_id')}`
+    );
+  }
+  if (has('itemId')) {
+    rewardExprParts.push(
+      `WHEN ${safe('itemId')} IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = ${safe('itemId')}) THEN ${safe('itemId')}`
+    );
+  }
+  const rewardExpr = rewardExprParts.length
+    ? `CASE ${rewardExprParts.join(' ')} ELSE NULL END`
+    : 'NULL';
+
+  const holdExprParts = [];
+  if (has('parent_hold_id')) {
+    holdExprParts.push(
+      `WHEN ${safe('parent_hold_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = ${safe('parent_hold_id')}) THEN ${safe('parent_hold_id')}`
+    );
+  }
+  if (has('holdId')) {
+    holdExprParts.push(
+      `WHEN ${safe('holdId')} IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = ${safe('holdId')}) THEN ${safe('holdId')}`
+    );
+  }
+  const parentHoldExpr = holdExprParts.length
+    ? `CASE ${holdExprParts.join(' ')} ELSE NULL END`
+    : 'NULL';
+
+  const ledgerExprParts = [];
+  if (has('parent_ledger_id')) {
+    ledgerExprParts.push(
+      `WHEN ${safe('parent_ledger_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = ${safe('parent_ledger_id')}) THEN ${safe('parent_ledger_id')}`
+    );
+  }
+  if (has('parent_tx_id')) {
+    ledgerExprParts.push(
+      `WHEN ${safe('parent_tx_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = ${safe('parent_tx_id')}) THEN ${safe('parent_tx_id')}`
+    );
+  }
+  const parentLedgerExpr = ledgerExprParts.length
+    ? `CASE ${ledgerExprParts.join(' ')} ELSE NULL END`
+    : 'NULL';
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger_new (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      verb TEXT NOT NULL,
+      amount INTEGER NOT NULL DEFAULT 0,
+      balance_after INTEGER,
+      description TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      note TEXT,
+      notes TEXT,
+      actor_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      status TEXT NOT NULL DEFAULT 'posted',
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT,
+      FOREIGN KEY (user_id) REFERENCES member(id) ON DELETE CASCADE,
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+
+  db.exec(`
+    INSERT INTO ledger_new (
+      id, user_id, verb, amount, balance_after,
+      reward_id, parent_hold_id, parent_ledger_id,
+      template_ids, final_amount, note, notes,
+      actor_id, ip_address, user_agent, status, source, tags,
+      campaign_id, created_at, updated_at, metadata,
+      refund_reason, refund_notes, idempotency_key, description
+    )
+    SELECT
+      ${idExpr} AS id,
+      ${userExpr} AS user_id,
+      ${verbExpr} AS verb,
+      ${amountExpr} AS amount,
+      ${balanceExpr} AS balance_after,
+      ${rewardExpr} AS reward_id,
+      ${parentHoldExpr} AS parent_hold_id,
+      ${parentLedgerExpr} AS parent_ledger_id,
+      ${templateExpr} AS template_ids,
+      ${finalAmountExpr} AS final_amount,
+      ${noteExpr} AS note,
+      ${notesExpr} AS notes,
+      ${actorExpr} AS actor_id,
+      ${ipExpr} AS ip_address,
+      ${uaExpr} AS user_agent,
+      ${statusExpr} AS status,
+      ${sourceExpr} AS source,
+      ${tagsExpr} AS tags,
+      ${campaignExpr} AS campaign_id,
+      ${createdExpr} AS created_at,
+      ${updatedExpr} AS updated_at,
+      ${metadataExpr} AS metadata,
+      ${refundReasonExpr} AS refund_reason,
+      ${refundNotesExpr} AS refund_notes,
+      ${idempotencyExpr} AS idempotency_key,
+      ${descriptionExpr} AS description
+    FROM ledger L;
+  `);
+
+  db.exec("DROP TABLE ledger;");
+  db.exec("ALTER TABLE ledger_new RENAME TO ledger;");
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);");
+
+  db.exec("PRAGMA foreign_keys = ON;");
+  return true;
+}
+
+function isLegacyLedger() {
+  const info = db.prepare("PRAGMA table_info(ledger)").all();
+  if (info.length === 0) return false;
+  const cols = info.map(c => c.name);
+  const idCol = info.find(c => c.name === 'id');
+  const idIsText = idCol ? String(idCol.type || '').toUpperCase().includes('TEXT') : false;
+  return (
+    !idIsText ||
+    cols.includes('userId') ||
+    cols.includes('action') ||
+    cols.includes('at') ||
+    cols.includes('delta') ||
+    cols.includes('kind') ||
+    cols.includes('ts')
+  );
+}
+
+function ensureLedgerSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      verb TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER,
+      description TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      note TEXT,
+      notes TEXT,
+      actor_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      status TEXT NOT NULL DEFAULT 'posted',
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+
+  if (isLegacyLedger()) {
+    return;
+  }
+
+  addCol('ledger', 'user_id', 'TEXT',       { defaultSql: null, backfillSql: null });
+  addCol('ledger', 'verb',    'TEXT',       { defaultSql: null, backfillSql: null });
+  addCol('ledger', 'status',  'TEXT',       { defaultSql: "'posted'", backfillSql: "'posted'" });
+  addCol('ledger', 'description', 'TEXT',   { defaultSql: "NULL",     backfillSql: "NULL" });
+  addCol('ledger', 'note',   'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
+  addCol('ledger', 'notes',  'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
+  addCol('ledger', 'source', 'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
+  addCol('ledger', 'tags',   'TEXT',        { defaultSql: "'[]'",     backfillSql: "'[]'" });
+  addCol('ledger', 'metadata','TEXT',       { defaultSql: "NULL",     backfillSql: "NULL" });
+
+  addCol('ledger', 'template_ids', 'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'amount',        'INTEGER', { defaultSql: "0",    backfillSql: "0" });
+  addCol('ledger', 'balance_after', 'INTEGER', { defaultSql: "0",    backfillSql: "0" });
+  addCol('ledger', 'final_amount',  'INTEGER', { defaultSql: "NULL", backfillSql: "NULL" });
+
+  addCol('ledger', 'reward_id',       'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'parent_hold_id',  'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'parent_ledger_id','TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'campaign_id',     'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'actor_id',        'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'ip_address',      'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'user_agent',      'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'refund_reason',   'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'refund_notes',    'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+  addCol('ledger', 'idempotency_key', 'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
+
+  addCol('ledger', 'created_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
+  addCol('ledger', 'updated_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+}
+
+function ensureMemberTable() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS member (
       id TEXT PRIMARY KEY,
@@ -335,6 +568,32 @@ const ensureTables = db.transaction(() => {
   ensureColumn(db, "member", "created_at", "INTEGER");
   ensureColumn(db, "member", "updated_at", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_member_status ON member(status)");
+}
+// BEGIN ensureTables
+const ensureTables = db.transaction(() => {
+  const tableExists = name =>
+    !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
+  const backupTable = name => {
+    const legacyName = `${name}_legacy_${Date.now()}`;
+    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
+    if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
+    db.exec("ALTER TABLE " + quoteIdent(name) + " RENAME TO " + quoteIdent(legacyName));
+    return legacyName;
+  };
+  // --- Identifier helpers for SQLite DDL ---
+  function isSafeIdent(s) {
+    return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+  }
+  function quoteIdent(s) {
+    return '"' + String(s).replace(/"/g, '""') + '"';
+  }
+
+  const dropTable = name => {
+    if (!name) return false;
+    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
+    db.exec("DROP TABLE IF EXISTS " + quoteIdent(name));
+    return true;
+  };
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
@@ -414,156 +673,41 @@ const ensureTables = db.transaction(() => {
   ensureColumn(db, "hold", "expires_at", "INTEGER");
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS ledger (
+    CREATE TABLE IF NOT EXISTS spend_request (
       id TEXT PRIMARY KEY,
+      token TEXT UNIQUE NOT NULL,
       user_id TEXT NOT NULL,
-      actor_id TEXT,
       reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      amount INTEGER,
+      title TEXT,
+      image_url TEXT,
+      actor_id TEXT,
       source TEXT,
       tags TEXT,
       campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+      FOREIGN KEY (reward_id) REFERENCES reward(id)
     );
   `);
-function rebuildLedgerTableIfLegacy() {
-  // If ledger table doesn't exist (first run), nothing to upgrade.
-  const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
-  if (!table) return;
+  ensureColumn(db, "spend_request", "token", "TEXT");
+  ensureColumn(db, "spend_request", "user_id", "TEXT");
+  ensureColumn(db, "spend_request", "reward_id", "TEXT");
+  ensureColumn(db, "spend_request", "status", "TEXT");
+  ensureColumn(db, "spend_request", "amount", "INTEGER");
+  ensureColumn(db, "spend_request", "title", "TEXT");
+  ensureColumn(db, "spend_request", "image_url", "TEXT");
+  ensureColumn(db, "spend_request", "actor_id", "TEXT");
+  ensureColumn(db, "spend_request", "source", "TEXT");
+  ensureColumn(db, "spend_request", "tags", "TEXT");
+  ensureColumn(db, "spend_request", "campaign_id", "TEXT");
+  ensureColumn(db, "spend_request", "created_at", "INTEGER");
+  ensureColumn(db, "spend_request", "updated_at", "INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_token ON spend_request(token)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user_status ON spend_request(user_id, status)");
 
-  // Check if current ledger schema is legacy
-  const cols = db.prepare("PRAGMA table_info('ledger')").all().map(c => c.name);
-  const desired = new Set([
-    "id","user_id","actor_id","reward_id","parent_hold_id","parent_ledger_id","verb",
-    "description","amount","balance_after","status","note","notes","template_ids",
-    "final_amount","metadata","refund_reason","refund_notes","idempotency_key",
-    "source","tags","campaign_id","ip_address","user_agent","created_at","updated_at"
-  ]);
-  const isLegacy = cols.some(c => !desired.has(c)) || desired.size !== cols.length;
-  if (!isLegacy) return;
-
-  // 1) Rename old table
-  const legacyName = `ledger_legacy_${Date.now()}`;
-  db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
-
-  // 2) Recreate new ledger table with the desired schema
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
-    );
-  `);
-
-  // 3) Copy data from legacy -> new with safe defaults/mapping
-  const legacyCols = db.prepare(`PRAGMA table_info('${legacyName}')`).all().map(c => c.name);
-  const has = (c) => legacyCols.includes(c);
-  const selectExprs = [
-    has("id") ? "id" : "lower(hex(randomblob(16))) AS id",
-    "user_id",
-    has("actor_id") ? "actor_id" : "NULL AS actor_id",
-    has("reward_id") ? "reward_id" : "NULL AS reward_id",
-    "NULL AS parent_hold_id",
-    has("parent_ledger_id") ? "parent_ledger_id" : "NULL AS parent_ledger_id",
-    has("verb") ? "verb" : "'adjust' AS verb",
-    has("description") ? "description" : "NULL AS description",
-    has("amount") ? "amount" : "0 AS amount",
-    has("balance_after") ? "balance_after" : "0 AS balance_after",
-    has("status") ? "COALESCE(NULLIF(status,''),'posted')" : "'posted' AS status",
-    has("note") ? "note" : "NULL AS note",
-    has("notes") ? "notes" : "NULL AS notes",
-    has("template_ids") ? "template_ids" : "NULL AS template_ids",
-    has("final_amount") ? "final_amount" : "NULL AS final_amount",
-    has("metadata") ? "metadata" : "NULL AS metadata",
-    has("refund_reason") ? "refund_reason" : "NULL AS refund_reason",
-    has("refund_notes") ? "refund_notes" : "NULL AS refund_notes",
-    has("idempotency_key") ? "idempotency_key" : "NULL AS idempotency_key",
-    has("source") ? "source" : "NULL AS source",
-    has("tags") ? "tags" : "NULL AS tags",
-    has("campaign_id") ? "campaign_id" : "NULL AS campaign_id",
-    has("ip_address") ? "ip_address" : "NULL AS ip_address",
-    has("user_agent") ? "user_agent" : "NULL AS user_agent",
-    has("created_at")
-      ? "CASE WHEN created_at IS NULL OR created_at=0 THEN strftime('%s','now')*1000 ELSE created_at END AS created_at"
-      : "strftime('%s','now')*1000 AS created_at",
-    has("updated_at")
-      ? "CASE WHEN updated_at IS NULL OR updated_at=0 THEN strftime('%s','now')*1000 ELSE updated_at END AS updated_at"
-      : "strftime('%s','now')*1000 AS updated_at"
-  ].join(", ");
-
-  db.exec(`
-    INSERT INTO ledger (
-      id,user_id,actor_id,reward_id,parent_hold_id,parent_ledger_id,verb,description,
-      amount,balance_after,status,note,notes,template_ids,final_amount,metadata,
-      refund_reason,refund_notes,idempotency_key,source,tags,campaign_id,ip_address,
-      user_agent,created_at,updated_at
-    )
-    SELECT ${selectExprs} FROM ${legacyName};
-  `);
-
-  // 4) Indexes on the new ledger
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency ON ledger(idempotency_key) WHERE idempotency_key IS NOT NULL");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at ON ledger(user_id, verb, created_at, id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold ON ledger(parent_hold_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_ledger ON ledger(parent_ledger_id)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON ledger(user_id, created_at)");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
-
-  // 5) Drop the legacy table
-  if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
-  db.exec("DROP TABLE IF EXISTS " + quoteIdent(legacyName));
-
-}
-
-rebuildLedgerTableIfLegacy();
 // ---- consumed_tokens (create or evolve) ----
 let consumedCols = [];
 const hasConsumed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
@@ -610,10 +754,15 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_toke
  
 });
 
-function ensureSchema(){
+const ensureSchema = db.transaction(() => {
+  ensureDefaultMembers();
+  ensureSystemMember();
+
+  rebuildLedgerTableIfLegacy();
+
   ensureTables();
-  
-}
+  ensureLedgerSchema();
+});
 
 ensureSchema();
 function nowSec() {
@@ -646,12 +795,6 @@ const insertMemberStmt = db.prepare(`
   VALUES (@id, @name, @date_of_birth, @sex, @status, @created_at, @updated_at)
 `);
 
-const selectMemberExistsStmt = db.prepare(`
-  SELECT 1
-  FROM member
-  WHERE id = ?
-`);
-
 const updateMemberStmt = db.prepare(`
   UPDATE member
   SET name = @name,
@@ -668,31 +811,37 @@ const deleteMemberStmt = db.prepare(`
 `);
 
 function ensureDefaultMembers() {
+  ensureMemberTable();
+
   const defaults = [
     { id: "leo", name: "Leo", date_of_birth: null, sex: null, status: "active" }
   ];
 
+  const checkStmt = db.prepare("SELECT 1 FROM member WHERE id = ?");
+  const insertStmt = db.prepare(`
+    INSERT INTO member (id, name, date_of_birth, sex, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
   const insertMissing = db.transaction(members => {
     for (const member of members) {
-      if (!selectMemberExistsStmt.get(member.id)) {
+      if (!checkStmt.get(member.id)) {
         const ts = Date.now();
-        insertMemberStmt.run({
-          id: member.id,
-          name: member.name,
-          date_of_birth: member.date_of_birth,
-          sex: member.sex,
-          status: member.status || "active",
-          created_at: ts,
-          updated_at: ts
-        });
+        insertStmt.run(
+          member.id,
+          member.name,
+          member.date_of_birth,
+          member.sex,
+          member.status || "active",
+          ts,
+          ts
+        );
       }
     }
   });
 
   insertMissing(defaults);
 }
-
-ensureDefaultMembers();
 
 function getBalance(userId) {
   return Number(balanceOf(userId) || 0);
