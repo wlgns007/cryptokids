@@ -253,13 +253,12 @@ const ensureTables = db.transaction(() => {
 
   // --- Ledger schema hardener (runs safely multiple times) ---
   function ensureLedgerSchema() {
-    // 1) Create table if missing (minimal shape; relaxed NOT NULLs to avoid ALTER issues)
     db.exec(`
       CREATE TABLE IF NOT EXISTS ledger (
         id TEXT PRIMARY KEY,
         user_id TEXT,
-        type TEXT,
-        amount INTEGER,
+        type TEXT NOT NULL DEFAULT 'adjust',
+        amount INTEGER NOT NULL DEFAULT 0,
         balance_after INTEGER,
         reason TEXT,
         metadata TEXT,
@@ -267,41 +266,23 @@ const ensureTables = db.transaction(() => {
         campaign_id TEXT,
         actor_id TEXT,
         source TEXT,
-        status TEXT,
-        created_at INTEGER,
-        updated_at INTEGER
+        status TEXT DEFAULT 'ok',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
     `);
-
-    const existing = new Set(getColumns("ledger"));
-
-    // helper: add column safely; if DDL includes NOT NULL, force a DEFAULT too
-    const addCol = (name, ddl, defaultLiteral = null, backfillExpr = null) => {
-      if (existing.has(name)) return;
-      let stmt = `ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`;
-      // If NOT NULL appears but no DEFAULT provided, inject a DEFAULT
-      if (/NOT\s+NULL/i.test(ddl) && !/DEFAULT/i.test(ddl)) {
-        const def = defaultLiteral != null ? ` DEFAULT ${defaultLiteral}` : " DEFAULT 0";
-        stmt += def;
-      }
-      db.exec(stmt);
-      existing.add(name);
-      if (backfillExpr) {
-        db.exec(`UPDATE ledger SET ${name} = ${backfillExpr} WHERE ${name} IS NULL`);
+    const cols = new Set(getColumns("ledger"));
+    const addCol = (name, ddl) => {
+      if (!cols.has(name)) {
+        db.exec(`ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`);
+        cols.add(name);
       }
     };
-
-    // 2) Required columns with safe defaults + backfill
-    addCol("user_id", "TEXT"); // nullable is fine; app enforces semantics
-    addCol("type", "TEXT NOT NULL", `'adjust'`, `'adjust'`);
-    addCol("amount", "INTEGER NOT NULL", 0, 0);
-
-    // Use epoch ms now for created/updated when missing/zero
-    const nowMs = "CAST(strftime('%s','now') AS INTEGER)*1000";
-    addCol("created_at", "INTEGER NOT NULL", 0, nowMs);
-    addCol("updated_at", "INTEGER NOT NULL", 0, nowMs);
-
-    // 3) Nice-to-haves
+    addCol("user_id", "TEXT");
+    addCol("type", "TEXT NOT NULL DEFAULT 'adjust'");
+    addCol("amount", "INTEGER NOT NULL DEFAULT 0");
+    addCol("created_at", "INTEGER NOT NULL");
+    addCol("updated_at", "INTEGER NOT NULL");
     addCol("balance_after", "INTEGER");
     addCol("reason", "TEXT");
     addCol("metadata", "TEXT");
@@ -309,9 +290,7 @@ const ensureTables = db.transaction(() => {
     addCol("campaign_id", "TEXT");
     addCol("actor_id", "TEXT");
     addCol("source", "TEXT");
-    addCol("status", "TEXT NOT NULL", `'ok'`, `'ok'`);
-
-    // 4) Indexes (idempotent)
+    addCol("status", "TEXT DEFAULT 'ok'");
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
   }
