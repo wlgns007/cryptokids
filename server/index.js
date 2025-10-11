@@ -372,6 +372,11 @@ function rebuildLedgerTableIfLegacy() {
       db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+        ON ledger(idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+      `);
     }
 
     db.exec(`
@@ -434,6 +439,11 @@ function rebuildLedgerTableIfLegacy() {
 
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+      ON ledger(idempotency_key)
+      WHERE idempotency_key IS NOT NULL
+    `);
   }
   const rewardExpr = rewardExprParts.length
     ? `CASE ${rewardExprParts.join(' ')} ELSE NULL END`
@@ -521,7 +531,7 @@ function ensureLedgerSchema() {
       metadata TEXT,
       refund_reason TEXT,
       refund_notes TEXT,
-      idempotency_key TEXT,
+      idempotency_key TEXT UNIQUE,
       FOREIGN KEY (user_id) REFERENCES member(id),
       FOREIGN KEY (reward_id) REFERENCES reward(id),
       FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
@@ -565,6 +575,11 @@ function ensureLedgerSchema() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency
+    ON ledger(idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `);
 }
 
 function ensureMemberTable() {
