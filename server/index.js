@@ -783,9 +783,8 @@ const ensureTables = db.transaction(() => {
   `);
   
 // ---- consumed_tokens (create or evolve) ----
-let consumedCols = [];
-const hasConsumed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
-if (!hasConsumed) {
+let consumedCols;
+if (!tableExists("consumed_tokens")) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS consumed_tokens (
       id TEXT PRIMARY KEY,
@@ -822,10 +821,9 @@ if (!hasConsumed) {
   ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER");
 }
 
-db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
-db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
-db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
- 
+  db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
 });
 
 const ensureSchema = db.transaction(() => {
