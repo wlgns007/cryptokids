@@ -238,149 +238,37 @@ async function ensureColumn(db, table, column, type = "INTEGER") {
 
 // Safe column add: never uses NOT NULL on ALTER; supports default and backfill.
 function addCol(table, col, type, {
-  defaultSql = null,
-  backfillSql = null,
+  defaultSql = null,     // e.g., "'posted'" or "0" or "CURRENT_TIMESTAMP"
+  backfillSql = null,    // e.g., "'posted'" or "unixepoch('now')" or "0"
   ifNotExists = true
 } = {}) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  const hasCol = cols.some(r => r.name === col);
+  const hasCol = !!db.prepare(`PRAGMA table_info(${table})`).all()
+    .some(r => r.name === col);
   if (ifNotExists && hasCol) return;
 
+  // 1) Add column as NULLABLE, with DEFAULT only if you want new rows to get it.
   const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
-  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defaultSql}, backfill=${backfillSql})`);
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`);
-
-  if (backfillSql) {
-    db.exec(`UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`);
+  const defLog = defaultSql ?? "null";
+  const backfillLog = backfillSql ?? "null";
+  const alterSql = `ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`;
+  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defLog}, backfill=${backfillLog})`);
+  try {
+    db.exec(alterSql);
+  } catch (err) {
+    console.error(`[ensureLedgerSchema] Failed SQL: ${alterSql}`);
+    throw err;
   }
-}
 
-function rebuildLedgerTableIfLegacy() {
-  const hasLedger = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
-  if (!hasLedger) return;
-
-  const ledgerSchema = db.prepare("PRAGMA table_info(ledger)").all();
-  const cols = ledgerSchema.map(c => c.name);
-  const idCol = ledgerSchema.find(c => c.name === 'id');
-  const idIsText = idCol ? String(idCol.type || '').toUpperCase().includes('TEXT') : false;
-  const isLegacy =
-    cols.includes('userId') ||
-    cols.includes('action') ||
-    cols.includes('at') ||
-    cols.includes('delta') ||
-    cols.includes('reason') ||
-    !idIsText;
-
-  if (!isLegacy) return;
-
-  db.exec("PRAGMA foreign_keys = OFF;");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ledger_new (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL DEFAULT 0,
-      balance_after INTEGER,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      note TEXT,
-      notes TEXT,
-      actor_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      status TEXT NOT NULL DEFAULT 'posted',
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT,
-
-      FOREIGN KEY (user_id) REFERENCES member(id) ON DELETE CASCADE,
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
-    );
-  `);
-
-  const has = name => cols.includes(name);
-  const col = name => (has(name) ? `L.${name}` : 'NULL');
-  const idExpr = has('id') ? 'CAST(L.id AS TEXT)' : "lower(hex(randomblob(16)))";
-  const rewardExpr = `CASE
-      WHEN ${col('reward_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = ${col('reward_id')}) THEN ${col('reward_id')}
-      WHEN ${col('itemId')} IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = ${col('itemId')}) THEN ${col('itemId')}
-      ELSE NULL
-    END`;
-  const holdExpr = `CASE
-      WHEN ${col('parent_hold_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = ${col('parent_hold_id')}) THEN ${col('parent_hold_id')}
-      WHEN ${col('holdId')} IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = ${col('holdId')}) THEN ${col('holdId')}
-      ELSE NULL
-    END`;
-  const parentLedgerExpr = `CASE
-      WHEN ${col('parent_ledger_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = ${col('parent_ledger_id')}) THEN ${col('parent_ledger_id')}
-      WHEN ${col('parent_tx_id')} IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = ${col('parent_tx_id')}) THEN ${col('parent_tx_id')}
-      ELSE NULL
-    END`;
-  const tagsExpr = `CASE
-      WHEN ${col('tags')} IS NULL OR ${col('tags')} = '' THEN '[]'
-      ELSE ${col('tags')}
-    END`;
-
-  db.exec(`
-    INSERT INTO ledger_new (
-      id, user_id, verb, description, amount, balance_after,
-      reward_id, parent_hold_id, parent_ledger_id,
-      template_ids, final_amount, note, notes,
-      actor_id, ip_address, user_agent, status, source, tags,
-      campaign_id, created_at, updated_at, metadata,
-      refund_reason, refund_notes, idempotency_key
-    )
-    SELECT
-      ${idExpr},
-      COALESCE(${col('user_id')}, ${col('userId')}, 'system')                                   AS user_id,
-      COALESCE(${col('verb')}, ${col('kind')}, 'adjust')                                         AS verb,
-      COALESCE(${col('description')}, ${col('reason')}, ${col('action')})                        AS description,
-      COALESCE(${col('amount')}, ${col('delta')}, 0)                                             AS amount,
-      COALESCE(${col('balance_after')}, 0)                                                       AS balance_after,
-      ${rewardExpr}                                                                             AS reward_id,
-      ${holdExpr}                                                                               AS parent_hold_id,
-      ${parentLedgerExpr}                                                                       AS parent_ledger_id,
-      COALESCE(${col('template_ids')}, ${col('templates')})                                      AS template_ids,
-      COALESCE(${col('final_amount')}, ${col('finalCost')})                                      AS final_amount,
-      ${col('note')}                                                                            AS note,
-      ${col('notes')}                                                                           AS notes,
-      COALESCE(${col('actor_id')}, ${col('actor')})                                              AS actor_id,
-      COALESCE(${col('ip_address')}, ${col('ip')})                                               AS ip_address,
-      COALESCE(${col('user_agent')}, ${col('ua')})                                               AS user_agent,
-      COALESCE(${col('status')}, 'posted')                                                       AS status,
-      ${col('source')}                                                                          AS source,
-      ${tagsExpr}                                                                               AS tags,
-      ${col('campaign_id')}                                                                     AS campaign_id,
-      COALESCE(${col('created_at')}, ${col('ts')}, ${col('at')}, strftime('%s','now')*1000)      AS created_at,
-      COALESCE(${col('updated_at')}, ${col('created_at')}, ${col('ts')}, strftime('%s','now')*1000) AS updated_at,
-      COALESCE(${col('metadata')}, ${col('meta')})                                               AS metadata,
-      ${col('refund_reason')}                                                                   AS refund_reason,
-      ${col('refund_notes')}                                                                    AS refund_notes,
-      COALESCE(${col('idempotency_key')}, ${col('nonce')})                                       AS idempotency_key
-    FROM ledger L;
-  `);
-
-  db.exec("DROP TABLE ledger;");
-  db.exec("ALTER TABLE ledger_new RENAME TO ledger;");
-
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);");
-
-  db.exec("PRAGMA foreign_keys = ON;");
+  // 2) Backfill existing rows so the app logic has non-null data to work with.
+  if (backfillSql) {
+    const updateSql = `UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`;
+    try {
+      db.exec(updateSql);
+    } catch (err) {
+      console.error(`[ensureLedgerSchema] Failed SQL: ${updateSql}`);
+      throw err;
+    }
+  }
 }
 
 
@@ -397,6 +285,57 @@ const ensureTables = db.transaction(() => {
   };
   // --- Ledger schema hardener (runs safely multiple times) ---
   function ensureLedgerSchema() {
+    // --- MIGRATE legacy camelCase ledger columns to modern snake_case ---
+    if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get()) {
+      const ledgerCols = db.prepare("PRAGMA table_info(ledger)").all().map(c => c.name);
+      const hasLegacy = ledgerCols.includes('userId') || ledgerCols.includes('action') || ledgerCols.includes('at');
+
+      // 1) Ensure ALL modern columns exist FIRST (nullable on ALTER).
+      addCol('ledger', 'user_id',         'TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'verb',            'TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'amount',          'INTEGER', { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'created_at',      'INTEGER', { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'updated_at',      'INTEGER', { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'final_amount',    'INTEGER', { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'template_ids',    'TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'reward_id',       'TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'parent_hold_id',  'TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'parent_ledger_id','TEXT',    { defaultSql: null, backfillSql: null });
+      addCol('ledger', 'status',          'TEXT',    { defaultSql: "'posted'", backfillSql: "'posted'" });
+      addCol('ledger', 'source',          'TEXT',    { defaultSql: null,       backfillSql: null });
+      addCol('ledger', 'tags',            'TEXT',    { defaultSql: "'[]'",     backfillSql: "'[]'" });
+      addCol('ledger', 'metadata',        'TEXT',    { defaultSql: null,       backfillSql: null });
+      addCol('ledger', 'campaign_id',     'TEXT',    { defaultSql: null,       backfillSql: null });
+      addCol('ledger', 'actor_id',        'TEXT',    { defaultSql: null,       backfillSql: null });
+      addCol('ledger', 'ip_address',      'TEXT',    { defaultSql: null,       backfillSql: null });
+      addCol('ledger', 'user_agent',      'TEXT',    { defaultSql: null,       backfillSql: null });
+
+      // 2) Backfill modern columns from legacy names (only if legacy exists).
+      if (hasLegacy) {
+        // created_at from legacy `at` (already ms), else now()
+        db.exec(`
+          UPDATE ledger
+          SET
+            user_id      = COALESCE(user_id, userId),
+            verb         = COALESCE(verb, action),
+            amount       = COALESCE(amount, delta),
+            created_at   = COALESCE(created_at, at, (strftime('%s','now')*1000)),
+            updated_at   = COALESCE(updated_at, created_at, (strftime('%s','now')*1000)),
+            final_amount = COALESCE(final_amount, finalCost),
+            template_ids = COALESCE(template_ids, templates)
+        `);
+
+        // Optional cleanups for JSON-ish text defaults
+        db.exec(`UPDATE ledger SET tags = '[]' WHERE tags IS NULL;`);
+        db.exec(`UPDATE ledger SET status = 'posted' WHERE status IS NULL;`);
+      }
+
+      // 3) Only NOW create or recreate indexes referencing snake_case columns.
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+    }
+
     db.exec(`
       CREATE TABLE IF NOT EXISTS ledger (
         id TEXT PRIMARY KEY,
@@ -432,18 +371,11 @@ const ensureTables = db.transaction(() => {
       );
     `);
 
-
-    addCol('ledger', 'user_id', 'TEXT',       { defaultSql: null, backfillSql: null });
-    addCol('ledger', 'verb',    'TEXT',       { defaultSql: null, backfillSql: null });
-    addCol('ledger', 'status',  'TEXT',       { defaultSql: "'posted'", backfillSql: "'posted'" });
-    addCol('ledger', 'description', 'TEXT',   { defaultSql: "NULL",     backfillSql: "NULL" });
-    addCol('ledger', 'note',   'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
-    addCol('ledger', 'notes',  'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
+    addCol('ledger', 'status', 'TEXT',        { defaultSql: "'posted'", backfillSql: "'posted'" });
     addCol('ledger', 'source', 'TEXT',        { defaultSql: "NULL",     backfillSql: "NULL" });
     addCol('ledger', 'tags',   'TEXT',        { defaultSql: "'[]'",     backfillSql: "'[]'" });
     addCol('ledger', 'metadata','TEXT',       { defaultSql: "NULL",     backfillSql: "NULL" });
 
-    addCol('ledger', 'template_ids', 'TEXT', { defaultSql: "NULL", backfillSql: "NULL" });
     addCol('ledger', 'amount',        'INTEGER', { defaultSql: "0",    backfillSql: "0" });
     addCol('ledger', 'balance_after', 'INTEGER', { defaultSql: "0",    backfillSql: "0" });
     addCol('ledger', 'final_amount',  'INTEGER', { defaultSql: "NULL", backfillSql: "NULL" });
@@ -462,9 +394,8 @@ const ensureTables = db.transaction(() => {
     addCol('ledger', 'created_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
     addCol('ledger', 'updated_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
 
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
   }
 
   // --- Identifier helpers for SQLite DDL ---
@@ -588,6 +519,42 @@ const ensureTables = db.transaction(() => {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS spend_request (
+      id TEXT PRIMARY KEY,
+      token TEXT UNIQUE NOT NULL,
+      user_id TEXT NOT NULL,
+      reward_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      amount INTEGER,
+      title TEXT,
+      image_url TEXT,
+      actor_id TEXT,
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id)
+    );
+  `);
+  ensureColumn(db, "spend_request", "token", "TEXT");
+  ensureColumn(db, "spend_request", "user_id", "TEXT");
+  ensureColumn(db, "spend_request", "reward_id", "TEXT");
+  ensureColumn(db, "spend_request", "status", "TEXT");
+  ensureColumn(db, "spend_request", "amount", "INTEGER");
+  ensureColumn(db, "spend_request", "title", "TEXT");
+  ensureColumn(db, "spend_request", "image_url", "TEXT");
+  ensureColumn(db, "spend_request", "actor_id", "TEXT");
+  ensureColumn(db, "spend_request", "source", "TEXT");
+  ensureColumn(db, "spend_request", "tags", "TEXT");
+  ensureColumn(db, "spend_request", "campaign_id", "TEXT");
+  ensureColumn(db, "spend_request", "created_at", "INTEGER");
+  ensureColumn(db, "spend_request", "updated_at", "INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_token ON spend_request(token)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user_status ON spend_request(user_id, status)");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
       id TEXT PRIMARY KEY,
       token TEXT UNIQUE NOT NULL,
       user_id TEXT NOT NULL,
