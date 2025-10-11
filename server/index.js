@@ -251,46 +251,86 @@ const ensureTables = db.transaction(() => {
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
+  const LEDGER_COLUMNS = [
+    { name: "id", create: "TEXT PRIMARY KEY", skipAlter: true },
+    { name: "user_id", create: "TEXT NOT NULL", alter: "TEXT NOT NULL DEFAULT ''" },
+    { name: "actor_id", create: "TEXT" },
+    { name: "reward_id", create: "TEXT" },
+    { name: "parent_hold_id", create: "TEXT" },
+    { name: "parent_ledger_id", create: "TEXT" },
+    { name: "verb", create: "TEXT NOT NULL", alter: "TEXT NOT NULL DEFAULT 'adjust'" },
+    { name: "description", create: "TEXT" },
+    { name: "amount", create: "INTEGER NOT NULL", alter: "INTEGER NOT NULL DEFAULT 0" },
+    { name: "balance_after", create: "INTEGER NOT NULL", alter: "INTEGER NOT NULL DEFAULT 0" },
+    { name: "status", create: "TEXT NOT NULL DEFAULT 'posted'", alter: "TEXT NOT NULL DEFAULT 'posted'" },
+    { name: "note", create: "TEXT" },
+    { name: "notes", create: "TEXT" },
+    { name: "template_ids", create: "TEXT" },
+    { name: "final_amount", create: "INTEGER" },
+    { name: "metadata", create: "TEXT" },
+    { name: "refund_reason", create: "TEXT" },
+    { name: "refund_notes", create: "TEXT" },
+    { name: "idempotency_key", create: "TEXT UNIQUE", alter: "TEXT" },
+    { name: "source", create: "TEXT" },
+    { name: "tags", create: "TEXT" },
+    { name: "campaign_id", create: "TEXT" },
+    { name: "ip_address", create: "TEXT" },
+    { name: "user_agent", create: "TEXT" },
+    {
+      name: "created_at",
+      create: "INTEGER NOT NULL",
+      alter: "INTEGER NOT NULL DEFAULT 0",
+      afterAdd(db) {
+        const now = Math.floor(Date.now() / 1000);
+        db.prepare(
+          `UPDATE ledger
+             SET created_at = COALESCE(created_at, ?)
+           WHERE created_at IS NULL OR created_at = 0`
+        ).run(now);
+      }
+    },
+    {
+      name: "updated_at",
+      create: "INTEGER NOT NULL",
+      alter: "INTEGER NOT NULL DEFAULT 0",
+      afterAdd(db) {
+        const now = Math.floor(Date.now() / 1000);
+        db.prepare(
+          `UPDATE ledger
+             SET updated_at = COALESCE(updated_at, ?)
+           WHERE updated_at IS NULL OR updated_at = 0`
+        ).run(now);
+      }
+    }
+  ];
+  const LEDGER_FOREIGN_KEYS = [
+    "FOREIGN KEY (user_id) REFERENCES member(id)",
+    "FOREIGN KEY (reward_id) REFERENCES reward(id)",
+    "FOREIGN KEY (parent_hold_id) REFERENCES hold(id)",
+    "FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)"
+  ];
+  const ledgerCreateParts = [
+    ...LEDGER_COLUMNS.map(col => `${col.name} ${col.create}`),
+    ...LEDGER_FOREIGN_KEYS
+  ];
+
   // --- Ledger schema hardener (runs safely multiple times) ---
   function ensureLedgerSchema() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS ledger (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        type TEXT NOT NULL DEFAULT 'adjust',
-        amount INTEGER NOT NULL DEFAULT 0,
-        balance_after INTEGER,
-        reason TEXT,
-        metadata TEXT,
-        related_id TEXT,
-        campaign_id TEXT,
-        actor_id TEXT,
-        source TEXT,
-        status TEXT DEFAULT 'ok',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        ${ledgerCreateParts.join(",\n        ")}
       );
     `);
     const cols = new Set(getColumns("ledger"));
-    const addCol = (name, ddl) => {
-      if (!cols.has(name)) {
-        db.exec(`ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`);
-        cols.add(name);
+    for (const col of LEDGER_COLUMNS) {
+      if (cols.has(col.name) || col.skipAlter) continue;
+      const ddl = col.alter || col.create;
+      db.exec(`ALTER TABLE ledger ADD COLUMN ${col.name} ${ddl}`);
+      cols.add(col.name);
+      if (typeof col.afterAdd === "function") {
+        col.afterAdd(db);
       }
-    };
-    addCol("user_id", "TEXT");
-    addCol("type", "TEXT NOT NULL DEFAULT 'adjust'");
-    addCol("amount", "INTEGER NOT NULL DEFAULT 0");
-    addCol("created_at", "INTEGER NOT NULL");
-    addCol("updated_at", "INTEGER NOT NULL");
-    addCol("balance_after", "INTEGER");
-    addCol("reason", "TEXT");
-    addCol("metadata", "TEXT");
-    addCol("related_id", "TEXT");
-    addCol("campaign_id", "TEXT");
-    addCol("actor_id", "TEXT");
-    addCol("source", "TEXT");
-    addCol("status", "TEXT DEFAULT 'ok'");
+    }
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
   }
@@ -415,36 +455,7 @@ const ensureTables = db.transaction(() => {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+      ${ledgerCreateParts.join(",\n      ")}
     );
   `);
 function rebuildLedgerTableIfLegacy() {
@@ -454,12 +465,7 @@ function rebuildLedgerTableIfLegacy() {
 
   // Check if current ledger schema is legacy
   const cols = db.prepare("PRAGMA table_info('ledger')").all().map(c => c.name);
-  const desired = new Set([
-    "id","user_id","actor_id","reward_id","parent_hold_id","parent_ledger_id","verb",
-    "description","amount","balance_after","status","note","notes","template_ids",
-    "final_amount","metadata","refund_reason","refund_notes","idempotency_key",
-    "source","tags","campaign_id","ip_address","user_agent","created_at","updated_at"
-  ]);
+  const desired = new Set(LEDGER_COLUMNS.map(col => col.name));
   const isLegacy = cols.some(c => !desired.has(c)) || desired.size !== cols.length;
   if (!isLegacy) return;
 
@@ -470,36 +476,7 @@ function rebuildLedgerTableIfLegacy() {
   // 2) Recreate new ledger table with the desired schema
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+      ${ledgerCreateParts.join(",\n      ")}
     );
   `);
 
