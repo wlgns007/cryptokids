@@ -458,7 +458,7 @@ async function ensureSchema() {
   ensureTables();
 }
 
-function rebuildLedgerTableIfLegacy() {
+  function rebuildLedgerTableIfLegacy() {
   const info = db.prepare("PRAGMA table_info('ledger')").all();
   if (!info.length) return;
   const idColumn = info.find(col => col.name === "id");
