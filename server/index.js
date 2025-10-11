@@ -691,10 +691,11 @@ const ensureTables = db.transaction(() => {
   `);
 });
 
-// ==== BEGIN ensureConsumedTokens ====
 function ensureConsumedTokens() {
   let consumedCols;
-  const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
+  const has = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'")
+    .get();
 
   if (!has) {
     db.exec(`
@@ -723,7 +724,7 @@ function ensureConsumedTokens() {
       db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
       consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
     }
-    // Safe, nullable adds
+    // Safe, nullable adds only
     ensureColumn(db, "consumed_tokens", "token", "TEXT");
     ensureColumn(db, "consumed_tokens", "typ", "TEXT");
     ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
@@ -738,7 +739,6 @@ function ensureConsumedTokens() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
 }
-// ==== END ensureConsumedTokens ====
 
 const ensureSchema = db.transaction(() => {
   ensureDefaultMembers();
@@ -746,9 +746,9 @@ const ensureSchema = db.transaction(() => {
 
   rebuildLedgerTableIfLegacy(); // runs once or no-ops
 
-  ensureTables();               // other tables
-  ensureConsumedTokens();       // consumed_tokens, now as a function
-  ensureLedgerSchema();         // your addCol-safe path (no NOT NULL on ALTER)
+  ensureTables();
+  ensureConsumedTokens();
+  ensureLedgerSchema();
 });
 
 ensureSchema();
