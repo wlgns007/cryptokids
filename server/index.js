@@ -275,9 +275,18 @@ function rebuildLedgerTableIfLegacy() {
   const hasLedger = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
   if (!hasLedger) return false;
 
+  if (!isLegacyLedger()) return false;
+
   const cols = db.prepare("PRAGMA table_info(ledger)").all().map(c => c.name);
-  const isLegacy = cols.includes('userId') || cols.includes('action') || cols.includes('at');
-  if (!isLegacy) return false;
+  const colSet = new Set(cols);
+  const hasCol = name => colSet.has(name);
+  const buildCoalesce = (names, fallbackSql = null) => {
+    const terms = names.filter(hasCol).map(name => `L.${name}`);
+    if (fallbackSql) terms.push(fallbackSql);
+    if (terms.length === 0) return fallbackSql ?? 'NULL';
+    if (terms.length === 1) return terms[0];
+    return `COALESCE(${terms.join(', ')})`;
+  };
 
   // Make sure a fallback user exists
   const sys = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
@@ -323,6 +332,43 @@ function rebuildLedgerTableIfLegacy() {
   `);
 
   // Copy & coerce from legacy, guarding all FKs with EXISTS
+  const nowExpr = "strftime('%s','now')*1000";
+  const userIdSources = ['user_id', 'userId'].filter(hasCol);
+  const userIdExpr = userIdSources.length === 0
+    ? null
+    : (userIdSources.length === 1 ? `L.${userIdSources[0]}` : `COALESCE(${userIdSources.map(name => `L.${name}`).join(', ')})`);
+  const userIdSelect = userIdExpr
+    ? `CASE WHEN ${userIdExpr} IS NOT NULL AND EXISTS(SELECT 1 FROM member M WHERE M.id = ${userIdExpr}) THEN ${userIdExpr} ELSE 'system' END`
+    : `'system'`;
+
+  const rewardIdExpr = buildCoalesce(['reward_id', 'itemId']);
+  const rewardIdSelect = rewardIdExpr === 'NULL'
+    ? 'NULL'
+    : `CASE WHEN ${rewardIdExpr} IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = ${rewardIdExpr}) THEN ${rewardIdExpr} ELSE NULL END`;
+
+  const parentHoldExpr = buildCoalesce(['parent_hold_id', 'holdId']);
+  const parentHoldSelect = parentHoldExpr === 'NULL'
+    ? 'NULL'
+    : `CASE WHEN ${parentHoldExpr} IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = ${parentHoldExpr}) THEN ${parentHoldExpr} ELSE NULL END`;
+
+  const parentLedgerExpr = buildCoalesce(['parent_ledger_id', 'parent_tx_id']);
+  const parentLedgerSelect = parentLedgerExpr === 'NULL'
+    ? 'NULL'
+    : `CASE WHEN ${parentLedgerExpr} IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = ${parentLedgerExpr}) THEN ${parentLedgerExpr} ELSE NULL END`;
+
+  const tagsSelect = hasCol('tags')
+    ? `CASE WHEN L.tags IS NULL OR L.tags = '' THEN '[]' ELSE L.tags END`
+    : `'[]'`;
+
+  const updatedAtSources = [];
+  if (hasCol('updated_at')) updatedAtSources.push('L.updated_at');
+  if (hasCol('created_at')) updatedAtSources.push('L.created_at');
+  if (hasCol('at')) updatedAtSources.push('L.at');
+  updatedAtSources.push(nowExpr);
+  const updatedAtExpr = updatedAtSources.length === 1
+    ? updatedAtSources[0]
+    : `COALESCE(${updatedAtSources.join(', ')})`;
+
   db.exec(`
     INSERT INTO ledger_new (
       id, user_id, verb, amount, balance_after,
@@ -334,42 +380,34 @@ function rebuildLedgerTableIfLegacy() {
     )
     SELECT
       L.id,
-      CASE
-        WHEN COALESCE(L.user_id, L.userId) IS NOT NULL
-             AND EXISTS(SELECT 1 FROM member M WHERE M.id = COALESCE(L.user_id, L.userId))
-        THEN COALESCE(L.user_id, L.userId)
-        ELSE 'system'
-      END AS user_id,
-      COALESCE(L.verb, L.action, 'adjust') AS verb,
-      COALESCE(L.amount, L.delta, 0) AS amount,
-      L.balance_after,
+      ${userIdSelect} AS user_id,
+      ${buildCoalesce(['verb', 'action'], "'adjust'")} AS verb,
+      ${buildCoalesce(['amount', 'delta'], '0')} AS amount,
+      ${buildCoalesce(['balance_after'])} AS balance_after,
 
-      CASE WHEN L.itemId IS NOT NULL AND EXISTS(SELECT 1 FROM reward R WHERE R.id = L.itemId)
-           THEN L.itemId ELSE NULL END AS reward_id,
+      ${rewardIdSelect} AS reward_id,
 
-      CASE WHEN L.holdId IS NOT NULL AND EXISTS(SELECT 1 FROM hold H WHERE H.id = L.holdId)
-           THEN L.holdId ELSE NULL END AS parent_hold_id,
+      ${parentHoldSelect} AS parent_hold_id,
 
-      CASE WHEN L.parent_tx_id IS NOT NULL AND EXISTS(SELECT 1 FROM ledger LL WHERE LL.id = L.parent_tx_id)
-           THEN L.parent_tx_id ELSE NULL END AS parent_ledger_id,
+      ${parentLedgerSelect} AS parent_ledger_id,
 
-      COALESCE(L.template_ids, L.templates) AS template_ids,
-      COALESCE(L.final_amount, L.finalCost) AS final_amount,
-      L.note,
-      L.notes,
-      COALESCE(L.actor_id, L.actor) AS actor_id,
-      COALESCE(L.ip_address, L.ip) AS ip_address,
-      COALESCE(L.user_agent, L.ua) AS user_agent,
-      COALESCE(L.status, 'posted') AS status,
-      L.source,
-      CASE WHEN L.tags IS NULL OR L.tags = '' THEN '[]' ELSE L.tags END AS tags,
-      L.campaign_id,
-      COALESCE(L.created_at, L.at, strftime('%s','now')*1000) AS created_at,
-      COALESCE(L.updated_at, COALESCE(L.created_at, L.at, strftime('%s','now')*1000)) AS updated_at,
-      L.metadata,
-      L.refund_reason,
-      L.refund_notes,
-      L.idempotency_key
+      ${buildCoalesce(['template_ids', 'templates'])} AS template_ids,
+      ${buildCoalesce(['final_amount', 'finalCost'])} AS final_amount,
+      ${buildCoalesce(['note'])} AS note,
+      ${buildCoalesce(['notes'])} AS notes,
+      ${buildCoalesce(['actor_id', 'actor'])} AS actor_id,
+      ${buildCoalesce(['ip_address', 'ip'])} AS ip_address,
+      ${buildCoalesce(['user_agent', 'ua'])} AS user_agent,
+      ${buildCoalesce(['status'], "'posted'")} AS status,
+      ${buildCoalesce(['source'])} AS source,
+      ${tagsSelect} AS tags,
+      ${buildCoalesce(['campaign_id'])} AS campaign_id,
+      ${buildCoalesce(['created_at', 'at'], nowExpr)} AS created_at,
+      ${updatedAtExpr} AS updated_at,
+      ${buildCoalesce(['metadata'])} AS metadata,
+      ${buildCoalesce(['refund_reason'])} AS refund_reason,
+      ${buildCoalesce(['refund_notes'])} AS refund_notes,
+      ${buildCoalesce(['idempotency_key'])} AS idempotency_key
     FROM ledger L;
   `);
 
@@ -652,6 +690,7 @@ const ensureTables = db.transaction(() => {
       actor_id TEXT,
       source TEXT,
       tags TEXT,
+      idempotency_key TEXT,
       campaign_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
