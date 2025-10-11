@@ -1975,16 +1975,22 @@ setupScanner({
     updateReward(item.id, payload);
   }
 
-  const rewardsToggleBtn = $('btnShowInactiveRewards');
+  const rewardsActiveBtn = $('btnShowActiveRewards');
+  const rewardsInactiveBtn = $('btnShowInactiveRewards');
   let rewardsStatusFilter = 'active';
 
-  function updateRewardsToggleButton() {
-    if (!rewardsToggleBtn) return;
-    const showingInactive = rewardsStatusFilter === 'disabled';
-    rewardsToggleBtn.hidden = false;
-    rewardsToggleBtn.textContent = showingInactive ? 'Show active rewards' : 'Show deactivated rewards';
-    rewardsToggleBtn.setAttribute('aria-pressed', showingInactive ? 'true' : 'false');
-    rewardsToggleBtn.classList.toggle('is-selected', showingInactive);
+  function updateRewardsToggleButtons() {
+    const showActive = rewardsStatusFilter === 'active';
+    if (rewardsActiveBtn) {
+      rewardsActiveBtn.disabled = showActive;
+      rewardsActiveBtn.setAttribute('aria-pressed', showActive ? 'true' : 'false');
+      rewardsActiveBtn.classList.toggle('is-selected', showActive);
+    }
+    if (rewardsInactiveBtn) {
+      rewardsInactiveBtn.disabled = !showActive;
+      rewardsInactiveBtn.setAttribute('aria-pressed', showActive ? 'false' : 'true');
+      rewardsInactiveBtn.classList.toggle('is-selected', !showActive);
+    }
   }
 
   async function loadRewards() {
@@ -2161,7 +2167,7 @@ setupScanner({
           actions.appendChild(deleteBtn);
         } else {
           const toggleBtn = document.createElement('button');
-          toggleBtn.textContent = isDisabled ? 'Reactivate' : 'Deactivate';
+          toggleBtn.textContent = isDisabled ? 'Activate' : 'Deactivate';
           toggleBtn.addEventListener('click', () => updateReward(item.id, { active: isDisabled ? 1 : 0 }));
           actions.appendChild(toggleBtn);
         }
@@ -2178,7 +2184,6 @@ setupScanner({
         const label = rewardsStatusFilter === 'disabled' ? 'deactivated' : 'active';
         statusEl.textContent = `Showing ${filtered.length} ${label} reward${filtered.length === 1 ? '' : 's'}.`;
       }
-      updateRewardsToggleButton();
     } catch (err) {
       const msg = err.message || 'Failed to load rewards';
       if (statusEl) statusEl.textContent = msg;
@@ -2192,9 +2197,15 @@ setupScanner({
   });
   $('filterRewards')?.addEventListener('input', loadRewards);
 
-  rewardsToggleBtn?.addEventListener('click', () => {
-    rewardsStatusFilter = rewardsStatusFilter === 'disabled' ? 'active' : 'disabled';
-    updateRewardsToggleButton();
+  rewardsActiveBtn?.addEventListener('click', () => {
+    rewardsStatusFilter = 'active';
+    updateRewardsToggleButtons();
+    loadRewards();
+  });
+
+  rewardsInactiveBtn?.addEventListener('click', () => {
+    rewardsStatusFilter = 'disabled';
+    updateRewardsToggleButtons();
     loadRewards();
   });
 
@@ -2273,6 +2284,8 @@ setupScanner({
     if (descEl) descEl.value = '';
     loadRewards?.(); // refresh the list if available
   });
+
+  updateRewardsToggleButtons();
 
   // image upload
   const drop = $('drop');
