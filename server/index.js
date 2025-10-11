@@ -251,21 +251,87 @@ const ensureTables = db.transaction(() => {
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
+  // --- Ledger schema hardener (runs safely multiple times) ---
+  function ensureLedgerSchema() {
+    // 1) Create table if missing (minimal shape; relaxed NOT NULLs to avoid ALTER issues)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        type TEXT,
+        amount INTEGER,
+        balance_after INTEGER,
+        reason TEXT,
+        metadata TEXT,
+        related_id TEXT,
+        campaign_id TEXT,
+        actor_id TEXT,
+        source TEXT,
+        status TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      );
+    `);
+
+    const existing = new Set(getColumns("ledger"));
+
+    // helper: add column safely; if DDL includes NOT NULL, force a DEFAULT too
+    const addCol = (name, ddl, defaultLiteral = null, backfillExpr = null) => {
+      if (existing.has(name)) return;
+      let stmt = `ALTER TABLE ledger ADD COLUMN ${name} ${ddl}`;
+      // If NOT NULL appears but no DEFAULT provided, inject a DEFAULT
+      if (/NOT\s+NULL/i.test(ddl) && !/DEFAULT/i.test(ddl)) {
+        const def = defaultLiteral != null ? ` DEFAULT ${defaultLiteral}` : " DEFAULT 0";
+        stmt += def;
+      }
+      db.exec(stmt);
+      existing.add(name);
+      if (backfillExpr) {
+        db.exec(`UPDATE ledger SET ${name} = ${backfillExpr} WHERE ${name} IS NULL`);
+      }
+    };
+
+    // 2) Required columns with safe defaults + backfill
+    addCol("user_id", "TEXT"); // nullable is fine; app enforces semantics
+    addCol("type", "TEXT NOT NULL", `'adjust'`, `'adjust'`);
+    addCol("amount", "INTEGER NOT NULL", 0, 0);
+
+    // Use epoch ms now for created/updated when missing/zero
+    const nowMs = "CAST(strftime('%s','now') AS INTEGER)*1000";
+    addCol("created_at", "INTEGER NOT NULL", 0, nowMs);
+    addCol("updated_at", "INTEGER NOT NULL", 0, nowMs);
+
+    // 3) Nice-to-haves
+    addCol("balance_after", "INTEGER");
+    addCol("reason", "TEXT");
+    addCol("metadata", "TEXT");
+    addCol("related_id", "TEXT");
+    addCol("campaign_id", "TEXT");
+    addCol("actor_id", "TEXT");
+    addCol("source", "TEXT");
+    addCol("status", "TEXT NOT NULL", `'ok'`, `'ok'`);
+
+    // 4) Indexes (idempotent)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
+  }
+
   // --- Identifier helpers for SQLite DDL ---
-// Only allow simple identifiers, then quote them to be safe in DDL.
-function isSafeIdent(s) {
-  return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
-}
-function quoteIdent(s) {
-  // SQLite identifier quoting with double-quotes, double any internal quotes
-  return '"' + String(s).replace(/"/g, '""') + '"';
-}
+  function isSafeIdent(s) {
+    return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+  }
+  function quoteIdent(s) {
+    return '"' + String(s).replace(/"/g, '""') + '"';
+  }
 
   const dropTable = name => {
     if (!name) return false;
-    db.exec(`DROP TABLE IF EXISTS ${name}`);
+    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
+    db.exec("DROP TABLE IF EXISTS " + quoteIdent(name));
     return true;
   };
+
+  ensureLedgerSchema();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS member (
@@ -320,6 +386,35 @@ function quoteIdent(s) {
   ensureColumn(db, "reward", "updated_at", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
  
+  // --- HOLD table (pending token holds/escrows) ---
+  if (!tableExists("hold")) {
+    // Optional legacy migrations (uncomment if you actually had these):
+    // if (tableExists("holds")) backupTable("holds");
+    // if (tableExists("token_hold")) backupTable("token_hold");
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS hold (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        amount INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', -- pending|released|expired|canceled
+        reason TEXT,
+        metadata TEXT,          -- JSON string (optional)
+        expires_at INTEGER,     -- epoch ms (optional)
+        released_at INTEGER,    -- epoch ms (optional)
+        release_txn_id TEXT,    -- link to a ledger/txn table if applicable
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES member(id)
+      );
+    `);
+  }
+  // Minimal indexes AFTER table exists:
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_hold_user ON hold(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_hold_status ON hold(status)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_hold_expires ON hold(expires_at)`);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
+
   ensureColumn(db, "hold", "user_id", "TEXT");
   ensureColumn(db, "hold", "actor_id", "TEXT");
   ensureColumn(db, "hold", "reward_id", "TEXT");
@@ -338,7 +433,6 @@ function quoteIdent(s) {
   ensureColumn(db, "hold", "released_at", "INTEGER");
   ensureColumn(db, "hold", "redeemed_at", "INTEGER");
   ensureColumn(db, "hold", "expires_at", "INTEGER");
-  db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
@@ -485,8 +579,8 @@ function rebuildLedgerTableIfLegacy() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
 
   // 5) Drop the legacy table
-if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
-db.exec("DROP TABLE IF EXISTS " + quoteIdent(legacyName));
+  if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
+  db.exec("DROP TABLE IF EXISTS " + quoteIdent(legacyName));
 
 }
 
