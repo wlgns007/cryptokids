@@ -248,7 +248,10 @@ async function ensureSchema() {
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
 
-    return false;
+  const dropTable = name => {
+    if (!name) return false;
+    db.exec(`DROP TABLE IF EXISTS ${name}`);
+    return true;
   };
 
   const migrate = async () => {
@@ -817,50 +820,51 @@ function rebuildLedgerTableIfLegacy() {
         );
       `);
       if (legacySpend) {
-  const rows = db.prepare(`SELECT * FROM ${legacySpend}`).all();
+        const rows = db.prepare(`SELECT * FROM ${legacySpend}`).all();
 
-  const insertSpend = db.prepare(`
-    INSERT INTO spend_request (
-      id,
-      token,
-      user_id,
-      reward_id,
-      status,
-      amount,
-      title,
-      image_url,
-      actor_id,
-      source,
-      tags,
-      campaign_id,
-      created_at,
-      updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  const insertMany = db.transaction((rows) => {
-    for (const r of rows) {
-      insertSpend.run(
-        r.id,
-        r.token,
-        r.user_id,
-        r.reward_id ?? null,
-        r.status ?? 'pending',
-        r.amount ?? null,
-        r.title ?? null,
-        r.image_url ?? null,
-        r.actor_id ?? null,
-        r.source ?? null,
-        r.tags ?? null,
-        r.campaign_id ?? null,
-        r.created_at ?? Date.now(),
-        r.updated_at ?? Date.now()
-      );
-    }
-  });
+        const insertSpend = db.prepare(`
+          INSERT INTO spend_request (
+            id,
+            token,
+            user_id,
+            reward_id,
+            status,
+            amount,
+            title,
+            image_url,
+            actor_id,
+            source,
+            tags,
+            campaign_id,
+            created_at,
+            updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `);
 
-  insertMany(rows);
-  dropTable(legacySpend);
-}
+        const insertMany = db.transaction((items) => {
+          for (const r of items) {
+            insertSpend.run(
+              r.id,
+              r.token,
+              r.user_id,
+              r.reward_id ?? null,
+              r.status ?? 'pending',
+              r.amount ?? null,
+              r.title ?? null,
+              r.image_url ?? null,
+              r.actor_id ?? null,
+              r.source ?? null,
+              r.tags ?? null,
+              r.campaign_id ?? null,
+              r.created_at ?? Date.now(),
+              r.updated_at ?? Date.now()
+            );
+          }
+        });
+
+        insertMany(rows);
+        dropTable(legacySpend);
+      }
 
       }
     } else {
@@ -1149,11 +1153,10 @@ const ensureTables = sqliteTransaction(() => {
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-  };
+  }
+});
 
-migrate();
-
-  db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
+  migrate();
 }
 
 ensureSchema();
