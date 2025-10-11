@@ -403,41 +403,6 @@ const ensureTables = db.transaction(() => {
   const legacyName = `ledger_legacy_${Date.now()}`;
   db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
-    );
-  `);
-
   const legacyCols = db.prepare(`PRAGMA table_info('${legacyName}')`).all().map(c => c.name);
   const has = (c) => legacyCols.includes(c);
   const selectExprs = [
@@ -492,7 +457,7 @@ const ensureTables = db.transaction(() => {
 
   db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
 }
-
+rebuildLedgerTableIfLegacy();
 // ---- consumed_tokens (create or evolve) ----
 let consumedCols = [];
 const hasConsumed = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
@@ -536,13 +501,12 @@ if (!hasConsumed) {
 db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-
-  
-};
+ 
+});
 
 function ensureSchema(){
   ensureTables();
-  rebuildLedgerTableIfLegacy();
+  
 }
 
 ensureSchema();
@@ -1517,7 +1481,7 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
     if (normalizedStatus === "pending" && afterBalance !== null) summaryRows.push({ label: "Balance after approval", value: `${afterBalance} points`, key: "after" });
     const statusTitle = tokenUsed && normalizedStatus === "pending"
       ? "Pending (token already used)"
-      : normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
+      : normalizedStatus.charAt(0).toUpperCase() + Status.slice(1);
     summaryRows.push({ label: "Status", value: statusTitle, key: "status" });
     const requestedAt = formatDateTime(hold.createdAt);
     if (requestedAt) summaryRows.push({ label: "Requested", value: requestedAt });
