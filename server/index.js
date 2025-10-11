@@ -307,31 +307,7 @@ const ensureTables = db.transaction(() => {
   ensureColumn(db, "reward", "created_at", "INTEGER");
   ensureColumn(db, "reward", "updated_at", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS hold (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      reward_name TEXT,
-      reward_image_url TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      quoted_amount INTEGER NOT NULL,
-      final_amount INTEGER,
-      note TEXT,
-      metadata TEXT,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      released_at INTEGER,
-      redeemed_at INTEGER,
-      expires_at INTEGER,
-      FOREIGN KEY (reward_id) REFERENCES reward(id)
-    );
-  `);
+ 
   ensureColumn(db, "hold", "user_id", "TEXT");
   ensureColumn(db, "hold", "actor_id", "TEXT");
   ensureColumn(db, "hold", "reward_id", "TEXT");
@@ -386,10 +362,12 @@ const ensureTables = db.transaction(() => {
       FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
     );
   `);
-  function rebuildLedgerTableIfLegacy() {
+function rebuildLedgerTableIfLegacy() {
+  // If ledger table doesn't exist (first run), nothing to upgrade.
   const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
   if (!table) return;
 
+  // Check if current ledger schema is legacy
   const cols = db.prepare("PRAGMA table_info('ledger')").all().map(c => c.name);
   const desired = new Set([
     "id","user_id","actor_id","reward_id","parent_hold_id","parent_ledger_id","verb",
@@ -400,9 +378,47 @@ const ensureTables = db.transaction(() => {
   const isLegacy = cols.some(c => !desired.has(c)) || desired.size !== cols.length;
   if (!isLegacy) return;
 
+  // 1) Rename old table
   const legacyName = `ledger_legacy_${Date.now()}`;
   db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
 
+  // 2) Recreate new ledger table with the desired schema
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      actor_id TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      verb TEXT NOT NULL,
+      description TEXT,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'posted',
+      note TEXT,
+      notes TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT UNIQUE,
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+
+  // 3) Copy data from legacy -> new with safe defaults/mapping
   const legacyCols = db.prepare(`PRAGMA table_info('${legacyName}')`).all().map(c => c.name);
   const has = (c) => legacyCols.includes(c);
   const selectExprs = [
@@ -448,6 +464,7 @@ const ensureTables = db.transaction(() => {
     SELECT ${selectExprs} FROM ${legacyName};
   `);
 
+  // 4) Indexes on the new ledger
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_idempotency ON ledger(idempotency_key) WHERE idempotency_key IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_verb_created_at ON ledger(user_id, verb, created_at, id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_parent_hold ON ledger(parent_hold_id)");
@@ -455,8 +472,10 @@ const ensureTables = db.transaction(() => {
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_user_created ON ledger(user_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
 
-  db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
+  // 5) Drop the legacy table
+  db.exec(\`DROP TABLE IF EXISTS \${legacyName}\`);
 }
+
 rebuildLedgerTableIfLegacy();
 // ---- consumed_tokens (create or evolve) ----
 let consumedCols = [];
