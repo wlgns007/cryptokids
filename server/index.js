@@ -271,27 +271,6 @@ function addCol(table, col, type, {
   }
 }
 
-
-  const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
-  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defaultSql}, backfill=${backfillSql})`);
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`);
-
-  if (backfillSql) {
-    db.exec(`UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`);
-  }
-}
-
-function ensureSystemMember() {
-  const exists = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
-  if (!exists) {
-    const ts = Date.now();
-    db.prepare(`
-      INSERT INTO member (id, name, status, created_at, updated_at)
-      VALUES ('system', 'System', 'active', ?, ?)
-    `).run(ts, ts);
-  }
-}
-
 function rebuildLedgerTableIfLegacy() {
   const hasLedger = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger'").get();
   if (!hasLedger) return false;
@@ -781,59 +760,66 @@ const ensureTables = db.transaction(() => {
       FOREIGN KEY (reward_id) REFERENCES reward(id)
     );
   `);
-  
-// ---- consumed_tokens (create or evolve) ----
-let consumedCols;
-if (!tableExists("consumed_tokens")) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS consumed_tokens (
-      id TEXT PRIMARY KEY,
-      token TEXT,
-      typ TEXT,
-      request_id TEXT,
-      user_id TEXT,
-      reward_id TEXT,
-      source TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (request_id) REFERENCES spend_request(id),
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id)
-    );
-  `);
-} else {
-  consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
-  if (!consumedCols.includes("id") && consumedCols.includes("jti")) {
-    db.exec("ALTER TABLE consumed_tokens RENAME COLUMN jti TO id");
+});
+
+// ==== BEGIN ensureConsumedTokens ====
+function ensureConsumedTokens() {
+  let consumedCols;
+  const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='consumed_tokens'").get();
+
+  if (!has) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS consumed_tokens (
+        id TEXT PRIMARY KEY,
+        token TEXT,
+        typ TEXT,
+        request_id TEXT,
+        user_id TEXT,
+        reward_id TEXT,
+        source TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (request_id) REFERENCES spend_request(id),
+        FOREIGN KEY (user_id) REFERENCES member(id),
+        FOREIGN KEY (reward_id) REFERENCES reward(id)
+      );
+    `);
+  } else {
     consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
+    if (!consumedCols.includes("id") && consumedCols.includes("jti")) {
+      db.exec("ALTER TABLE consumed_tokens RENAME COLUMN jti TO id");
+      consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
+    }
+    if (!consumedCols.includes("created_at") && consumedCols.includes("consumed_at")) {
+      db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
+      consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
+    }
+    // Safe, nullable adds
+    ensureColumn(db, "consumed_tokens", "token", "TEXT");
+    ensureColumn(db, "consumed_tokens", "typ", "TEXT");
+    ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
+    ensureColumn(db, "consumed_tokens", "user_id", "TEXT");
+    ensureColumn(db, "consumed_tokens", "reward_id", "TEXT");
+    ensureColumn(db, "consumed_tokens", "source", "TEXT");
+    ensureColumn(db, "consumed_tokens", "created_at", "INTEGER");
+    ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER");
   }
-  if (!consumedCols.includes("created_at") && consumedCols.includes("consumed_at")) {
-    db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
-    consumedCols = db.prepare("PRAGMA table_info('consumed_tokens')").all().map(c => c.name);
-  }
-  ensureColumn(db, "consumed_tokens", "token", "TEXT");
-  ensureColumn(db, "consumed_tokens", "typ", "TEXT");
-  ensureColumn(db, "consumed_tokens", "request_id", "TEXT");
-  ensureColumn(db, "consumed_tokens", "user_id", "TEXT");
-  ensureColumn(db, "consumed_tokens", "reward_id", "TEXT");
-  ensureColumn(db, "consumed_tokens", "source", "TEXT");
-  ensureColumn(db, "consumed_tokens", "created_at", "INTEGER");
-  ensureColumn(db, "consumed_tokens", "updated_at", "INTEGER");
-}
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-});
+}
+// ==== END ensureConsumedTokens ====
 
 const ensureSchema = db.transaction(() => {
   ensureDefaultMembers();
   ensureSystemMember();
 
-  rebuildLedgerTableIfLegacy();
+  rebuildLedgerTableIfLegacy(); // runs once or no-ops
 
-  ensureTables();
-  ensureLedgerSchema();
+  ensureTables();               // other tables
+  ensureConsumedTokens();       // consumed_tokens, now as a function
+  ensureLedgerSchema();         // your addCol-safe path (no NOT NULL on ALTER)
 });
 
 ensureSchema();
