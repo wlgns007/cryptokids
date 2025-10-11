@@ -1987,7 +1987,6 @@ setupScanner({
       return;
     }
     rewardsInactiveBtn.hidden = false;
-    rewardsInactiveBtn.removeAttribute('hidden');
     rewardsInactiveBtn.disabled = false;
     rewardsInactiveBtn.setAttribute('aria-pressed', showingDisabled ? 'true' : 'false');
     rewardsInactiveBtn.classList.toggle('is-selected', showingDisabled);
@@ -2005,7 +2004,7 @@ setupScanner({
     try {
       const params = new URLSearchParams();
       if (rewardsStatusFilter === 'active') {
-        params.set('status', 'active');
+        params.set('active', '1');
       } else if (rewardsStatusFilter === 'disabled') {
         params.set('status', 'disabled');
       }
