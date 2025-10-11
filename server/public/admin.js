@@ -2003,8 +2003,10 @@ setupScanner({
     updateRewardsToggleButton();
     try {
       const params = new URLSearchParams();
-      if (rewardsStatusFilter && rewardsStatusFilter !== 'all') {
-        params.set('status', rewardsStatusFilter === 'active' ? 'active' : 'disabled');
+      if (rewardsStatusFilter === 'active') {
+        params.set('active', '1');
+      } else if (rewardsStatusFilter === 'disabled') {
+        params.set('status', 'disabled');
       }
       const qs = params.toString() ? `?${params.toString()}` : '';
       const { res, body } = await adminFetch(`/api/rewards${qs}`);
