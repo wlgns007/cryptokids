@@ -779,7 +779,7 @@ function ensureConsumedTokens() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
 }
 
-const ensureSchema = db.transaction(() => {
+const ensureBaseSchema = db.transaction(() => {
   // 1) Create ALL base tables first (member, reward, hold, spend_request, etc.)
   ensureTables();
 
@@ -789,13 +789,23 @@ const ensureSchema = db.transaction(() => {
 
   // 3) Tables needed by other features
   ensureConsumedTokens();
+});
 
-  // 4) Rebuild legacy -> modern ledger (now reward/hold exist, so EXISTS() checks won't error)
-  rebuildLedgerTableIfLegacy();
-
-  // 5) Apply any incremental, safe column adds (no NOT NULL on ALTER)
+const ensureLedgerSchemaTx = db.transaction(() => {
   ensureLedgerSchema();
 });
+
+function ensureSchema() {
+  // Base tables + seeds run inside a transaction for atomicity.
+  ensureBaseSchema();
+
+  // Rebuild legacy -> modern ledger outside the transaction so we can
+  // temporarily disable foreign key checks while swapping tables.
+  rebuildLedgerTableIfLegacy();
+
+  // Apply any incremental, safe column adds (no NOT NULL on ALTER).
+  ensureLedgerSchemaTx();
+}
 
 ensureSchema();
 function getHoldRow(holdId) {
