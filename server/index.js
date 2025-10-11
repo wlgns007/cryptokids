@@ -117,7 +117,7 @@ app.get(["/scan", "/scan.html"], async (req, res) => {
       return;
     }
 
-    const holdRow = db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
+    const holdRow = getHoldRow(holdId);
     const hold = mapHoldRow(holdRow);
     if (!hold) {
       res.status(404).send(renderSpendApprovalPage({ message: "We couldn't find this reward request. Please ask the child to generate a new QR code." }));
@@ -741,17 +741,27 @@ function ensureConsumedTokens() {
 }
 
 const ensureSchema = db.transaction(() => {
+  // 1) Create ALL base tables first (member, reward, hold, spend_request, etc.)
+  ensureTables();
+
+  // 2) Seed required rows (depends on member table now existing)
   ensureDefaultMembers();
   ensureSystemMember();
 
-  rebuildLedgerTableIfLegacy(); // runs once or no-ops
-
-  ensureTables();
+  // 3) Tables needed by other features
   ensureConsumedTokens();
+
+  // 4) Rebuild legacy -> modern ledger (now reward/hold exist, so EXISTS() checks won't error)
+  rebuildLedgerTableIfLegacy();
+
+  // 5) Apply any incremental, safe column adds (no NOT NULL on ALTER)
   ensureLedgerSchema();
 });
 
 ensureSchema();
+function getHoldRow(holdId) {
+  return db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
+}
 function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
