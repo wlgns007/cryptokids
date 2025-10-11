@@ -237,7 +237,8 @@ async function ensureColumn(db, table, column, type = "INTEGER") {
 }
 
 
-async function ensureSchema() {
+// BEGIN ensureTables
+const ensureTables = db.transaction(() => {
   const tableExists = name =>
     !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
   const backupTable = name => {
@@ -246,714 +247,17 @@ async function ensureSchema() {
     return legacyName;
   };
   const getColumns = name =>
-    db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
+    db
+      .prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')")
+      .all()
+      .map(col => col.name);
 
-    return false;
+  const dropTable = name => {
+    if (!name) return false;
+    db.exec(`DROP TABLE IF EXISTS ${name}`);
+    return true;
   };
 
-  const migrate = async () => {
-    // member table
-    if (!tableExists("member")) {
-      let legacyMembers = null;
-      if (tableExists("members")) {
-        legacyMembers = backupTable("members");
-      }
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS member (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          date_of_birth TEXT,
-          sex TEXT,
-          status TEXT NOT NULL DEFAULT 'active',
-          tags TEXT,
-          campaign_id TEXT,
-          source TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-      `);
-      if (legacyMembers) {
-        const rows = db.prepare("SELECT * FROM " + legacyMembers).all();
-        const insertMember = db.prepare(`
-          INSERT INTO member (id, name, date_of_birth, sex, status, tags, campaign_id, source, created_at, updated_at)
-          VALUES (@id, @name, @date_of_birth, @sex, @status, @tags, @campaign_id, @source, @created_at, @updated_at)
-        `);
-        for (const row of rows) {
-          const id = normId(row.userId || row.id || "");
-          if (!id) continue;
-          insertMember.run({
-            id,
-            name: row.name || id,
-            date_of_birth: row.dob || row.date_of_birth || null,
-            sex: row.sex || null,
-            status: "active",
-            tags: null,
-            campaign_id: null,
-            source: null,
-            created_at: normalizeTimestamp(row.createdAt),
-            updated_at: normalizeTimestamp(row.updatedAt ?? row.createdAt)
-          });
-        }
-      }
-    } else {
-      ensureColumn(
-db, "member", "status", "TEXT");
-      ensureColumn(
-db, "member", "tags", "TEXT");
-      ensureColumn(
-db, "member", "campaign_id", "TEXT");
-      ensureColumn(
-db, "member", "source", "TEXT");
-      ensureColumn(
-db, "member", "date_of_birth", "TEXT");
-    }
-    db.exec(
-      "UPDATE member SET status = 'active' WHERE status IS NULL OR status = ''"
-    );
-    db.exec("CREATE INDEX IF NOT EXISTS idx_member_status ON member(status)");
-
-    // reward table
-    if (!tableExists("reward")) {
-      let legacyRewards = null;
-      if (tableExists("rewards")) {
-        legacyRewards = backupTable("rewards");
-      }
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS reward (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          cost INTEGER NOT NULL,
-          description TEXT DEFAULT '',
-          image_url TEXT DEFAULT '',
-          youtube_url TEXT,
-          status TEXT NOT NULL DEFAULT 'active',
-          tags TEXT,
-          campaign_id TEXT,
-          source TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-      `);
-      if (legacyRewards) {
-        const rows = db.prepare("SELECT * FROM " + legacyRewards).all();
-        const insertReward = db.prepare(`
-          INSERT INTO reward (id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at)
-          VALUES (@id, @name, @cost, @description, @image_url, @youtube_url, @status, @tags, @campaign_id, @source, @created_at, @updated_at)
-        `);
-        for (const row of rows) {
-          const id = String(row.id ?? "").trim();
-          if (!id) continue;
-          const status = Number(row.active ?? 1) === 1 ? "active" : "disabled";
-          const created = normalizeTimestamp(row.created_at ?? row.createdAt);
-          insertReward.run({
-            id,
-            name: row.name || id,
-            cost: Number(row.price ?? row.cost ?? 0) || 0,
-            description: row.description || "",
-            image_url: row.image_url || row.imageUrl || "",
-            youtube_url: row.youtube_url || row.youtubeUrl || null,
-            status,
-            tags: null,
-            campaign_id: null,
-            source: null,
-            created_at: created,
-            updated_at: normalizeTimestamp(row.updated_at ?? row.updatedAt ?? created)
-          });
-        }
-      }
-    } else {
-      ensureColumn(
-db, "reward", "status", "TEXT");
-      ensureColumn(
-db, "reward", "tags", "TEXT");
-      ensureColumn(
-db, "reward", "campaign_id", "TEXT");
-      ensureColumn(
-db, "reward", "source", "TEXT");
-      ensureColumn(
-db, "reward", "cost", "INTEGER");
-      ensureColumn(
-db, "reward", "updated_at", "INTEGER");
-    }
-    db.exec(
-      "UPDATE reward SET status = 'active' WHERE status IS NULL OR status = ''"
-    );
-    db.exec(
-      "UPDATE reward SET cost = 0 WHERE cost IS NULL"
-    );
-    db.exec(
-      "UPDATE reward SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
-    );
-    db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
-
-    // hold table
-    if (!tableExists("hold")) {
-      let legacyHolds = null;
-      if (tableExists("holds")) {
-        legacyHolds = backupTable("holds");
-      }
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS hold (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          actor_id TEXT,
-          reward_id TEXT,
-          reward_name TEXT,
-          reward_image_url TEXT,
-          status TEXT NOT NULL DEFAULT 'pending',
-          quoted_amount INTEGER NOT NULL,
-          final_amount INTEGER,
-          note TEXT,
-          metadata TEXT,
-          source TEXT,
-          tags TEXT,
-          campaign_id TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          released_at INTEGER,
-          redeemed_at INTEGER,
-          expires_at INTEGER,
-          FOREIGN KEY (reward_id) REFERENCES reward(id)
-        );
-      `);
-      if (legacyHolds) {
-        const rows = db.prepare("SELECT * FROM " + legacyHolds).all();
-        const insertHold = db.prepare(`
-          INSERT INTO hold (
-            id,
-            user_id,
-            actor_id,
-            reward_id,
-            reward_name,
-            reward_image_url,
-            status,
-            quoted_amount,
-            final_amount,
-            note,
-            metadata,
-            source,
-            tags,
-            campaign_id,
-            created_at,
-            updated_at,
-            released_at,
-            redeemed_at,
-            expires_at
-          ) VALUES (@id,@user_id,@actor_id,@reward_id,@reward_name,@reward_image_url,@status,@quoted_amount,@final_amount,@note,@metadata,@source,@tags,@campaign_id,@created_at,@updated_at,@released_at,@redeemed_at,@expires_at)
-        `);
-        for (const row of rows) {
-          const id = String(row.id ?? "").trim();
-          if (!id) continue;
-          const userId = normId(row.userId || row.user_id || "");
-          if (!userId) continue;
-          const rawStatus = String(row.status || "pending").trim().toLowerCase();
-          const status =
-            rawStatus === "redeemed"
-              ? "redeemed"
-              : rawStatus === "canceled" || rawStatus === "released"
-              ? "released"
-              : "pending";
-          const approvedAt = row.approvedAt ?? row.approved_at ?? null;
-          const createdAt = normalizeTimestamp(row.createdAt ?? row.created_at);
-          insertHold.run({
-            id,
-            user_id: userId,
-            actor_id: null,
-            reward_id: row.itemId || row.reward_id || null,
-            reward_name: row.itemName || row.reward_name || null,
-            reward_image_url: row.itemImage || row.reward_image_url || null,
-            status,
-            quoted_amount: Number(row.quotedCost ?? row.quoted_amount ?? row.points ?? 0) || 0,
-            final_amount:
-              row.finalCost !== undefined && row.finalCost !== null
-                ? Number(row.finalCost)
-                : row.final_amount !== undefined && row.final_amount !== null
-                ? Number(row.final_amount)
-                : null,
-            note: row.note || null,
-            metadata: null,
-            source: null,
-            tags: null,
-            campaign_id: null,
-            created_at: createdAt,
-            updated_at: normalizeTimestamp(approvedAt ?? createdAt),
-            released_at: status === "released" ? normalizeTimestamp(approvedAt) : null,
-            redeemed_at: status === "redeemed" ? normalizeTimestamp(approvedAt) : null,
-            expires_at: null
-          });
-        }
-      }
-    } else {
-      ensureColumn(
-db, "hold", "actor_id", "TEXT");
-      ensureColumn(
-db, "hold", "reward_name", "TEXT");
-      ensureColumn(
-db, "hold", "reward_image_url", "TEXT");
-      ensureColumn(
-db, "hold", "quoted_amount", "INTEGER");
-      ensureColumn(
-db, "hold", "final_amount", "INTEGER");
-      ensureColumn(
-db, "hold", "metadata", "TEXT");
-      ensureColumn(
-db, "hold", "source", "TEXT");
-      ensureColumn(
-db, "hold", "tags", "TEXT");
-      ensureColumn(
-db, "hold", "campaign_id", "TEXT");
-      ensureColumn(
-db, "hold", "released_at", "INTEGER");
-      ensureColumn(
-db, "hold", "redeemed_at", "INTEGER");
-      ensureColumn(
-db, "hold", "expires_at", "INTEGER");
-      ensureColumn(
-db, "hold", "updated_at", "INTEGER");
-      ensureColumn(
-db, "hold", "created_at", "INTEGER");
-    }
-    db.exec("UPDATE hold SET quoted_amount = COALESCE(quoted_amount, 0)");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_hold_user_status ON hold(user_id, status)");
-
-    // ledger table
-    let legacyLedger = null;
-    if (tableExists("ledger")) {
-      const info = db.prepare("PRAGMA table_info('ledger')").all();
-      const idColumn = info.find(col => col.name === "id");
-      const hasTextId = idColumn && typeof idColumn.type === "string" && idColumn.type.toUpperCase().includes("TEXT");
-      const legacyColumns = new Set(["delta", "reason", "kind", "nonce", "ts", "meta"]);
-      const hasLegacy = info.some(col => legacyColumns.has(col.name));
-      if (!hasTextId || hasLegacy) {
-        legacyLedger = backupTable("ledger");
-      }
-    }
-
-    if (!tableExists("ledger") || legacyLedger) {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS ledger (
-          id TEXT PRIMARY KEY,
-          user_id TEXT NOT NULL,
-          actor_id TEXT,
-          reward_id TEXT,
-          parent_hold_id TEXT,
-          parent_ledger_id TEXT,
-          verb TEXT NOT NULL,
-          description TEXT,
-          amount INTEGER NOT NULL,
-          balance_after INTEGER NOT NULL,
-          status TEXT NOT NULL DEFAULT 'posted',
-          note TEXT,
-          notes TEXT,
-          template_ids TEXT,
-          final_amount INTEGER,
-          metadata TEXT,
-          refund_reason TEXT,
-          refund_notes TEXT,
-          idempotency_key TEXT UNIQUE,
-          source TEXT,
-          tags TEXT,
-          campaign_id TEXT,
-          ip_address TEXT,
-          user_agent TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          FOREIGN KEY (user_id) REFERENCES member(id),
-          FOREIGN KEY (reward_id) REFERENCES reward(id),
-          FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-          FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
-        );
-      `);
-      if (legacyLedger) {
-        const rows = db.prepare("SELECT * FROM " + legacyLedger).all();
-        const insertLedger = db.prepare(`
-          INSERT INTO ledger (
-            id,
-            user_id,
-            actor_id,
-            reward_id,
-            parent_hold_id,
-            parent_ledger_id,
-            verb,
-            description,
-            amount,
-            balance_after,
-            status,
-            note,
-            notes,
-            template_ids,
-            final_amount,
-            metadata,
-            refund_reason,
-            refund_notes,
-            idempotency_key,
-            source,
-            tags,
-            campaign_id,
-            ip_address,
-            user_agent,
-            created_at,
-            updated_at
-          ) VALUES (@id,@user_id,@actor_id,@reward_id,@parent_hold_id,@parent_ledger_id,@verb,@description,@amount,@balance_after,@status,@note,@notes,@template_ids,@final_amount,@metadata,@refund_reason,@refund_notes,@idempotency_key,@source,@tags,@campaign_id,@ip_address,@user_agent,@created_at,@updated_at)
-        `);
-        for (const row of rows) {
-          const id = String(row.id ?? row.ID ?? crypto.randomUUID()).trim();
-          const userId = normId(row.user_id ?? row.userId ?? "");
-          if (!id || !userId) continue;
-          const amount = Number(row.amount ?? row.delta ?? 0) || 0;
-          const balanceAfter = Number(row.balance_after ?? row.balanceAfter ?? row.balance ?? 0) || 0;
-          const templateIds = row.template_ids ?? row.templateIds ?? null;
-          const metadata = row.metadata ?? row.meta ?? null;
-          const tags = row.tags ?? null;
-          const createdAt = normalizeTimestamp(row.created_at ?? row.createdAt ?? row.ts);
-          const updatedAt = normalizeTimestamp(row.updated_at ?? row.updatedAt ?? createdAt);
-          insertLedger.run({
-            id,
-            user_id: userId,
-            actor_id: row.actor_id || row.actorId || row.actor || null,
-            reward_id: row.reward_id || row.itemId || null,
-            parent_hold_id: row.parent_hold_id || row.holdId || null,
-            parent_ledger_id: row.parent_ledger_id || row.parent_tx_id || null,
-            verb:
-              (row.verb || row.kind || "")
-                .toString()
-                .trim() || (amount > 0 ? "earn" : amount < 0 ? "redeem" : "adjust"),
-            description: row.description || row.reason || row.action || null,
-            amount,
-            balance_after: balanceAfter,
-            status: (row.status || row.state || "posted").toString().trim().toLowerCase() || "posted",
-            note: row.note || null,
-            notes: row.notes || null,
-            template_ids: templateIds ? JSON.stringify(templateIds) : null,
-            final_amount:
-              row.final_amount !== undefined && row.final_amount !== null
-                ? Number(row.final_amount)
-                : row.finalCost !== undefined && row.finalCost !== null
-                ? Number(row.finalCost)
-                : null,
-            metadata: metadata ? JSON.stringify(metadata) : null,
-            refund_reason: row.refund_reason || null,
-            refund_notes: row.refund_notes || null,
-            idempotency_key: row.idempotency_key || row.nonce || null,
-            source: row.source || null,
-            tags: tags ? JSON.stringify(tags) : null,
-            campaign_id: row.campaign_id || row.campaignId || null,
-            ip_address: row.ip_address || row.ip || null,
-            user_agent: row.user_agent || row.ua || null,
-            created_at: createdAt,
-            updated_at: updatedAt
-          });
-        }
-      }
-    } else {
-      ensureColumn(
-db, "ledger", "user_id", "TEXT");
-      ensureColumn(
-db, "ledger", "actor_id", "TEXT");
-      ensureColumn(
-db, "ledger", "reward_id", "TEXT");
-      ensureColumn(
-db, "ledger", "parent_hold_id", "TEXT");
-      ensureColumn(
-db, "ledger", "parent_ledger_id", "TEXT");
-      ensureColumn(
-db, "ledger", "description", "TEXT");
-      ensureColumn(
-db, "ledger", "verb", "TEXT");
-      ensureColumn(
-db, "ledger", "amount", "INTEGER");
-      ensureColumn(
-db, "ledger", "balance_after", "INTEGER");
-      ensureColumn(
-db, "ledger", "status", "TEXT");
-      ensureColumn(
-db, "ledger", "idempotency_key", "TEXT");
-      ensureColumn(
-db, "ledger", "template_ids", "TEXT");
-      ensureColumn(
-db, "ledger", "final_amount", "INTEGER");
-      ensureColumn(
-db, "ledger", "metadata", "TEXT");
-      ensureColumn(
-db, "ledger", "note", "TEXT");
-      ensureColumn(
-db, "ledger", "notes", "TEXT");
-      ensureColumn(
-db, "ledger", "refund_reason", "TEXT");
-      ensureColumn(
-db, "ledger", "refund_notes", "TEXT");
-      ensureColumn(
-db, "ledger", "source", "TEXT");
-      ensureColumn(
-db, "ledger", "tags", "TEXT");
-      ensureColumn(
-db, "ledger", "campaign_id", "TEXT");
-      ensureColumn(
-db, "ledger", "ip_address", "TEXT");
-      ensureColumn(
-db, "ledger", "user_agent", "TEXT");
-      ensureColumn(
-db, "ledger", "created_at", "INTEGER");
-      ensureColumn(
-db, "ledger", "updated_at", "INTEGER");
-    }
-    db.exec("UPDATE ledger SET verb = 'adjust' WHERE verb IS NULL OR verb = ''");
-    db.exec("UPDATE ledger SET amount = 0 WHERE amount IS NULL");
-    db.exec("UPDATE ledger SET balance_after = 0 WHERE balance_after IS NULL");
-    db.exec("UPDATE ledger SET status = 'posted' WHERE status IS NULL OR status = ''");
-    db.exec(
-      "UPDATE ledger SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000) WHERE created_at IS NULL OR created_at = 0"
-    );
-    db.exec(
-      "UPDATE ledger SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
-    );
-
-
-const sqliteTransaction = handler => db.transaction(handler);
-
-function rebuildLedgerTableIfLegacy() {
-  const info = db.prepare("PRAGMA table_info('ledger')").all();
-  if (!info.length) return;
-  const idColumn = info.find(col => col.name === "id");
-  const hasTextId = idColumn && typeof idColumn.type === "string" && idColumn.type.toUpperCase().includes("TEXT");
-  const legacyColumns = new Set(["delta", "reason", "kind", "nonce", "ts", "meta"]);
-  const hasLegacy = info.some(col => legacyColumns.has(col.name));
-  if (hasTextId && !hasLegacy) return;
-
-  const legacyName = `ledger_legacy_${Date.now()}`;
-  db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      reward_id TEXT,
-      parent_hold_id TEXT,
-      parent_ledger_id TEXT,
-      verb TEXT NOT NULL,
-      description TEXT,
-      amount INTEGER NOT NULL,
-      balance_after INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'posted',
-      note TEXT,
-      notes TEXT,
-      template_ids TEXT,
-      final_amount INTEGER,
-      metadata TEXT,
-      refund_reason TEXT,
-      refund_notes TEXT,
-      idempotency_key TEXT UNIQUE,
-      source TEXT,
-      tags TEXT,
-      campaign_id TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES member(id),
-      FOREIGN KEY (reward_id) REFERENCES reward(id),
-      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
-      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
-    );
-  `);
-
-  const rows = db.prepare(`SELECT * FROM ${legacyName}`).all();
-  if (rows.length) {
-    const insert = db.prepare(`
-      INSERT INTO ledger (
-        id,
-        user_id,
-        actor_id,
-        reward_id,
-        parent_hold_id,
-        parent_ledger_id,
-        verb,
-        description,
-        amount,
-        balance_after,
-        status,
-        note,
-        notes,
-        template_ids,
-        final_amount,
-        metadata,
-        refund_reason,
-        refund_notes,
-        idempotency_key,
-        source,
-        tags,
-        campaign_id,
-        ip_address,
-        user_agent,
-        created_at,
-        updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `);
-
-    // spend_request table
-    if (!tableExists("spend_request")) {
-      let legacySpend = null;
-      if (tableExists("spend_requests")) {
-        legacySpend = backupTable("spend_requests");
-      }
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS spend_request (
-          id TEXT PRIMARY KEY,
-          token TEXT UNIQUE NOT NULL,
-          user_id TEXT NOT NULL,
-          reward_id TEXT,
-          status TEXT NOT NULL DEFAULT 'pending',
-          amount INTEGER,
-          title TEXT,
-          image_url TEXT,
-          actor_id TEXT,
-          source TEXT,
-          tags TEXT,
-          campaign_id TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          FOREIGN KEY (user_id) REFERENCES member(id),
-          FOREIGN KEY (reward_id) REFERENCES reward(id)
-        );
-      `);
-      if (legacySpend) {
-  const rows = db.prepare(`SELECT * FROM ${legacySpend}`).all();
-
-  const insertSpend = db.prepare(`
-    INSERT INTO spend_request (
-      id,
-      token,
-      user_id,
-      reward_id,
-      status,
-      amount,
-      title,
-      image_url,
-      actor_id,
-      source,
-      tags,
-      campaign_id,
-      created_at,
-      updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  const insertMany = db.transaction((rows) => {
-    for (const r of rows) {
-      insertSpend.run(
-        r.id,
-        r.token,
-        r.user_id,
-        r.reward_id ?? null,
-        r.status ?? 'pending',
-        r.amount ?? null,
-        r.title ?? null,
-        r.image_url ?? null,
-        r.actor_id ?? null,
-        r.source ?? null,
-        r.tags ?? null,
-        r.campaign_id ?? null,
-        r.created_at ?? Date.now(),
-        r.updated_at ?? Date.now()
-      );
-    }
-  });
-
-  insertMany(rows);
-  dropTable(legacySpend);
-}
-
-      }
-    } else {
-      ensureColumn(
-db, "spend_request", "actor_id", "TEXT");
-      ensureColumn(
-db, "spend_request", "source", "TEXT");
-      ensureColumn(
-db, "spend_request", "tags", "TEXT");
-      ensureColumn(
-db, "spend_request", "campaign_id", "TEXT");
-      ensureColumn(
-db, "spend_request", "amount", "INTEGER");
-      ensureColumn(
-db, "spend_request", "created_at", "INTEGER");
-      ensureColumn(
-db, "spend_request", "updated_at", "INTEGER");
-    }
-    db.exec(
-      "UPDATE spend_request SET status = 'pending' WHERE status IS NULL OR status = ''"
-    );
-    db.exec(
-      "UPDATE spend_request SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000) WHERE created_at IS NULL OR created_at = 0"
-    );
-    db.exec(
-      "UPDATE spend_request SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
-    );
-    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_status ON spend_request(status)");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user ON spend_request(user_id)");
-
-    // consumed tokens
-    let consumedCols = [];
-    if (!tableExists("consumed_tokens")) {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS consumed_tokens (
-          id TEXT PRIMARY KEY,
-          token TEXT,
-          typ TEXT,
-          request_id TEXT,
-          user_id TEXT,
-          reward_id TEXT,
-          source TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          FOREIGN KEY (request_id) REFERENCES spend_request(id),
-          FOREIGN KEY (user_id) REFERENCES member(id),
-          FOREIGN KEY (reward_id) REFERENCES reward(id)
-        );
-      `);
-      consumedCols = [
-        "id",
-        "token",
-        "typ",
-        "request_id",
-        "user_id",
-        "reward_id",
-        "source",
-        "created_at",
-        "updated_at"
-      ];
-    } else {
-      consumedCols = getColumns("consumed_tokens");
-      if (!consumedCols.includes("id") && consumedCols.includes("jti")) {
-        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN jti TO id");
-        consumedCols = getColumns("consumed_tokens");
-      }
-      if (!consumedCols.includes("created_at") && consumedCols.includes("consumed_at")) {
-        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
-        consumedCols = getColumns("consumed_tokens");
-      }
-      ensureColumn(
-db, "consumed_tokens", "token", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "typ", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "request_id", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "user_id", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "reward_id", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "source", "TEXT");
-      ensureColumn(
-db, "consumed_tokens", "created_at", "INTEGER");
-      ensureColumn(
-db, "consumed_tokens", "updated_at", "INTEGER");
-    }
-  }
-
-  db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
-}
-
-const ensureTables = sqliteTransaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS member (
       id TEXT PRIMARY KEY,
@@ -1149,12 +453,256 @@ const ensureTables = sqliteTransaction(() => {
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-  };
+  }
+}); // end transaction
+// END ensureTables
 
-migrate();
+async function ensureSchema() {
+  ensureTables();
+}
+
+function rebuildLedgerTableIfLegacy() {
+  const info = db.prepare("PRAGMA table_info('ledger')").all();
+  if (!info.length) return;
+  const idColumn = info.find(col => col.name === "id");
+  const hasTextId = idColumn && typeof idColumn.type === "string" && idColumn.type.toUpperCase().includes("TEXT");
+  const legacyColumns = new Set(["delta", "reason", "kind", "nonce", "ts", "meta"]);
+  const hasLegacy = info.some(col => legacyColumns.has(col.name));
+  if (hasTextId && !hasLegacy) return;
+
+  const legacyName = `ledger_legacy_${Date.now()}`;
+  db.exec(`ALTER TABLE ledger RENAME TO ${legacyName}`);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      actor_id TEXT,
+      reward_id TEXT,
+      parent_hold_id TEXT,
+      parent_ledger_id TEXT,
+      verb TEXT NOT NULL,
+      description TEXT,
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'posted',
+      note TEXT,
+      notes TEXT,
+      template_ids TEXT,
+      final_amount INTEGER,
+      metadata TEXT,
+      refund_reason TEXT,
+      refund_notes TEXT,
+      idempotency_key TEXT UNIQUE,
+      source TEXT,
+      tags TEXT,
+      campaign_id TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES member(id),
+      FOREIGN KEY (reward_id) REFERENCES reward(id),
+      FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
+      FOREIGN KEY (parent_ledger_id) REFERENCES ledger(id)
+    );
+  `);
+
+  const rows = db.prepare(`SELECT * FROM ${legacyName}`).all();
+  if (rows.length) {
+    const insert = db.prepare(`
+      INSERT INTO ledger (
+        id,
+        user_id,
+        actor_id,
+        reward_id,
+        parent_hold_id,
+        parent_ledger_id,
+        verb,
+        description,
+        amount,
+        balance_after,
+        status,
+        note,
+        notes,
+        template_ids,
+        final_amount,
+        metadata,
+        refund_reason,
+        refund_notes,
+        idempotency_key,
+        source,
+        tags,
+        campaign_id,
+        ip_address,
+        user_agent,
+        created_at,
+        updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+
+    // spend_request table
+    if (!tableExists("spend_request")) {
+      let legacySpend = null;
+      if (tableExists("spend_requests")) {
+        legacySpend = backupTable("spend_requests");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS spend_request (
+          id TEXT PRIMARY KEY,
+          token TEXT UNIQUE NOT NULL,
+          user_id TEXT NOT NULL,
+          reward_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          amount INTEGER,
+          title TEXT,
+          image_url TEXT,
+          actor_id TEXT,
+          source TEXT,
+          tags TEXT,
+          campaign_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES member(id),
+          FOREIGN KEY (reward_id) REFERENCES reward(id)
+        );
+      `);
+      if (legacySpend) {
+        const rows = db.prepare(`SELECT * FROM ${legacySpend}`).all();
+
+        const insertSpend = db.prepare(`
+          INSERT INTO spend_request (
+            id,
+            token,
+            user_id,
+            reward_id,
+            status,
+            amount,
+            title,
+            image_url,
+            actor_id,
+            source,
+            tags,
+            campaign_id,
+            created_at,
+            updated_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `);
+
+        const insertMany = db.transaction((items) => {
+          for (const r of items) {
+            insertSpend.run(
+              r.id,
+              r.token,
+              r.user_id,
+              r.reward_id ?? null,
+              r.status ?? 'pending',
+              r.amount ?? null,
+              r.title ?? null,
+              r.image_url ?? null,
+              r.actor_id ?? null,
+              r.source ?? null,
+              r.tags ?? null,
+              r.campaign_id ?? null,
+              r.created_at ?? Date.now(),
+              r.updated_at ?? Date.now()
+            );
+          }
+        });
+
+        insertMany(rows);
+        dropTable(legacySpend);
+      }
+    } else {
+      ensureColumn(
+db, "spend_request", "actor_id", "TEXT");
+      ensureColumn(
+db, "spend_request", "source", "TEXT");
+      ensureColumn(
+db, "spend_request", "tags", "TEXT");
+      ensureColumn(
+db, "spend_request", "campaign_id", "TEXT");
+      ensureColumn(
+db, "spend_request", "amount", "INTEGER");
+      ensureColumn(
+db, "spend_request", "created_at", "INTEGER");
+      ensureColumn(
+db, "spend_request", "updated_at", "INTEGER");
+    }
+    db.exec(
+      "UPDATE spend_request SET status = 'pending' WHERE status IS NULL OR status = ''"
+    );
+    db.exec(
+      "UPDATE spend_request SET created_at = COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000) WHERE created_at IS NULL OR created_at = 0"
+    );
+    db.exec(
+      "UPDATE spend_request SET updated_at = COALESCE(NULLIF(updated_at, 0), COALESCE(NULLIF(created_at, 0), strftime('%s','now')*1000)) WHERE updated_at IS NULL OR updated_at = 0"
+    );
+    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_status ON spend_request(status)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_spend_request_user ON spend_request(user_id)");
+
+    // consumed tokens
+    let consumedCols = [];
+    if (!tableExists("consumed_tokens")) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS consumed_tokens (
+          id TEXT PRIMARY KEY,
+          token TEXT,
+          typ TEXT,
+          request_id TEXT,
+          user_id TEXT,
+          reward_id TEXT,
+          source TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES spend_request(id),
+          FOREIGN KEY (user_id) REFERENCES member(id),
+          FOREIGN KEY (reward_id) REFERENCES reward(id)
+        );
+      `);
+      consumedCols = [
+        "id",
+        "token",
+        "typ",
+        "request_id",
+        "user_id",
+        "reward_id",
+        "source",
+        "created_at",
+        "updated_at"
+      ];
+    } else {
+      consumedCols = getColumns("consumed_tokens");
+      if (!consumedCols.includes("id") && consumedCols.includes("jti")) {
+        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN jti TO id");
+        consumedCols = getColumns("consumed_tokens");
+      }
+      if (!consumedCols.includes("created_at") && consumedCols.includes("consumed_at")) {
+        db.exec("ALTER TABLE consumed_tokens RENAME COLUMN consumed_at TO created_at");
+        consumedCols = getColumns("consumed_tokens");
+      }
+      ensureColumn(
+db, "consumed_tokens", "token", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "typ", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "request_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "user_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "reward_id", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "source", "TEXT");
+      ensureColumn(
+db, "consumed_tokens", "created_at", "INTEGER");
+      ensureColumn(
+db, "consumed_tokens", "updated_at", "INTEGER");
+    }
+  }
 
   db.exec(`DROP TABLE IF EXISTS ${legacyName}`);
 }
+
+
 
 ensureSchema();
 ensureTables();
