@@ -243,11 +243,23 @@ const ensureTables = db.transaction(() => {
     !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
   const backupTable = name => {
     const legacyName = `${name}_legacy_${Date.now()}`;
-    db.exec(`ALTER TABLE ${name} RENAME TO ${legacyName}`);
+    if (!isSafeIdent(name)) throw new Error(`Unsafe table name: ${name}`);
+    if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
+    db.exec("ALTER TABLE " + quoteIdent(name) + " RENAME TO " + quoteIdent(legacyName));
     return legacyName;
   };
   const getColumns = name =>
     db.prepare("PRAGMA table_info('" + name.replace(/'/g, "''") + "')").all().map(col => col.name);
+
+  // --- Identifier helpers for SQLite DDL ---
+// Only allow simple identifiers, then quote them to be safe in DDL.
+function isSafeIdent(s) {
+  return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
+}
+function quoteIdent(s) {
+  // SQLite identifier quoting with double-quotes, double any internal quotes
+  return '"' + String(s).replace(/"/g, '""') + '"';
+}
 
   const dropTable = name => {
     if (!name) return false;
@@ -473,7 +485,9 @@ function rebuildLedgerTableIfLegacy() {
   db.exec("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)");
 
   // 5) Drop the legacy table
-  db.exec(\`DROP TABLE IF EXISTS \${legacyName}\`);
+if (!isSafeIdent(legacyName)) throw new Error(`Unsafe table name: ${legacyName}`);
+db.exec("DROP TABLE IF EXISTS " + quoteIdent(legacyName));
+
 }
 
 rebuildLedgerTableIfLegacy();
