@@ -802,14 +802,15 @@ db, "consumed_tokens", "updated_at", "INTEGER");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_user ON consumed_tokens(user_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_reward ON consumed_tokens(reward_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_consumed_tokens_request ON consumed_tokens(request_id)");
-  }
+  
 });
 
+function ensureSchema(){
+  ensureTables();
   migrate();
 }
 
 ensureSchema();
-ensureTables();
 function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
