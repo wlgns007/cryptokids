@@ -1057,6 +1057,9 @@
               <label style="flex:1;">Search
                 <input id="filterRewards" type="text" placeholder="Search rewards">
               </label>
+              <div class="row" style="gap:6px; flex-wrap:wrap;">
+                <button type="button" id="btnShowInactiveRewards" class="btn btn-sm" hidden>Show deactivated rewards</button>
+              </div>
               <label style="flex:0 0 auto; align-items:center; flex-direction:row; gap:6px;">
                 <input type="checkbox" id="adminShowUrls">
                 <span>Show URLs</span>
@@ -1301,6 +1304,39 @@
           </table>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="memberEditModal" class="modal hidden">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <header>
+        <h3>Edit Member</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-close>×</button>
+      </header>
+      <form id="memberEditForm" class="stack" novalidate>
+        <label>User ID
+          <input id="memberEditId" type="text" readonly>
+        </label>
+        <label>Name
+          <input id="memberEditName" type="text" placeholder="Full name" required>
+        </label>
+        <label>Date of Birth
+          <input id="memberEditDob" type="text" inputmode="numeric" placeholder="YYYY-MM-DD or 8 digits">
+        </label>
+        <small class="muted">Enter 8 digits (YYYYMMDD) or a formatted date. We'll tidy it for you.</small>
+        <label>Sex
+          <select id="memberEditSex">
+            <option value="">Select sex</option>
+            <option value="Boy">Boy</option>
+            <option value="Girl">Girl</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="btnMemberEditCancel" data-close>Cancel</button>
+          <button type="submit" class="primary" id="btnMemberEditSave">Save Changes</button>
+        </div>
+      </form>
     </div>
   </div>
 
