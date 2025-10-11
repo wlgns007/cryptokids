@@ -617,12 +617,83 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     }
   });
 
-  function renderQr(elId, text) {
+  let qrLibraryPromise = null;
+
+  function ensureQrLibrary() {
+    if (typeof window !== 'undefined' && typeof window.QRCode === 'function') {
+      return Promise.resolve(window.QRCode);
+    }
+    if (qrLibraryPromise) {
+      return qrLibraryPromise;
+    }
+    qrLibraryPromise = new Promise((resolve, reject) => {
+      const resolveIfReady = () => {
+        if (typeof window.QRCode === 'function') {
+          resolve(window.QRCode);
+        } else {
+          reject(new Error('QR library loaded without QRCode constructor'));
+        }
+      };
+
+      const scripts = Array.from(document.getElementsByTagName('script'));
+      const existing = scripts.find((script) => script.src && script.src.includes('qrcode'));
+      if (existing) {
+        const markReady = () => {
+          existing.dataset.ckQrReady = '1';
+          resolveIfReady();
+        };
+        const alreadyLoaded = existing.dataset.ckQrReady === '1' || existing.readyState === 'complete' || existing.readyState === 'loaded';
+        if (alreadyLoaded) {
+          markReady();
+        } else {
+          existing.addEventListener('load', markReady, { once: true });
+          existing.addEventListener('error', () => reject(new Error('Failed to load QR library')), { once: true });
+        }
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = '/qrcode.min.js?v=__BUILD__';
+      script.async = true;
+      script.dataset.ckQrLoader = '1';
+      script.addEventListener('load', () => {
+        script.dataset.ckQrReady = '1';
+        resolveIfReady();
+      }, { once: true });
+      script.addEventListener('error', () => reject(new Error('Failed to load QR library')), { once: true });
+      document.head.appendChild(script);
+    }).catch((err) => {
+      qrLibraryPromise = null;
+      throw err;
+    });
+    return qrLibraryPromise;
+  }
+
+  async function renderQr(elId, text) {
     const el = $(elId);
     if (!el) return;
     el.innerHTML = '';
     if (!text) return;
-    new QRCode(el, { text, width: 220, height: 220 });
+    try {
+      const QR = await ensureQrLibrary();
+      if (typeof QR === 'function') {
+        new QR(el, { text, width: 220, height: 220 });
+        return;
+      }
+      throw new Error('QR constructor unavailable');
+    } catch (err) {
+      console.error('renderQr failed', err);
+      const fallback = document.createElement('div');
+      fallback.className = 'muted';
+      fallback.textContent = 'QR unavailable. Use the link below:';
+      const link = document.createElement('a');
+      link.href = text;
+      link.textContent = 'Open QR link';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      el.appendChild(fallback);
+      el.appendChild(link);
+    }
   }
 
   loadEarnTemplates();

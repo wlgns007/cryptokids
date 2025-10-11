@@ -203,6 +203,57 @@ function normalizeTimestamp(value, fallback = Date.now()) {
   return parsed;
 }
 
+function tableExists(name) {
+  if (!name) return false;
+  return !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+    .get(String(name));
+}
+
+function normalizeLegacyMemberId(raw) {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  let normalized = trimmed.toLowerCase();
+  const prefixes = [
+    "child:",
+    "child-",
+    "child/",
+    "kid:",
+    "kid-",
+    "member:",
+    "member-",
+    "user:",
+    "user-",
+    "parent:",
+    "parent-",
+    "children:",
+    "children-"
+  ];
+  for (const prefix of prefixes) {
+    if (normalized.startsWith(prefix)) {
+      normalized = normalized.slice(prefix.length);
+      break;
+    }
+  }
+  normalized = normalized.replace(/^[^a-z0-9]+/, "");
+  normalized = normalized.replace(/[^a-z0-9_-]/g, "");
+  return normalized || null;
+}
+
+function toDisplayName(id, fallbackName) {
+  const direct = fallbackName ? String(fallbackName).trim() : "";
+  if (direct) return direct;
+  const safeId = String(id || "").trim();
+  if (!safeId) return "Member";
+  const parts = safeId
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1));
+  if (parts.length) return parts.join(" ");
+  return safeId.charAt(0).toUpperCase() + safeId.slice(1);
+}
+
 function randomId() {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -269,6 +320,177 @@ function addCol(table, col, type, {
       throw err;
     }
   }
+}
+
+function importLegacyRewards() {
+  if (!tableExists("reward") || !tableExists("rewards")) {
+    return;
+  }
+  let rows = [];
+  try {
+    rows = db.prepare("SELECT * FROM rewards").all();
+  } catch (err) {
+    console.warn("legacy reward import skipped", err?.message || err);
+    return;
+  }
+  if (!rows.length) return;
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO reward (
+      id, name, cost, description, image_url, youtube_url,
+      status, tags, campaign_id, source, created_at, updated_at
+    ) VALUES (@id, @name, @cost, @description, @image_url, @youtube_url,
+      @status, @tags, @campaign_id, @source, @created_at, @updated_at)
+  `);
+  const now = Date.now();
+  const payload = rows.map(row => {
+    const rawId = row.id ?? row.ID ?? randomId();
+    const id = String(rawId).trim() || randomId();
+    const createdAt = normalizeTimestamp(row.created_at ?? row.createdAt, now);
+    const updatedAt = normalizeTimestamp(row.updated_at ?? row.updatedAt, createdAt);
+    const costValue = Number(row.cost ?? row.price ?? 0);
+    const status = Number(row.active ?? row.status ?? 1) === 1 ? "active" : "disabled";
+    return {
+      id,
+      name: row.name ? String(row.name).trim() || id : id,
+      cost: Number.isFinite(costValue) ? Math.trunc(costValue) : 0,
+      description: row.description ? String(row.description) : "",
+      image_url: row.image_url ? String(row.image_url).trim() : row.imageUrl ? String(row.imageUrl).trim() : "",
+      youtube_url: row.youtube_url ? String(row.youtube_url).trim() : row.youtubeUrl ? String(row.youtubeUrl).trim() : null,
+      status,
+      tags: null,
+      campaign_id: null,
+      source: "legacy",
+      created_at: createdAt,
+      updated_at: updatedAt
+    };
+  });
+
+  const insertMany = db.transaction(items => {
+    for (const item of items) {
+      insert.run(item);
+    }
+  });
+  insertMany(payload);
+}
+
+function importLegacyMembers() {
+  if (!tableExists("member")) return;
+
+  const existing = new Set(
+    db.prepare("SELECT id FROM member").all().map(row => row.id)
+  );
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO member (
+      id, name, date_of_birth, sex, status, tags, campaign_id, source, created_at, updated_at
+    ) VALUES (@id, @name, @date_of_birth, @sex, @status, @tags, @campaign_id, @source, @created_at, @updated_at)
+  `);
+
+  const candidates = new Map();
+  function enqueue(rawId, displayName, createdAt) {
+    const normalized = normalizeLegacyMemberId(rawId);
+    if (!normalized || normalized === "system") return;
+    if (existing.has(normalized) || candidates.has(normalized)) return;
+    const created = normalizeTimestamp(createdAt, Date.now());
+    candidates.set(normalized, {
+      id: normalized,
+      name: toDisplayName(normalized, displayName),
+      date_of_birth: null,
+      sex: null,
+      status: "active",
+      tags: null,
+      campaign_id: null,
+      source: "legacy",
+      created_at: created,
+      updated_at: created
+    });
+  }
+
+  const backupPath = join(__dirname, "parentshop.backup.db");
+  if (fs.existsSync(backupPath)) {
+    const alias = "legacy_backup";
+    const escaped = backupPath.replace(/'/g, "''");
+    try {
+      db.exec(`ATTACH DATABASE '${escaped}' AS ${alias}`);
+      try {
+        const hasUsers = db
+          .prepare(`SELECT name FROM ${alias}.sqlite_master WHERE type='table' AND name='users'`)
+          .get();
+        if (hasUsers) {
+          const rows = db.prepare(`SELECT id, display_name, created_at FROM ${alias}.users`).all();
+          for (const row of rows) {
+            enqueue(row.id, row.display_name, row.created_at);
+          }
+        }
+        const hasBalances = db
+          .prepare(`SELECT name FROM ${alias}.sqlite_master WHERE type='table' AND name='balances'`)
+          .get();
+        if (hasBalances) {
+          const rows = db.prepare(`SELECT DISTINCT user_id FROM ${alias}.balances`).all();
+          for (const row of rows) {
+            enqueue(row.user_id, null, null);
+          }
+        }
+        const hasLedger = db
+          .prepare(`SELECT name FROM ${alias}.sqlite_master WHERE type='table' AND name='ledger'`)
+          .get();
+        if (hasLedger) {
+          const rows = db.prepare(`SELECT DISTINCT user_id FROM ${alias}.ledger`).all();
+          for (const row of rows) {
+            enqueue(row.user_id, null, null);
+          }
+        }
+      } finally {
+        db.exec(`DETACH DATABASE ${alias}`);
+      }
+    } catch (err) {
+      console.warn("legacy member import failed", err?.message || err);
+    }
+  }
+
+  if (tableExists("users")) {
+    try {
+      const rows = db.prepare("SELECT id, display_name, created_at FROM users").all();
+      for (const row of rows) {
+        enqueue(row.id, row.display_name, row.created_at);
+      }
+    } catch (err) {
+      console.warn("legacy users table import skipped", err?.message || err);
+    }
+  }
+
+  if (tableExists("balances")) {
+    try {
+      const rows = db.prepare("SELECT DISTINCT user_id FROM balances").all();
+      for (const row of rows) {
+        enqueue(row.user_id, null, null);
+      }
+    } catch (err) {
+      console.warn("legacy balances import skipped", err?.message || err);
+    }
+  }
+
+  if (tableExists("ledger")) {
+    try {
+      const rows = db.prepare("SELECT DISTINCT user_id FROM ledger").all();
+      for (const row of rows) {
+        enqueue(row.user_id, null, null);
+      }
+    } catch (err) {
+      console.warn("legacy ledger import skipped", err?.message || err);
+    }
+  }
+
+  if (!candidates.size) return;
+
+  const insertMany = db.transaction(items => {
+    for (const item of items) {
+      insert.run(item);
+      existing.add(item.id);
+    }
+  });
+  insertMany([...candidates.values()]);
 }
 
 function rebuildLedgerTableIfLegacy() {
@@ -564,6 +786,8 @@ const ensureTables = db.transaction(() => {
     return true;
   };
 
+  ensureMemberTable();
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
       id TEXT PRIMARY KEY,
@@ -783,11 +1007,7 @@ const ensureBaseSchema = db.transaction(() => {
   // 1) Create ALL base tables first (member, reward, hold, spend_request, etc.)
   ensureTables();
 
-  // 2) Seed required rows (depends on member table now existing)
-  ensureDefaultMembers();
-  ensureSystemMember();
-
-  // 3) Tables needed by other features
+  // 2) Tables needed by other features
   ensureConsumedTokens();
 });
 
@@ -808,6 +1028,10 @@ function ensureSchema() {
 }
 
 ensureSchema();
+importLegacyRewards();
+importLegacyMembers();
+ensureSystemMember();
+ensureDefaultMembers();
 function getHoldRow(holdId) {
   return db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
 }
@@ -858,6 +1082,11 @@ const deleteMemberStmt = db.prepare(`
 
 function ensureDefaultMembers() {
   ensureMemberTable();
+
+  const memberCount = db.prepare("SELECT COUNT(*) AS c FROM member WHERE id != 'system'").get();
+  if ((memberCount?.c ?? 0) > 0) {
+    return;
+  }
 
   const defaults = [
     { id: "leo", name: "Leo", date_of_birth: null, sex: null, status: "active" }
@@ -2204,12 +2433,13 @@ app.post("/api/members", requireAdminKey, (req, res) => {
   const now = Date.now();
   try {
     insertMemberStmt.run({
-      userId,
+      id: userId,
       name,
-      dob: dob || null,
+      date_of_birth: dob || null,
       sex: sex || null,
-      createdAt: now,
-      updatedAt: now
+      status: "active",
+      created_at: now,
+      updated_at: now
     });
   } catch (err) {
     if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
@@ -2241,11 +2471,12 @@ app.patch("/api/members/:userId", requireAdminKey, (req, res) => {
   if (!name) return res.status(400).json({ error: "name required" });
   try {
     updateMemberStmt.run({
-      userId,
+      id: userId,
       name,
-      dob: dob || null,
+      date_of_birth: dob || null,
       sex: sex || null,
-      updatedAt: Date.now()
+      status: existing.status || "active",
+      updated_at: Date.now()
     });
   } catch (err) {
     console.error("updateMember failed", err);
@@ -2692,6 +2923,21 @@ app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
+app.delete("/api/rewards/:id", requireAdminKey, (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "invalid_id" });
+  try {
+    const info = db.prepare("DELETE FROM reward WHERE id = ?").run(id);
+    if (!info.changes) return res.status(404).json({ error: "not_found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("delete reward", err);
+    const code = err?.code === "SQLITE_CONSTRAINT_FOREIGNKEY" ? 409 : 500;
+    const error = code === 409 ? "reward_in_use" : "delete_reward_failed";
+    res.status(code).json({ error });
+  }
+});
+
 app.post("/api/tokens/earn", (req, res) => {
   try {
     const userId = normId(req.body?.userId);
@@ -2900,15 +3146,24 @@ app.post("/api/holds", express.json(), (req, res) => {
 
 app.get('/api/holds', requireAdminKey, (req, res) => {
   const status = (req.query?.status || 'pending').toString().toLowerCase();
+  const userId = normId(req.query?.userId ?? req.query?.user_id);
   const allowed = ['pending', 'redeemed', 'released', 'all'];
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: 'invalid_status' });
   }
   let sql = 'SELECT * FROM hold';
+  const filters = [];
   const params = [];
   if (status !== 'all') {
-    sql += ' WHERE status = ?';
+    filters.push('status = ?');
     params.push(status);
+  }
+  if (userId) {
+    filters.push('LOWER(user_id) = ?');
+    params.push(userId);
+  }
+  if (filters.length) {
+    sql += ' WHERE ' + filters.join(' AND ');
   }
   sql += ' ORDER BY created_at DESC';
   const rows = db.prepare(sql).all(...params).map(mapHoldRow);

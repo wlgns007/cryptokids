@@ -470,6 +470,90 @@ details.member-fold .summary-value {
     return `refund-${Date.now()}-${rand}`;
   }
 
+  const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  function buildDateParts(year, month, day) {
+    const y = Number(year);
+    const m = Number(month);
+    const d = Number(day);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+    const date = new Date(Date.UTC(y, m - 1, d));
+    if (date.getUTCFullYear() !== y || date.getUTCMonth() + 1 !== m || date.getUTCDate() !== d) return null;
+    return { year: y, month: m, day: d, date };
+  }
+
+  function parseDobParts(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+
+    const digits = trimmed.replace(/[^0-9]/g, '');
+    if (digits.length === 8) {
+      const parts = buildDateParts(digits.slice(0, 4), digits.slice(4, 6), digits.slice(6, 8));
+      if (parts) return parts;
+    }
+
+    const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (isoMatch) {
+      const parts = buildDateParts(isoMatch[1], isoMatch[2], isoMatch[3]);
+      if (parts) return parts;
+    }
+
+    const sanitized = trimmed
+      .replace(/(\d+)(st|nd|rd|th)/gi, '$1')
+      .replace(/[.,]/g, '')
+      .replace(/-/g, ' ');
+    const parsed = Date.parse(sanitized);
+    if (!Number.isNaN(parsed)) {
+      const date = new Date(parsed);
+      return buildDateParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+    }
+
+    return null;
+  }
+
+  function normalizeDobInput(value) {
+    const trimmed = (value ?? '').toString().trim();
+    if (!trimmed) return '';
+    const parts = parseDobParts(trimmed);
+    if (!parts) return trimmed;
+    const month = String(parts.month).padStart(2, '0');
+    const day = String(parts.day).padStart(2, '0');
+    return `${parts.year.toString().padStart(4, '0')}-${month}-${day}`;
+  }
+
+  function formatDobFriendly(value) {
+    const trimmed = (value ?? '').toString().trim();
+    if (!trimmed) return '';
+    const parts = parseDobParts(trimmed);
+    if (!parts) return trimmed;
+    const monthName = MONTH_NAMES[parts.month - 1] || parts.month;
+    const day = parts.day;
+    const suffix = (() => {
+      const mod100 = day % 100;
+      if (mod100 >= 11 && mod100 <= 13) return 'th';
+      switch (day % 10) {
+        case 1: return 'st';
+        case 2: return 'nd';
+        case 3: return 'rd';
+        default: return 'th';
+      }
+    })();
+    return `${parts.year}-${monthName} ${day}${suffix}`;
+  }
+
+  function normalizeSexValue(value) {
+    const normalized = (value ?? '').toString().trim().toLowerCase();
+    if (!normalized) return '';
+    if (['boy', 'male', 'm'].includes(normalized)) return 'Boy';
+    if (['girl', 'female', 'f'].includes(normalized)) return 'Girl';
+    return '';
+  }
+
+
   const memberIdInput = $('memberUserId');
   const memberStatusEl = $('memberStatus');
   const memberInfoDetails = $('memberInfoDetails');
@@ -491,6 +575,13 @@ details.member-fold .summary-value {
   const memberListStatus = $('memberListStatus');
   const memberSearchInput = $('memberSearch');
   const memberListSection = $('memberListSection');
+  const memberEditModal = $('memberEditModal');
+  const memberEditForm = $('memberEditForm');
+  const memberEditIdInput = $('memberEditId');
+  const memberEditNameInput = $('memberEditName');
+  const memberEditDobInput = $('memberEditDob');
+  const memberEditSexSelect = $('memberEditSex');
+  const memberEditSaveBtn = $('btnMemberEditSave');
 
   const refundModal = $('refundModal');
   const refundForm = $('refundForm');
@@ -508,6 +599,8 @@ details.member-fold .summary-value {
   const btnActivityRefresh = $('btnActivityRefresh');
   const activityRowIndex = new Map();
 
+  const MEMBER_EDIT_SAVE_DEFAULT_TEXT = memberEditSaveBtn?.textContent || 'Save Changes';
+  let activeMemberEdit = null;
   let activeRefundContext = null;
   let latestHints = null;
   let latestHintsErrorMessage = null;
@@ -929,12 +1022,14 @@ details.member-fold .summary-value {
 
     const dobEl = document.createElement('div');
     dobEl.className = 'muted';
-    dobEl.textContent = `DOB: ${member.dob || '—'}`;
+    const dobDisplay = formatDobFriendly(member.dob || '') || '—';
+    dobEl.textContent = `DOB: ${dobDisplay}`;
     memberInfoDetails.appendChild(dobEl);
 
     const sexEl = document.createElement('div');
     sexEl.className = 'muted';
-    sexEl.textContent = `Sex: ${member.sex || '—'}`;
+    const sexDisplay = normalizeSexValue(member.sex) || member.sex || '—';
+    sexEl.textContent = `Sex: ${sexDisplay}`;
     memberInfoDetails.appendChild(sexEl);
   }
 
@@ -1067,26 +1162,69 @@ details.member-fold .summary-value {
 
   $('btnMemberRegister')?.addEventListener('click', submitMemberRegistration);
 
-  async function editMember(member) {
-    if (!member) return;
-    const namePrompt = prompt('Member name', member.name || '');
-    if (namePrompt === null) return;
-    const name = namePrompt.trim();
-    if (!name) {
-      toast('Name required', 'error');
+  function autoFormatDobField(input) {
+    if (!input) return;
+    const formatted = formatDobFriendly(input.value);
+    input.value = formatted;
+  }
+
+  function openMemberEditModal(member) {
+    if (!memberEditModal || !memberEditForm) return;
+    activeMemberEdit = { ...member };
+    if (memberEditIdInput) memberEditIdInput.value = member.userId || '';
+    if (memberEditNameInput) memberEditNameInput.value = member.name || '';
+    if (memberEditDobInput) {
+      memberEditDobInput.value = member.dob ? formatDobFriendly(member.dob) : '';
+      autoFormatDobField(memberEditDobInput);
+    }
+    if (memberEditSexSelect) {
+      const normalizedSex = normalizeSexValue(member.sex) || '';
+      memberEditSexSelect.value = normalizedSex;
+    }
+    memberEditModal.classList.remove('hidden');
+    if (memberEditNameInput) memberEditNameInput.focus();
+  }
+
+  function closeMemberEditModal() {
+    if (!memberEditModal) return;
+    memberEditModal.classList.add('hidden');
+    memberEditForm?.reset?.();
+    if (memberEditSaveBtn) {
+      memberEditSaveBtn.disabled = false;
+      memberEditSaveBtn.textContent = MEMBER_EDIT_SAVE_DEFAULT_TEXT;
+    }
+    activeMemberEdit = null;
+  }
+
+  memberEditDobInput?.addEventListener('blur', () => autoFormatDobField(memberEditDobInput));
+  memberEditDobInput?.addEventListener('change', () => autoFormatDobField(memberEditDobInput));
+
+  memberEditForm?.addEventListener('submit', async (event) => {
+    event?.preventDefault();
+    if (!activeMemberEdit) {
+      closeMemberEditModal();
       return;
     }
-    const dobPrompt = prompt('Date of birth (YYYY-MM-DD)', member.dob || '');
-    if (dobPrompt === null) return;
-    const dob = dobPrompt.trim();
-    const sexPrompt = prompt('Sex', member.sex || '');
-    if (sexPrompt === null) return;
-    const sex = sexPrompt.trim();
+    const userId = activeMemberEdit.userId;
+    const name = memberEditNameInput?.value?.trim() || '';
+    if (!name) {
+      toast('Name required', 'error');
+      memberEditNameInput?.focus?.();
+      return;
+    }
+    const dob = normalizeDobInput(memberEditDobInput?.value || '');
+    const sexRaw = memberEditSexSelect?.value || '';
+    const sex = normalizeSexValue(sexRaw) || '';
+    if (memberEditSaveBtn) {
+      memberEditSaveBtn.disabled = true;
+      memberEditSaveBtn.textContent = 'Saving...';
+    }
     try {
-      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(member.userId)}`, {
+      const payload = { name, dob: dob || undefined, sex: sex || undefined };
+      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, dob: dob || undefined, sex: sex || undefined })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -1097,15 +1235,26 @@ details.member-fold .summary-value {
         throw new Error(msg);
       }
       toast('Member updated');
-      await loadMembersList();
       const updated = body && typeof body === 'object' ? body.member || body : null;
+      closeMemberEditModal();
+      await loadMembersList();
       if (updated && memberIdInput?.value === updated.userId) {
         renderMemberInfo(updated);
       }
     } catch (err) {
       console.error(err);
       toast(err.message || 'Failed to update member', 'error');
+    } finally {
+      if (memberEditSaveBtn && memberEditModal && !memberEditModal.classList.contains('hidden')) {
+        memberEditSaveBtn.disabled = false;
+        memberEditSaveBtn.textContent = MEMBER_EDIT_SAVE_DEFAULT_TEXT;
+      }
     }
+  });
+
+  function editMember(member) {
+    if (!member) return;
+    openMemberEditModal(member);
   }
 
   async function deleteMember(member) {
@@ -1180,26 +1329,16 @@ details.member-fold .summary-value {
         nameCell.textContent = row.name || '';
         tr.appendChild(nameCell);
         const dobCell = document.createElement('td');
-        dobCell.textContent = row.dob || '';
+        dobCell.textContent = formatDobFriendly(row.dob || '') || '';
         tr.appendChild(dobCell);
         const sexCell = document.createElement('td');
-        sexCell.textContent = row.sex || '';
+        sexCell.textContent = normalizeSexValue(row.sex) || row.sex || '';
         tr.appendChild(sexCell);
         const actions = document.createElement('td');
         actions.style.display = 'flex';
         actions.style.flexWrap = 'wrap';
         actions.style.gap = '6px';
         actions.style.alignItems = 'center';
-
-        const selectBtn = document.createElement('button');
-        selectBtn.textContent = 'Select';
-        selectBtn.addEventListener('click', () => {
-          if (memberIdInput) {
-            memberIdInput.value = row.userId;
-            memberIdChanged();
-          }
-        });
-        actions.appendChild(selectBtn);
 
         const editBtn = document.createElement('button');
         editBtn.textContent = 'Edit';
@@ -1325,7 +1464,9 @@ details.member-fold .summary-value {
     }
     $('holdsStatus').textContent = 'Loading...';
     try {
-      const { res, body } = await adminFetch(`/api/holds?status=${encodeURIComponent(status)}`);
+      const params = new URLSearchParams({ status });
+      if (normalizedUser) params.set('userId', normalizedUser);
+      const { res, body } = await adminFetch(`/api/holds?${params.toString()}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         $('holdsStatus').textContent = 'Admin key invalid.';
@@ -1337,8 +1478,7 @@ details.member-fold .summary-value {
         throw new Error(msg);
       }
       const rows = Array.isArray(body) ? body : [];
-      const filtered = rows.filter(row => String(row.userId || '').trim().toLowerCase() === normalizedUser);
-      if (!filtered.length) {
+      if (!rows.length) {
         const row = document.createElement('tr');
         const cell = document.createElement('td');
         cell.colSpan = 6;
@@ -1350,7 +1490,7 @@ details.member-fold .summary-value {
         return;
       }
       const frag = document.createDocumentFragment();
-      for (const row of filtered) {
+      for (const row of rows) {
         const tr = document.createElement('tr');
         tr.dataset.holdId = row.id;
         tr.innerHTML = `
@@ -1373,7 +1513,7 @@ details.member-fold .summary-value {
         frag.appendChild(tr);
       }
       holdsTable.appendChild(frag);
-      const count = filtered.length;
+      const count = rows.length;
       const suffix = count === 1 ? '' : 's';
       $('holdsStatus').textContent = `Showing ${count} hold${suffix} for "${rawUserId}".`;
     } catch (err) {
@@ -1385,6 +1525,14 @@ details.member-fold .summary-value {
   $('holdFilter')?.addEventListener('change', loadHolds);
   document.addEventListener('DOMContentLoaded', loadHolds);
 
+  memberEditModal?.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target?.dataset?.close !== undefined || target === memberEditModal || target?.classList?.contains('modal-backdrop')) {
+      event.preventDefault();
+      closeMemberEditModal();
+    }
+  });
+
   refundModal?.addEventListener('click', (event) => {
     const target = event.target;
     if (target?.dataset?.close !== undefined || target === refundModal || target?.classList?.contains('modal-backdrop')) {
@@ -1394,6 +1542,9 @@ details.member-fold .summary-value {
   });
 
   window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && memberEditModal && !memberEditModal.classList.contains('hidden')) {
+      closeMemberEditModal();
+    }
     if (event.key === 'Escape' && refundModal && !refundModal.classList.contains('hidden')) {
       closeRefundModal();
     }
@@ -1824,6 +1975,27 @@ setupScanner({
     updateReward(item.id, payload);
   }
 
+  const rewardsToggleBtn = $('btnShowInactiveRewards');
+  let rewardsStatusFilter = 'active';
+  let rewardsHasDisabled = false;
+
+  function updateRewardsToggleButton() {
+    if (!rewardsToggleBtn) return;
+    if (!rewardsHasDisabled) {
+      rewardsToggleBtn.hidden = true;
+      rewardsToggleBtn.disabled = true;
+      rewardsToggleBtn.setAttribute('aria-pressed', 'false');
+      rewardsToggleBtn.classList.remove('is-selected');
+      return;
+    }
+    const showingInactive = rewardsStatusFilter === 'disabled';
+    rewardsToggleBtn.hidden = false;
+    rewardsToggleBtn.disabled = false;
+    rewardsToggleBtn.textContent = showingInactive ? 'Hide deactivated rewards' : 'Show deactivated rewards';
+    rewardsToggleBtn.setAttribute('aria-pressed', showingInactive ? 'true' : 'false');
+    rewardsToggleBtn.classList.toggle('is-selected', showingInactive);
+  }
+
   async function loadRewards() {
     const list = $('rewardsList');
     if (!list) return;
@@ -1831,8 +2003,17 @@ setupScanner({
     const filterValue = $('filterRewards')?.value?.toLowerCase?.() || '';
     list.innerHTML = '<div class="muted">Loading...</div>';
     if (statusEl) statusEl.textContent = '';
+    if (rewardsStatusFilter !== 'disabled') {
+      rewardsHasDisabled = false;
+      updateRewardsToggleButton();
+    }
     try {
-      const { res, body } = await adminFetch('/api/rewards');
+      const params = new URLSearchParams();
+      if (rewardsStatusFilter === 'disabled') {
+        params.set('status', 'disabled');
+      }
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const { res, body } = await adminFetch(`/api/rewards${qs}`);
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
         list.innerHTML = '<div class="muted">Admin key invalid.</div>';
@@ -1853,9 +2034,17 @@ setupScanner({
         image_url: item.image_url || item.imageUrl || '',
         youtubeUrl: item.youtubeUrl || item.youtube_url || '',
         youtube_url: item.youtube_url || item.youtubeUrl || '',
-        active: Number(item.active ?? 1) ? 1 : 0
+        status: (item.status || (item.active ? 'active' : 'disabled') || 'active').toString().toLowerCase(),
+        active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0
       }));
-      const filtered = normalized.filter(it => !filterValue || it.name.toLowerCase().includes(filterValue));
+      rewardsHasDisabled = normalized.some(it => it.status === 'disabled');
+      const filtered = normalized.filter(it => {
+        const matchesFilter = !filterValue || it.name.toLowerCase().includes(filterValue);
+        if (!matchesFilter) return false;
+        if (rewardsStatusFilter === 'active') return it.status !== 'disabled';
+        if (rewardsStatusFilter === 'disabled') return it.status === 'disabled';
+        return true;
+      });
       const showUrls = document.getElementById('adminShowUrls')?.checked;
       for (const item of filtered) {
         const card = document.createElement('div');
@@ -1973,24 +2162,56 @@ setupScanner({
         editBtn.addEventListener('click', () => editReward(item));
         actions.appendChild(editBtn);
 
-        const toggleBtn = document.createElement('button');
-        toggleBtn.textContent = item.active ? 'Deactivate' : 'Activate';
-        toggleBtn.addEventListener('click', () => updateReward(item.id, { active: item.active ? 0 : 1 }));
-        actions.appendChild(toggleBtn);
+        const isDisabled = item.status === 'disabled' || !item.active;
+        if (rewardsStatusFilter === 'disabled') {
+          const reactivateBtn = document.createElement('button');
+          reactivateBtn.textContent = 'Reactivate';
+          reactivateBtn.addEventListener('click', () => updateReward(item.id, { active: 1 }));
+          actions.appendChild(reactivateBtn);
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.textContent = 'Delete permanently';
+          deleteBtn.addEventListener('click', () => deleteReward(item.id));
+          actions.appendChild(deleteBtn);
+        } else {
+          const toggleBtn = document.createElement('button');
+          toggleBtn.textContent = isDisabled ? 'Reactivate' : 'Deactivate';
+          toggleBtn.addEventListener('click', () => updateReward(item.id, { active: isDisabled ? 1 : 0 }));
+          actions.appendChild(toggleBtn);
+        }
 
         card.appendChild(actions);
 
         list.appendChild(card);
       }
-      if (!filtered.length) list.innerHTML = '<div class="muted">No rewards match.</div>';
+      if (!filtered.length) {
+        const emptyLabel = rewardsStatusFilter === 'disabled' ? 'No deactivated rewards.' : 'No rewards match.';
+        list.innerHTML = `<div class="muted">${emptyLabel}</div>`;
+      }
+      if (statusEl) {
+        const label = rewardsStatusFilter === 'disabled' ? 'deactivated' : 'active';
+        statusEl.textContent = `Showing ${filtered.length} ${label} reward${filtered.length === 1 ? '' : 's'}.`;
+      }
+      updateRewardsToggleButton();
     } catch (err) {
       const msg = err.message || 'Failed to load rewards';
       if (statusEl) statusEl.textContent = msg;
       if (list) list.innerHTML = `<div class="muted">${msg}</div>`;
+      rewardsHasDisabled = false;
+      updateRewardsToggleButton();
     }
   }
-  $('btnLoadRewards')?.addEventListener('click', loadRewards);
+  $('btnLoadRewards')?.addEventListener('click', () => {
+    rewardsStatusFilter = 'active';
+    loadRewards();
+  });
   $('filterRewards')?.addEventListener('input', loadRewards);
+
+  rewardsToggleBtn?.addEventListener('click', () => {
+    rewardsStatusFilter = rewardsStatusFilter === 'disabled' ? 'active' : 'disabled';
+    updateRewardsToggleButton();
+    loadRewards();
+  });
 
   async function updateReward(id, body) {
     try {
@@ -2008,6 +2229,30 @@ setupScanner({
       loadRewards();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
+    }
+  }
+
+  async function deleteReward(id) {
+    if (!confirm('Delete this reward permanently?')) return;
+    try {
+      const { res, body } = await adminFetch(`/api/rewards/${id}`, { method: 'DELETE' });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (res.status === 409) {
+        toast('Reward is referenced by existing records.', 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Delete failed');
+        throw new Error(msg);
+      }
+      toast('Reward deleted');
+      loadRewards();
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Delete failed', 'error');
     }
   }
 
