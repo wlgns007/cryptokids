@@ -238,20 +238,36 @@ async function ensureColumn(db, table, column, type = "INTEGER") {
 
 // Safe column add: never uses NOT NULL on ALTER; supports default and backfill.
 function addCol(table, col, type, {
-  defaultSql = null,
-  backfillSql = null,
+  defaultSql = null,     // e.g., "'posted'" or "0" or "CURRENT_TIMESTAMP"
+  backfillSql = null,    // e.g., "'posted'" or "unixepoch('now')" or "0"
   ifNotExists = true
 } = {}) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  const hasCol = cols.some(r => r.name === col);
+  const hasCol = !!db.prepare(`PRAGMA table_info(${table})`).all()
+    .some(r => r.name === col);
   if (ifNotExists && hasCol) return;
 
+  // 1) Add column as NULLABLE, with DEFAULT only if you want new rows to get it.
   const def = defaultSql ? ` DEFAULT ${defaultSql}` : '';
-  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defaultSql}, backfill=${backfillSql})`);
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`);
+  const defLog = defaultSql ?? "null";
+  const backfillLog = backfillSql ?? "null";
+  const alterSql = `ALTER TABLE ${table} ADD COLUMN ${col} ${type}${def};`;
+  console.log(`[ensureLedgerSchema] Adding column ${col} to ${table} (type=${type}, default=${defLog}, backfill=${backfillLog})`);
+  try {
+    db.exec(alterSql);
+  } catch (err) {
+    console.error(`[ensureLedgerSchema] Failed SQL: ${alterSql}`);
+    throw err;
+  }
 
+  // 2) Backfill existing rows so the app logic has non-null data to work with.
   if (backfillSql) {
-    db.exec(`UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`);
+    const updateSql = `UPDATE ${table} SET ${col} = ${backfillSql} WHERE ${col} IS NULL;`;
+    try {
+      db.exec(updateSql);
+    } catch (err) {
+      console.error(`[ensureLedgerSchema] Failed SQL: ${updateSql}`);
+      throw err;
+    }
   }
 }
 
@@ -378,9 +394,8 @@ const ensureTables = db.transaction(() => {
     addCol('ledger', 'created_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
     addCol('ledger', 'updated_at', 'INTEGER', { defaultSql: null, backfillSql: "strftime('%s','now')*1000" });
 
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user_id_created_at ON ledger(user_id, created_at DESC);`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_verb_created_at ON ledger(verb, created_at DESC);`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_status_created_at ON ledger(status, created_at DESC);`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at)`);
   }
 
   // --- Identifier helpers for SQLite DDL ---
