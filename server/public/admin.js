@@ -2000,6 +2000,10 @@ setupScanner({
     const filterValue = $('filterRewards')?.value?.toLowerCase?.() || '';
     list.innerHTML = '<div class="muted">Loading...</div>';
     if (statusEl) statusEl.textContent = '';
+    if (rewardsStatusFilter !== 'disabled') {
+      rewardsHasDisabled = false;
+      updateRewardsToggleButton();
+    }
     try {
       const params = new URLSearchParams();
       if (rewardsStatusFilter && rewardsStatusFilter !== 'all') {
@@ -2188,6 +2192,8 @@ setupScanner({
       const msg = err.message || 'Failed to load rewards';
       if (statusEl) statusEl.textContent = msg;
       if (list) list.innerHTML = `<div class="muted">${msg}</div>`;
+      rewardsHasDisabled = false;
+      updateRewardsToggleButton();
     }
   }
   $('btnLoadRewards')?.addEventListener('click', () => {
