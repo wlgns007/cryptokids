@@ -678,19 +678,18 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       const scripts = Array.from(document.getElementsByTagName('script'));
       const existing = scripts.find((script) => script.src && script.src.includes('qrcode'));
       if (existing) {
-        existing.addEventListener('error', () => fail(new Error('Failed to load QR library')), { once: true });
-        existing.addEventListener('load', onReady, { once: true });
-        existing.addEventListener('readystatechange', () => {
-          if (existing.readyState === 'complete' || existing.readyState === 'loaded') {
-            onReady();
-          }
-        }, { once: true });
-        if (existing.dataset.ckQrWatch !== '1') {
-          existing.dataset.ckQrWatch = '1';
-        }
-        if (attemptResolve()) return;
-        if (existing.readyState === 'complete' || existing.readyState === 'loaded') {
-          onReady();
+        const markReady = () => {
+          existing.dataset.ckQrReady = '1';
+          resolveIfReady();
+        };
+        const alreadyLoaded = existing.dataset.ckQrReady === '1' || existing.readyState === 'complete' || existing.readyState === 'loaded';
+        if (typeof window.QRCode === 'function') {
+          markReady();
+        } else if (alreadyLoaded) {
+          markReady();
+        } else {
+          existing.addEventListener('load', markReady, { once: true });
+          existing.addEventListener('error', () => reject(new Error('Failed to load QR library')), { once: true });
         }
         return;
       }
@@ -721,14 +720,6 @@ window.getYouTubeEmbed = getYouTubeEmbed;
         const instance = new Ctor(el, { text, width: 220, height: 220 });
         if (instance && typeof instance.makeCode === 'function') {
           instance.makeCode(text);
-        }
-        const canvas = el.querySelector('canvas');
-        if (canvas) {
-          canvas.style.display = 'block';
-        }
-        const img = el.querySelector('img');
-        if (img) {
-          img.style.display = 'block';
         }
         return;
       }
