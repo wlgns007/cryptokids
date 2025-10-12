@@ -39,8 +39,8 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
 
-  const ADMIN_KEY_DEFAULT = 'Mamapapa';
-  const ADMIN_INVALID_MSG = 'Admin key invalid. Use "Mamapapa" → Save, then retry.';
+  const ADMIN_INVALID_MSG = 'Admin key invalid.';
+  const ADMIN_KEY_REQUIRED_MSG = 'Please enter the adminkey first';
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
@@ -253,9 +253,8 @@ details.member-fold .summary-value {
   }
 
   if (keyInput) {
-    keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
-    const saved = storageGet('CK_ADMIN_KEY');
-    if (!saved) keyInput.value = ADMIN_KEY_DEFAULT;
+    keyInput.placeholder = 'enter admin key';
+    keyInput.value = '';
   }
 
   const toastHost = $('toastHost');
@@ -372,9 +371,6 @@ details.member-fold .summary-value {
   })();
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
-  function loadAdminKey() {
-    return storageGet(ADMIN_KEY_STORAGE) || '';
-  }
   function saveAdminKey(value) {
     if (!value) {
       return storageRemove(ADMIN_KEY_STORAGE);
@@ -386,18 +382,16 @@ details.member-fold .summary-value {
     const value = (keyInput?.value || '').trim();
     const persisted = saveAdminKey(value);
     toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
-  });
-
-  document.addEventListener('DOMContentLoaded', () => {
-    const saved = loadAdminKey();
-    if (saved && keyInput) keyInput.value = saved;
+    if (value) {
+      loadFeatureFlagsFromServer();
+    }
   });
 
   async function loadFeatureFlagsFromServer() {
     try {
-      const res = await fetch('/api/features');
+      const { res, body } = await adminFetch('/api/features');
       if (!res.ok) return;
-      const data = await res.json().catch(() => ({}));
+      const data = body && typeof body === 'object' ? body : {};
       if (data && typeof data === 'object') {
         applyFeatureFlags(data);
       }
@@ -408,16 +402,32 @@ details.member-fold .summary-value {
 
   function getAdminKey(){
     const el = document.getElementById('adminKey');
-    return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
+    return (el?.value || '').trim();
+  }
+  function ensureAdminKey() {
+    return getAdminKey();
   }
   async function adminFetch(url, opts = {}) {
+    const { idempotencyKey, headers: extraHeaders, ...fetchOpts } = opts;
+    const key = ensureAdminKey();
+    if (!key) {
+      return {
+        res: {
+          ok: false,
+          status: 428,
+          statusText: 'Admin key required',
+          headers: { get: () => null }
+        },
+        body: { error: ADMIN_KEY_REQUIRED_MSG, code: 'ADMIN_KEY_REQUIRED' }
+      };
+    }
     const headers = {
-      'x-admin-key': getAdminKey(),
+      'x-admin-key': key,
       'x-actor-role': 'admin',
-      ...(opts.headers || {})
+      ...(extraHeaders || {})
     };
-    if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
-    const res = await fetch(url, { ...opts, headers });
+    if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+    const res = await fetch(url, { ...fetchOpts, headers });
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
@@ -437,7 +447,9 @@ details.member-fold .summary-value {
     TOKEN_USED: 'This QR code has already been used.',
     hold_not_pending: 'This reward request is no longer pending.',
     invalid_payload: 'The request was missing required information.',
-    scan_failed: 'Unable to redeem that QR code. Try again.'
+    scan_failed: 'Unable to redeem that QR code. Try again.',
+    ADMIN_KEY_REQUIRED: ADMIN_KEY_REQUIRED_MSG,
+    'PLEASE ENTER THE ADMINKEY FIRST': ADMIN_KEY_REQUIRED_MSG
   };
 
   function presentError(code, fallback) {
