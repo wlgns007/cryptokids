@@ -650,7 +650,9 @@ window.getYouTubeEmbed = getYouTubeEmbed;
           resolveIfReady();
         };
         const alreadyLoaded = existing.dataset.ckQrReady === '1' || existing.readyState === 'complete' || existing.readyState === 'loaded';
-        if (alreadyLoaded) {
+        if (typeof window.QRCode === 'function') {
+          markReady();
+        } else if (alreadyLoaded) {
           markReady();
         } else {
           existing.addEventListener('load', markReady, { once: true });
