@@ -626,20 +626,53 @@ window.getYouTubeEmbed = getYouTubeEmbed;
 
   let qrLibraryPromise = null;
 
+  function getQrConstructor() {
+    if (typeof window === 'undefined') return null;
+    const candidates = [
+      window.QRCode,
+      window?.QRCode?.QRCode,
+      window?.QRCode?.default,
+    ];
+    return candidates.find((ctor) => typeof ctor === 'function') || null;
+  }
+
   function ensureQrLibrary() {
-    if (typeof window !== 'undefined' && typeof window.QRCode === 'function') {
-      return Promise.resolve(window.QRCode);
+    const existingCtor = getQrConstructor();
+    if (existingCtor) {
+      return Promise.resolve(existingCtor);
     }
     if (qrLibraryPromise) {
       return qrLibraryPromise;
     }
     qrLibraryPromise = new Promise((resolve, reject) => {
-      const resolveIfReady = () => {
-        if (typeof window.QRCode === 'function') {
-          resolve(window.QRCode);
-        } else {
-          reject(new Error('QR library loaded without QRCode constructor'));
+      let settled = false;
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        fn(value);
+      };
+
+      const fail = (reason) => {
+        const err = reason instanceof Error ? reason : new Error('Failed to load QR library');
+        finish(reject, err);
+      };
+
+      const attemptResolve = () => {
+        const ctor = getQrConstructor();
+        if (ctor) {
+          finish(resolve, ctor);
+          return true;
         }
+        return false;
+      };
+
+      const onReady = () => {
+        if (attemptResolve()) return;
+        setTimeout(() => {
+          if (attemptResolve()) return;
+          fail(new Error('QR library loaded without QRCode constructor'));
+        }, 0);
       };
 
       const scripts = Array.from(document.getElementsByTagName('script'));
@@ -665,11 +698,8 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       script.src = '/qrcode.min.js?v=__BUILD__';
       script.async = true;
       script.dataset.ckQrLoader = '1';
-      script.addEventListener('load', () => {
-        script.dataset.ckQrReady = '1';
-        resolveIfReady();
-      }, { once: true });
-      script.addEventListener('error', () => reject(new Error('Failed to load QR library')), { once: true });
+      script.addEventListener('load', onReady, { once: true });
+      script.addEventListener('error', () => fail(new Error('Failed to load QR library')), { once: true });
       document.head.appendChild(script);
     }).catch((err) => {
       qrLibraryPromise = null;
@@ -684,9 +714,13 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     el.innerHTML = '';
     if (!text) return;
     try {
-      const QR = await ensureQrLibrary();
-      if (typeof QR === 'function') {
-        new QR(el, { text, width: 220, height: 220 });
+      await ensureQrLibrary();
+      const Ctor = getQrConstructor();
+      if (typeof Ctor === 'function') {
+        const instance = new Ctor(el, { text, width: 220, height: 220 });
+        if (instance && typeof instance.makeCode === 'function') {
+          instance.makeCode(text);
+        }
         return;
       }
       throw new Error('QR constructor unavailable');
