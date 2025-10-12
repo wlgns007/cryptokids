@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Install CK Wallet</title>
+  <link rel="manifest" href="/ck-wallet-manifest.v1.webmanifest">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/ck-wallet-apple-touch-180.v1.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/assets/icons/ck-wallet-apple-touch-152.v1.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#2D2A6A">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --ck-primary: #2D2A6A;
+      --ck-accent: #7C4DFF;
+      --ck-text: #0F172A;
+      --ck-muted: #475569;
+      --ck-bg: #FAFAFA;
+      --ck-card: rgba(255, 255, 255, 0.82);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ck-bg: #0F172A;
+        --ck-card: rgba(15, 23, 42, 0.72);
+        --ck-text: #F8FAFC;
+        --ck-muted: #CBD5F5;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--ck-bg);
+      color: var(--ck-text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+
+    header {
+      background: linear-gradient(135deg, rgba(45, 42, 106, 0.92), rgba(124, 77, 255, 0.88));
+      color: #fff;
+      padding: clamp(32px, 8vw, 96px) clamp(24px, 8vw, 120px);
+      border-bottom-left-radius: 40px;
+      border-bottom-right-radius: 40px;
+      box-shadow: 0 24px 64px rgba(45, 42, 106, 0.28);
+    }
+
+    header h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 6vw, 42px);
+    }
+
+    header p {
+      margin: 0;
+      max-width: 520px;
+      font-size: clamp(16px, 3.6vw, 18px);
+    }
+
+    main {
+      flex: 1;
+      padding: clamp(24px, 6vw, 64px);
+      display: grid;
+      gap: clamp(20px, 4vw, 32px);
+    }
+
+    section {
+      background: var(--ck-card);
+      backdrop-filter: blur(12px);
+      border-radius: 24px;
+      padding: clamp(20px, 5vw, 32px);
+      box-shadow: 0 20px 48px rgba(15, 23, 42, 0.12);
+      display: grid;
+      gap: 18px;
+    }
+
+    .muted {
+      color: var(--ck-muted);
+      font-size: 0.95rem;
+    }
+
+    button.install-btn {
+      background: linear-gradient(135deg, var(--ck-accent), #5D34D6);
+      color: #fff;
+      border: 0;
+      border-radius: 18px;
+      font-weight: 600;
+      padding: 16px 26px;
+      font-size: 16px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      box-shadow: 0 14px 28px rgba(124, 77, 255, 0.35);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    button.install-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    button.install-btn:not(:disabled):hover {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 38px rgba(124, 77, 255, 0.45);
+    }
+
+    .qr-card {
+      display: grid;
+      gap: 16px;
+      justify-items: center;
+      text-align: center;
+    }
+
+    .qr-card img {
+      width: min(240px, 58vw);
+      height: auto;
+      border-radius: 20px;
+      box-shadow: 0 20px 40px rgba(45, 42, 106, 0.24);
+      background: #fff;
+      padding: 12px;
+    }
+
+    .steps {
+      display: grid;
+      gap: 12px;
+    }
+
+    .steps-item {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      align-items: center;
+      background: rgba(37, 99, 235, 0.08);
+      border-radius: 16px;
+      padding: 12px 16px;
+    }
+
+    .steps-item span {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--ck-primary);
+    }
+
+    footer {
+      padding: 24px clamp(24px, 6vw, 64px) calc(24px + env(safe-area-inset-bottom));
+      color: var(--ck-muted);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    a[data-keep-src] {
+      color: var(--ck-accent);
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    a[data-keep-src]:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 720px) {
+      header {
+        border-bottom-left-radius: 28px;
+        border-bottom-right-radius: 28px;
+      }
+
+      section {
+        border-radius: 18px;
+      }
+    }
+
+    @media (display-mode: standalone) {
+      body {
+        background: var(--ck-bg);
+      }
+
+      .install-only {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Install CK Wallet</h1>
+    <p>Earn, save, and redeem family tokens—simple, fair, and trackable. Keep your household rewards in one delightful place.</p>
+  </header>
+  <main>
+    <section>
+      <p>Install CK Wallet to manage points even when you're offline. We'll prompt your browser to add it to the home screen.</p>
+      <button id="installLandingCta" class="install-btn">Install CK Wallet</button>
+      <p class="install-only">You'll use your camera later to scan family QR codes—no extra app required.</p>
+      <div id="noPromptMessage" class="muted" hidden>Install prompts are managed by your browser. If you don't see one, use your browser menu to add CK Wallet to your home screen.</div>
+    </section>
+
+    <section class="qr-card">
+      <h2>Share with your family</h2>
+      <img id="installQr" src="/install/qr.png?src=qr" alt="QR code linking to CK Wallet install" loading="lazy">
+      <p class="muted">Print or share this QR code. Scanning re-opens this install guide for quick onboarding.</p>
+      <a href="/?src=qr" data-keep-src>Open CK Wallet</a>
+    </section>
+
+    <section id="iosInstallTip" hidden>
+      <h2>iPhone or iPad?</h2>
+      <p>Add CK Wallet manually the first time:</p>
+      <div class="steps">
+        <div class="steps-item">
+          <span>1</span>
+          <div>Tap <strong>Share</strong> in Safari.</div>
+        </div>
+        <div class="steps-item">
+          <span>2</span>
+          <div>Choose <strong>Add to Home Screen</strong>.</div>
+        </div>
+        <div class="steps-item">
+          <span>3</span>
+          <div>Name it “CK Wallet” and tap <strong>Add</strong>.</div>
+        </div>
+      </div>
+      <button type="button" id="dismissIosTip" class="install-btn" style="background: rgba(45, 42, 106, 0.12); color: var(--ck-primary); box-shadow: none;">Got it</button>
+    </section>
+  </main>
+  <footer>
+    Already installed? <a href="/?src=qr" data-keep-src>Jump back to your CK Wallet dashboard</a>.
+  </footer>
+
+  <script defer src="/ck-pwa.js?v=1.0.0"></script>
+  <script defer>
+    document.addEventListener('DOMContentLoaded', () => {
+      window.CKPWA?.initInstallPage({
+        swVersion: '1.0.0',
+        installButtonSelector: '#installLandingCta',
+        iosTipSelector: '#iosInstallTip',
+        iosDismissSelector: '#dismissIosTip',
+        noPromptSelector: '#noPromptMessage'
+      });
+    });
+  </script>
+</body>
+</html>
