@@ -373,9 +373,6 @@ details.member-fold .summary-value {
   })();
 
   const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
-  function loadAdminKey() {
-    return storageGet(ADMIN_KEY_STORAGE) || '';
-  }
   function saveAdminKey(value) {
     if (!value) {
       return storageRemove(ADMIN_KEY_STORAGE);
@@ -412,7 +409,10 @@ details.member-fold .summary-value {
 
   function getAdminKey(){
     const el = document.getElementById('adminKey');
-    return (storageGet('CK_ADMIN_KEY') || el?.value || '').trim();
+    return (el?.value || '').trim();
+  }
+  function ensureAdminKey() {
+    return getAdminKey();
   }
   function ensureAdminKey() {
     return getAdminKey();
