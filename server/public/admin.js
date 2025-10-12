@@ -254,7 +254,7 @@ details.member-fold .summary-value {
   }
 
   if (keyInput) {
-    keyInput.placeholder = `enter admin key (${ADMIN_KEY_DEFAULT})`;
+    keyInput.placeholder = 'enter admin key';
     const saved = storageGet('CK_ADMIN_KEY');
     if (saved) keyInput.value = saved;
   }
