@@ -39,6 +39,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
 
+  const ADMIN_KEY_DEFAULT = 'Mamapapa';
   const ADMIN_INVALID_MSG = 'Admin key invalid.';
   const ADMIN_KEY_REQUIRED_MSG = 'Please enter the adminkey first';
   const $k = (id) => document.getElementById(id);
@@ -254,7 +255,8 @@ details.member-fold .summary-value {
 
   if (keyInput) {
     keyInput.placeholder = 'enter admin key';
-    keyInput.value = '';
+    const saved = storageGet('CK_ADMIN_KEY');
+    if (saved) keyInput.value = saved;
   }
 
   const toastHost = $('toastHost');
@@ -387,6 +389,11 @@ details.member-fold .summary-value {
     }
   });
 
+  document.addEventListener('DOMContentLoaded', () => {
+    const saved = loadAdminKey();
+    if (saved && keyInput) keyInput.value = saved;
+  });
+
   async function loadFeatureFlagsFromServer() {
     try {
       const { res, body } = await adminFetch('/api/features');
@@ -403,6 +410,9 @@ details.member-fold .summary-value {
   function getAdminKey(){
     const el = document.getElementById('adminKey');
     return (el?.value || '').trim();
+  }
+  function ensureAdminKey() {
+    return getAdminKey();
   }
   function ensureAdminKey() {
     return getAdminKey();
