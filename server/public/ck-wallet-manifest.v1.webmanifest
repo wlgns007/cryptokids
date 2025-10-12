@@ -1,0 +1,43 @@
+{
+  "name": "CK Wallet",
+  "short_name": "CK Wallet",
+  "description": "Earn, save, and redeem family tokens—simple, fair, and trackable.",
+  "start_url": "/?src=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#2D2A6A",
+  "background_color": "#FAFAFA",
+  "icons": [
+    {
+      "src": "/assets/icons/ck-wallet-icon-192.v1.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/icons/ck-wallet-icon-512.v1.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/icons/ck-wallet-icon-maskable-512.v1.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["finance", "family", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Scan & Earn",
+      "short_name": "Scan",
+      "description": "Open the QR scanner to collect points",
+      "url": "/?src=pwa#scan"
+    },
+    {
+      "name": "Rewards Shop",
+      "short_name": "Shop",
+      "description": "Jump straight to the family rewards menu",
+      "url": "/?src=pwa#shop"
+    }
+  ]
+}

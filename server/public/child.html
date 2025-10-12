@@ -3,23 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CryptoKids – Child</title>
-  <!-- <link rel="icon" href="/favicon.ico"> -->
-  <!-- <link rel="manifest" href="/manifest.webmanifest?v=__BUILD__"> -->
-  <meta name="theme-color" content="#ffffff">
+  <title>CK Wallet</title>
+  <link rel="manifest" href="/ck-wallet-manifest.v1.webmanifest">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/ck-wallet-apple-touch-180.v1.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/assets/icons/ck-wallet-apple-touch-152.v1.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#2D2A6A">
   <meta
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; child-src 'self' https://www.youtube-nocookie.com https://www.youtube.com;"
   >
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f5f7fb;
+      color-scheme: light dark;
+      --ck-primary: #2d2a6a;
+      --ck-accent: #7c4dff;
+      --ck-success: #10b981;
+      --ck-cta: #2563eb;
+      --ck-warning: #f59e0b;
+      --bg: #fafafa;
       --card: #ffffff;
-      --line: #e5e7eb;
+      --line: rgba(45, 42, 106, 0.12);
       --fg: #0f172a;
-      --muted: #6b7280;
-      --accent: #2563eb;
+      --muted: #64748b;
+      --muted-strong: #475569;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --card: rgba(26, 32, 44, 0.92);
+        --line: rgba(124, 77, 255, 0.24);
+        --fg: #f8fafc;
+        --muted: #cbd5f5;
+        --muted-strong: #e2e8f0;
+      }
+
+      .ios-tip {
+        background: rgba(26, 32, 44, 0.85);
+        border-color: rgba(124, 77, 255, 0.4);
+        color: var(--fg);
+      }
+
+      .ios-tip-steps span {
+        background: rgba(124, 77, 255, 0.28);
+        color: #fff;
+      }
+
+      .ios-tip button {
+        background: rgba(124, 77, 255, 0.24);
+        color: #fff;
+      }
+
+      .ios-tip button:hover {
+        background: rgba(124, 77, 255, 0.32);
+      }
     }
 
     * {
@@ -37,37 +76,150 @@
     }
 
     header {
-      padding: 32px clamp(16px, 5vw, 56px);
-      background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(14, 116, 144, 0.08));
-      color: var(--fg);
+      padding: calc(32px + env(safe-area-inset-top)) clamp(16px, 5vw, 56px) 32px;
+      background: radial-gradient(circle at 10% 10%, rgba(124, 77, 255, 0.32), transparent 58%), linear-gradient(140deg, rgba(45, 42, 106, 0.92), rgba(124, 77, 255, 0.82));
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+
+    header::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 85% 20%, rgba(16, 185, 129, 0.18), transparent 55%);
+      pointer-events: none;
+    }
+
+    header > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .app-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(250, 250, 250, 0.18);
+      color: #fff;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .install-cta {
+      background: linear-gradient(135deg, var(--ck-accent), #5d34d6);
+      color: #fff;
+      border: 0;
+      border-radius: 14px;
+      padding: 10px 18px;
+      font-weight: 600;
+      box-shadow: 0 14px 28px rgba(124, 77, 255, 0.38);
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .install-cta:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 36px rgba(124, 77, 255, 0.45);
     }
 
     header h1 {
-      margin: 0;
-      font-size: clamp(28px, 6vw, 38px);
+      margin: 18px 0 8px;
+      font-size: clamp(30px, 6vw, 42px);
+      font-weight: 700;
     }
 
     header p {
-      margin: 8px 0 0;
-      max-width: 520px;
-      color: rgba(15, 23, 42, 0.7);
+      margin: 0;
+      max-width: 560px;
+      color: rgba(248, 250, 252, 0.85);
     }
 
     main {
       flex: 1;
       display: grid;
       gap: 24px;
-      padding: 32px clamp(16px, 4vw, 48px) 48px;
+      padding: 32px clamp(16px, 4vw, 48px) calc(48px + env(safe-area-inset-bottom));
     }
 
     section {
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 20px;
       padding: clamp(20px, 3vw, 28px);
       display: grid;
       gap: 16px;
       box-shadow: 0 12px 24px rgba(15, 23, 42, 0.04);
+    }
+
+    section,
+    aside {
+      scroll-margin-top: 96px;
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, var(--ck-accent), var(--ck-primary));
+      color: #fff;
+      border: 0;
+      box-shadow: 0 12px 24px rgba(45, 42, 106, 0.18);
+    }
+
+    button.primary:hover {
+      box-shadow: 0 16px 30px rgba(45, 42, 106, 0.25);
+    }
+
+    .ios-tip {
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(124, 77, 255, 0.25);
+      box-shadow: 0 18px 36px rgba(45, 42, 106, 0.15);
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .ios-tip[hidden] {
+      display: none;
+    }
+
+    .ios-tip-steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .ios-tip-steps span {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(124, 77, 255, 0.12);
+      color: var(--ck-primary);
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .ios-tip button {
+      justify-self: start;
+      background: rgba(45, 42, 106, 0.1);
+      color: var(--ck-primary);
+      border: 0;
+      border-radius: 12px;
+      padding: 8px 14px;
+    }
+
+    .ios-tip button:hover {
+      background: rgba(45, 42, 106, 0.16);
     }
 
     .modal {
@@ -160,8 +312,8 @@
 
     #historyList {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #f9fafb;
+      border-radius: 16px;
+      background: rgba(124, 77, 255, 0.08);
       padding: 12px;
       max-height: 320px;
       overflow: auto;
@@ -184,18 +336,19 @@
     }
 
     .notice-box {
-      background: #eff6ff;
-      border: 1px solid rgba(37, 99, 235, 0.2);
-      border-radius: 14px;
+      background: rgba(124, 77, 255, 0.12);
+      border: 1px solid rgba(124, 77, 255, 0.24);
+      border-radius: 16px;
       padding: 16px;
       display: grid;
       gap: 6px;
       font-size: 14px;
+      color: var(--ck-primary);
     }
 
     .notice-box.muted {
-      background: #f8fafc;
-      border-color: rgba(148, 163, 184, 0.3);
+      background: rgba(45, 42, 106, 0.06);
+      border-color: rgba(45, 42, 106, 0.16);
       color: var(--muted);
     }
 
@@ -212,8 +365,8 @@
 
     .redeem-history-box {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #f8fafc;
+      border-radius: 16px;
+      background: rgba(124, 77, 255, 0.08);
       padding: 16px;
       display: none;
       gap: 12px;
@@ -260,8 +413,8 @@
 
     .earn-card {
       border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #f8fafc;
+      border-radius: 16px;
+      background: rgba(124, 77, 255, 0.06);
       padding: 14px;
       display: grid;
       gap: 10px;
@@ -290,13 +443,13 @@
 
     #earnQrBox,
     #shopQrBox {
-      border: 1px dashed var(--line);
-      border-radius: 14px;
+      border: 1px dashed rgba(124, 77, 255, 0.4);
+      border-radius: 16px;
       min-height: 220px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #fff;
+      background: rgba(124, 77, 255, 0.05);
     }
 
     #earnQrBox:empty::after,
@@ -350,18 +503,19 @@
 
     footer {
       text-align: center;
-      padding: 24px;
+      padding: 24px clamp(16px, 5vw, 48px) calc(24px + env(safe-area-inset-bottom));
       font-size: 13px;
       color: var(--muted);
+      background: rgba(45, 42, 106, 0.04);
     }
 
     @media (max-width: 640px) {
       header {
-        padding: 28px 18px;
+        padding: calc(24px + env(safe-area-inset-top)) 18px 24px;
       }
 
       main {
-        padding: 24px 16px 32px;
+        padding: 24px 16px calc(36px + env(safe-area-inset-bottom));
       }
 
       section {
@@ -373,21 +527,36 @@
         align-items: flex-start;
       }
     }
-  </style>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=__BUILD__'));
+
+    @media (display-mode: standalone) {
+      .install-cta {
+        display: none !important;
+      }
     }
-  </script>
+  </style>
 </head>
 <body>
   <header>
-    <h1>CryptoKids</h1>
-    <p>Check balances, complete tasks, and redeem rewards with quick QR scans.</p>
+    <div class="hero-bar">
+      <span class="app-pill">CK Wallet</span>
+      <button id="installCta" class="install-cta" type="button">Install App</button>
+    </div>
+    <h1>Family rewards that feel fair</h1>
+    <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
   </header>
 
   <main>
-    <section id="secBalance">
+    <aside id="iosInstallTip" class="ios-tip" hidden>
+      <strong>On iPhone or iPad?</strong>
+      <div class="ios-tip-steps">
+        <span>1. Tap Share in Safari</span>
+        <span>2. Choose “Add to Home Screen”</span>
+        <span>3. Tap Add to finish</span>
+      </div>
+      <button id="dismissIosTip" type="button">Got it</button>
+    </aside>
+
+    <section id="balance">
       <h2>Balance History</h2>
       <div class="row">
         <input id="childUserId" placeholder="User ID" />
@@ -409,7 +578,7 @@
       <div id="historyList"></div>
     </section>
 
-    <section id="secEarn">
+    <section id="earn">
       <h2>Earn Points</h2>
       <div class="muted">Select your tasks, then generate a QR code for an adult to scan.</div>
       <div id="earnList" class="earn-list"></div>
@@ -420,7 +589,7 @@
       <div id="earnQrBox"></div>
     </section>
 
-    <section id="secScanReceive">
+    <section id="scan">
       <h2>Scan to Receive Points</h2>
       <div class="muted">Scan the QR from an adult to add points instantly.</div>
       <button id="btnScanReceive" class="primary" style="align-self:flex-start;">Start Camera</button>
@@ -429,7 +598,7 @@
       <div id="receiveStatus" class="muted"></div>
     </section>
 
-    <section id="secShop">
+    <section id="shop">
       <h2>Rewards Menu</h2>
       <div class="row">
         <button id="btnLoadItems" class="primary" style="flex:0 0 auto;">Load Rewards</button>
@@ -446,7 +615,7 @@
   </main>
 
   <footer>
-    Powered by CryptoKids
+    Powered by CK Wallet · Earn, save, and celebrate together.
   </footer>
 
   <!-- Video Modal -->
@@ -473,6 +642,7 @@
 
   <script src="https://unpkg.com/jsqr"></script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
-  <script defer src="child.js?v={{shortCommit}}"></script>
+  <script defer src="/ck-pwa.js?v=1.0.0"></script>
+  <script defer src="child.js?v=__BUILD__"></script>
 </body>
 </html>
