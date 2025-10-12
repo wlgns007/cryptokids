@@ -39,6 +39,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
 
+  const ADMIN_KEY_DEFAULT = 'Mamapapa';
   const ADMIN_INVALID_MSG = 'Admin key invalid.';
   const ADMIN_KEY_REQUIRED_MSG = 'Please enter the adminkey first';
   const $k = (id) => document.getElementById(id);
