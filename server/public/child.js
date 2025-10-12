@@ -680,7 +680,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       if (existing) {
         const markReady = () => {
           existing.dataset.ckQrReady = '1';
-          resolveIfReady();
+          onReady();
         };
         const alreadyLoaded = existing.dataset.ckQrReady === '1' || existing.readyState === 'complete' || existing.readyState === 'loaded';
         if (typeof window.QRCode === 'function') {
