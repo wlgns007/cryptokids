@@ -1,13 +1,15 @@
 // CryptoKids Parents Shop API (refactored)
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
+import QRCode from "qrcode";
 import db, { DATA_DIR } from "./db.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
+import { generateIcon, knownIcon } from "./iconFactory.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -72,9 +74,9 @@ function loadVersioned(file) {
   return versionCache.get(file);
 }
 
-function sendVersioned(res, file, type = "text/html") {
+function sendVersioned(res, file, type = "text/html", cacheControl = "no-store") {
   if (type) res.type(type);
-  res.set("Cache-Control", "no-cache");
+  if (cacheControl) res.set("Cache-Control", cacheControl);
   res.send(loadVersioned(file));
 }
 
@@ -83,12 +85,55 @@ app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
 
+app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
+  sendVersioned(res, "child.html");
+});
+
 app.get(["/admin", "/admin.html"], (_req, res) => {
   sendVersioned(res, "admin.html");
 });
 
-app.get(["/child", "/child.html"], (_req, res) => {
-  sendVersioned(res, "child.html");
+app.get("/install", (req, res) => {
+  if (req.query?.src && typeof req.query.src === "string") {
+    res.set("Cache-Control", "no-store");
+  }
+  sendVersioned(res, "install.html");
+});
+
+app.get("/assets/icons/:iconName", (req, res, next) => {
+  const iconName = req.params?.iconName || "";
+  if (!knownIcon(iconName)) {
+    next();
+    return;
+  }
+  try {
+    const png = generateIcon(iconName);
+    if (!png) {
+      next();
+      return;
+    }
+    res.type("image/png");
+    res.set("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(png);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/install/qr.png", async (req, res, next) => {
+  try {
+    const origin = req.get("x-forwarded-proto")
+      ? `${req.get("x-forwarded-proto")}://${req.get("x-forwarded-host") || req.get("host")}`
+      : `${req.protocol}://${req.get("host")}`;
+    const search = req.query?.src ? `?src=${encodeURIComponent(String(req.query.src))}` : "?src=qr";
+    const url = `${origin}/install${search}`;
+    const png = await QRCode.toBuffer(url, { width: 600, margin: 1, color: { dark: "#2D2A6A", light: "#FAFAFA" } });
+    res.type("image/png");
+    res.set("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(png);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get(["/scan", "/scan.html"], async (req, res) => {
@@ -164,8 +209,13 @@ app.get(["/scan", "/scan.html"], async (req, res) => {
   }
 });
 
-app.get("/manifest.webmanifest", (_req, res) => {
-  sendVersioned(res, "manifest.webmanifest", "application/manifest+json");
+app.get("/ck-wallet-manifest.v1.webmanifest", (_req, res) => {
+  sendVersioned(
+    res,
+    "ck-wallet-manifest.v1.webmanifest",
+    "application/manifest+json",
+    "public, max-age=31536000, immutable"
+  );
 });
 
 app.get("/sw.js", (_req, res) => {
@@ -176,7 +226,13 @@ app.use(express.static(PUBLIC_DIR, {
   maxAge: "1h",
   setHeaders(res, filePath) {
     if (filePath.endsWith(".html")) {
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-store");
+    }
+    if (filePath.includes(`${sep}assets${sep}icons${sep}`) || filePath.includes("ck-wallet-manifest")) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    }
+    if (filePath.endsWith(".webmanifest")) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     }
   }
 }));

@@ -46,6 +46,11 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   const keyInput = $k('adminKey'); // use current ID
   const memoryStore = {};
 
+  window.CKPWA?.initAppShell({
+    swVersion: '1.0.0',
+    installButtonSelector: '#installCta'
+  });
+
   function storageGet(key) {
     try {
       const value = window.localStorage.getItem(key);

@@ -45,6 +45,13 @@ window.getYouTubeEmbed = getYouTubeEmbed;
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
+  window.CKPWA?.initAppShell({
+    swVersion: '1.0.0',
+    installButtonSelector: '#installCta',
+    iosTipSelector: '#iosInstallTip',
+    iosDismissSelector: '#dismissIosTip'
+  });
+
     function extractYouTubeId(u) {
       if (!u) return "";
       try {
