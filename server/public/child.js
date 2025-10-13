@@ -708,6 +708,132 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     return qrLibraryPromise;
   }
 
+  function openQrModal(imageUrl) {
+    if (!imageUrl) return;
+    if (typeof openImageModal === 'function') {
+      openImageModal(imageUrl);
+      return;
+    }
+    const win = window.open(imageUrl, '_blank', 'noopener');
+    if (!win) {
+      window.location.href = imageUrl;
+    }
+  }
+
+  function isHttpUrl(value) {
+    if (!value) return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function buildQrFigure(imageUrl, rawText, options = {}) {
+    const figure = document.createElement('figure');
+    figure.className = 'qr-output';
+    let actions = null;
+    const ensureActions = () => {
+      if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'qr-actions';
+      }
+      return actions;
+    };
+
+    if (imageUrl) {
+      const img = new Image();
+      img.src = imageUrl;
+      img.alt = 'Reward QR code';
+      img.loading = 'eager';
+      img.decoding = 'sync';
+      img.width = 320;
+      img.height = 320;
+      img.style.cursor = 'zoom-in';
+      img.addEventListener('click', () => openQrModal(imageUrl));
+      figure.appendChild(img);
+
+      const caption = document.createElement('figcaption');
+      caption.className = 'qr-caption';
+      caption.textContent = options.captionText || 'Tap the QR to enlarge or share.';
+      figure.appendChild(caption);
+
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'qr-action';
+      openBtn.textContent = 'Open full screen';
+      openBtn.addEventListener('click', () => openQrModal(imageUrl));
+      ensureActions().appendChild(openBtn);
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = options.emptyMessage || 'QR unavailable.';
+      figure.appendChild(empty);
+    }
+
+    if (rawText) {
+      if (isHttpUrl(rawText)) {
+        const link = document.createElement('a');
+        link.className = 'qr-link';
+        link.href = rawText;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'Open link instead';
+        ensureActions().appendChild(link);
+      } else {
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'qr-action';
+        copyBtn.textContent = 'Copy code';
+        const setCopiedState = () => {
+          const original = copyBtn.dataset.originalText || copyBtn.textContent;
+          copyBtn.dataset.originalText = original;
+          copyBtn.textContent = 'Copied!';
+          copyBtn.disabled = true;
+          setTimeout(() => {
+            copyBtn.textContent = copyBtn.dataset.originalText || 'Copy code';
+            copyBtn.disabled = false;
+            delete copyBtn.dataset.originalText;
+          }, 1600);
+        };
+        copyBtn.addEventListener('click', async () => {
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(rawText);
+              setCopiedState();
+              return;
+            }
+            const area = document.createElement('textarea');
+            area.value = rawText;
+            area.setAttribute('readonly', 'readonly');
+            area.style.position = 'absolute';
+            area.style.left = '-9999px';
+            document.body.appendChild(area);
+            area.select();
+            const success = document.execCommand('copy');
+            document.body.removeChild(area);
+            if (success) {
+              setCopiedState();
+            } else {
+              throw new Error('copy command failed');
+            }
+          } catch (error) {
+            console.warn('Copy failed', error);
+            toast('Copy not supported on this device.');
+          }
+        });
+        ensureActions().appendChild(copyBtn);
+      }
+    }
+
+    if (actions?.childElementCount) {
+      figure.appendChild(actions);
+    }
+
+    return figure;
+  }
+
   async function renderQr(elId, text) {
     const el = $(elId);
     if (!el) return;
@@ -716,26 +842,56 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     try {
       await ensureQrLibrary();
       const Ctor = getQrConstructor();
-      if (typeof Ctor === 'function') {
-        const instance = new Ctor(el, { text, width: 220, height: 220 });
+      if (typeof Ctor !== 'function') {
+        throw new Error('QR constructor unavailable');
+      }
+      const staging = document.createElement('div');
+      staging.style.position = 'absolute';
+      staging.style.pointerEvents = 'none';
+      staging.style.opacity = '0';
+      staging.style.left = '-9999px';
+      staging.style.top = '0';
+      document.body.appendChild(staging);
+      let imageUrl = '';
+      try {
+        const options = {
+          text,
+          width: 320,
+          height: 320,
+          colorDark: '#000000',
+          colorLight: '#ffffff',
+        };
+        const correctLevel = Ctor?.CorrectLevel?.H ?? Ctor?.CorrectLevel?.Q;
+        if (typeof correctLevel !== 'undefined') {
+          options.correctLevel = correctLevel;
+        }
+        const instance = new Ctor(staging, options);
         if (instance && typeof instance.makeCode === 'function') {
           instance.makeCode(text);
         }
-        return;
+        const canvas = staging.querySelector('canvas');
+        const inlineImg = staging.querySelector('img');
+        if (canvas && typeof canvas.toDataURL === 'function') {
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalCompositeOperation = 'source-over';
+          }
+          imageUrl = canvas.toDataURL('image/png');
+        } else if (inlineImg?.src) {
+          imageUrl = inlineImg.src;
+        }
+      } finally {
+        staging.remove();
       }
-      throw new Error('QR constructor unavailable');
+      const figure = buildQrFigure(imageUrl, text);
+      el.appendChild(figure);
     } catch (err) {
       console.error('renderQr failed', err);
-      const fallback = document.createElement('div');
-      fallback.className = 'muted';
-      fallback.textContent = 'QR unavailable. Use the link below:';
-      const link = document.createElement('a');
-      link.href = text;
-      link.textContent = 'Open QR link';
-      link.target = '_blank';
-      link.rel = 'noopener';
+      const fallback = buildQrFigure('', text, { emptyMessage: 'QR unavailable. Use the option below:' });
       el.appendChild(fallback);
-      el.appendChild(link);
     }
   }
 
@@ -845,23 +1001,15 @@ window.getYouTubeEmbed = getYouTubeEmbed;
     window.alert(msg);
   }
 
-  function setQR(text = '', url = '') {
+  function setQR(text = '', url = '', raw = '') {
     const msg = $('shopMsg');
     if (msg) msg.textContent = text || '';
     const box = $('shopQrBox');
     if (!box) return;
     box.innerHTML = '';
     if (url) {
-      const img = new Image();
-      img.src = url;
-      img.alt = 'Reward QR code';
-      img.loading = 'lazy';
-      img.style.maxWidth = '220px';
-      img.style.maxHeight = '220px';
-      img.style.background = '#fff';
-      img.style.padding = '8px';
-      img.style.borderRadius = '12px';
-      box.appendChild(img);
+      const figure = buildQrFigure(url, raw, { captionText: 'Tap QR to view larger or share.' });
+      box.appendChild(figure);
     }
   }
 
