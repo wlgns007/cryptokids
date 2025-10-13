@@ -209,7 +209,10 @@
     }
 
     button.primary {
-      background: linear-gradient(135deg, var(--ck-accent), var(--ck-primary));
+      background-color: var(--ck-primary);
+      background-image: linear-gradient(135deg, var(--ck-accent), var(--ck-primary));
+      background-origin: border-box;
+      background-repeat: no-repeat;
       color: #fff;
       border: 0;
       box-shadow: 0 12px 24px rgba(45, 42, 106, 0.18);
@@ -342,6 +345,8 @@
     }
 
     button {
+      -webkit-appearance: none;
+      appearance: none;
       background: #fff;
       font-weight: 600;
       cursor: pointer;
