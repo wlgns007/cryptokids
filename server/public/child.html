@@ -59,6 +59,47 @@
       .ios-tip button:hover {
         background: rgba(124, 77, 255, 0.32);
       }
+
+      .qr-output img {
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 18px 48px rgba(5, 12, 35, 0.7);
+      }
+
+      .qr-actions .qr-action {
+        background: linear-gradient(135deg, rgba(124, 77, 255, 0.55), rgba(124, 77, 255, 0.78));
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+      }
+
+      .qr-actions .qr-action:hover {
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65);
+      }
+
+      .qr-actions .qr-link {
+        color: #d6cbff;
+      }
+
+      .notice-box {
+        background: rgba(36, 33, 78, 0.82);
+        border-color: rgba(124, 77, 255, 0.42);
+      }
+
+      .notice-box.muted {
+        background: rgba(45, 42, 106, 0.66);
+        border-color: rgba(124, 77, 255, 0.38);
+        color: var(--muted);
+      }
+
+      .redeem-history-box {
+        background: rgba(36, 33, 78, 0.78);
+        border-color: rgba(124, 77, 255, 0.36);
+      }
+
+      .recent-row {
+        background: rgba(15, 23, 42, 0.88);
+        border-color: rgba(124, 77, 255, 0.32);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+      }
     }
 
     * {
@@ -336,26 +377,29 @@
     }
 
     .notice-box {
-      background: rgba(124, 77, 255, 0.12);
-      border: 1px solid rgba(124, 77, 255, 0.24);
+      border: 1px solid rgba(124, 77, 255, 0.28);
       border-radius: 16px;
       padding: 16px;
       display: grid;
       gap: 6px;
       font-size: 14px;
+      background: linear-gradient(140deg, rgba(124, 77, 255, 0.18), rgba(124, 77, 255, 0.08));
+      color: var(--fg);
+    }
+
+    .notice-box .notice-title {
       color: var(--ck-primary);
     }
 
     .notice-box.muted {
-      background: rgba(45, 42, 106, 0.06);
-      border-color: rgba(45, 42, 106, 0.16);
-      color: var(--muted);
+      background: rgba(124, 77, 255, 0.12);
+      border-color: rgba(124, 77, 255, 0.22);
+      color: var(--muted-strong);
     }
 
     .notice-title {
       font-weight: 600;
       font-size: 15px;
-      color: var(--fg);
     }
 
     .notice-meta {
@@ -364,16 +408,24 @@
     }
 
     .redeem-history-box {
-      border: 1px solid var(--line);
+      border: 1px solid rgba(124, 77, 255, 0.24);
       border-radius: 16px;
-      background: rgba(124, 77, 255, 0.08);
-      padding: 16px;
+      background: rgba(124, 77, 255, 0.12);
+      padding: 18px;
       display: none;
       gap: 12px;
+      min-height: 120px;
+      color: var(--fg);
     }
 
     .redeem-history-box.active {
       display: grid;
+    }
+
+    .redeem-history-box .muted {
+      justify-self: center;
+      text-align: center;
+      color: var(--muted-strong);
     }
 
     #fullRedeems {
@@ -383,14 +435,16 @@
 
     .recent-row {
       display: grid;
-      gap: 4px;
-      padding-bottom: 12px;
-      border-bottom: 1px dashed rgba(148, 163, 184, 0.4);
+      gap: 6px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(124, 77, 255, 0.16);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
     }
 
-    .recent-row:last-child {
-      border-bottom: none;
-      padding-bottom: 0;
+    .redeem-history-box .recent-row + .recent-row {
+      margin-top: 10px;
     }
 
     .recent-name {
@@ -444,19 +498,88 @@
     #earnQrBox,
     #shopQrBox {
       border: 1px dashed rgba(124, 77, 255, 0.4);
-      border-radius: 16px;
-      min-height: 220px;
+      border-radius: 20px;
+      min-height: clamp(220px, 45vw, 320px);
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(124, 77, 255, 0.05);
+      background: rgba(124, 77, 255, 0.08);
+      padding: 18px;
+      text-align: center;
     }
 
     #earnQrBox:empty::after,
     #shopQrBox:empty::after {
       content: "QR will appear here";
-      color: var(--muted);
+      color: var(--muted-strong);
       font-size: 14px;
+      opacity: 0.85;
+    }
+
+    .qr-output {
+      margin: 0;
+      width: 100%;
+      display: grid;
+      gap: 12px;
+      justify-items: center;
+      text-align: center;
+    }
+
+    .qr-output img {
+      width: min(320px, 80vw);
+      height: auto;
+      background: #fff;
+      padding: 16px;
+      border-radius: 20px;
+      box-shadow: 0 18px 40px rgba(45, 42, 106, 0.22);
+    }
+
+    .qr-caption {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .qr-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .qr-actions .qr-action {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-weight: 600;
+      font-size: 14px;
+      background: linear-gradient(135deg, rgba(124, 77, 255, 0.2), rgba(124, 77, 255, 0.38));
+      color: var(--ck-primary);
+      box-shadow: 0 12px 24px rgba(45, 42, 106, 0.22);
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .qr-actions .qr-action:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 32px rgba(45, 42, 106, 0.3);
+    }
+
+    .qr-actions .qr-action:disabled {
+      cursor: default;
+      opacity: 0.7;
+      transform: none;
+      box-shadow: 0 8px 18px rgba(45, 42, 106, 0.16);
+    }
+
+    .qr-actions .qr-link {
+      font-weight: 600;
+      color: var(--ck-primary);
+      text-decoration: none;
+    }
+
+    .qr-actions .qr-link:hover {
+      text-decoration: underline;
     }
 
     video {
