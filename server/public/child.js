@@ -31,9 +31,25 @@ function getYouTubeEmbed(url, { host = "www.youtube.com", autoplay = true } = {}
   return `https://${host}/embed/${id}?${params.toString()}`;
 }
 
+function isLikelyVerticalYouTube(url) {
+  if (!url) return false;
+  const base = typeof window !== "undefined" ? window.location.origin : "https://youtube.com";
+  try {
+    const parsed = new URL(url, base);
+    if (parsed.pathname?.toLowerCase().includes("/shorts/")) return true;
+    for (const value of parsed.searchParams.values()) {
+      if (String(value).toLowerCase().includes("shorts")) return true;
+    }
+    return false;
+  } catch {
+    return String(url).toLowerCase().includes("shorts");
+  }
+}
+
 window.getYouTubeId = getYouTubeId;
 window.getYouTubeThumbnail = getYouTubeThumbnail;
 window.getYouTubeEmbed = getYouTubeEmbed;
+window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -169,6 +185,7 @@ window.getYouTubeEmbed = getYouTubeEmbed;
       }
       const iframe = modal?.querySelector("iframe");
       const link = modal?.querySelector("#openOnYouTube");
+      const dialog = modal?.querySelector(".modal-dialog");
       if (!iframe) {
         console.error("openVideoModal: modal/iframe not found");
         return;
@@ -179,6 +196,10 @@ window.getYouTubeEmbed = getYouTubeEmbed;
         }) ||
         `https://www.youtube.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
       iframe.src = embedUrl;
+      if (dialog) {
+        const isVertical = window.isLikelyVerticalYouTube?.(url) || isLikelyVerticalYouTube(url);
+        dialog.classList.toggle("vertical", Boolean(isVertical));
+      }
       if (link) {
         link.href = `https://www.youtube.com/watch?v=${id}`;
       }
