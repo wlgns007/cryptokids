@@ -105,11 +105,19 @@
     .modal-dialog {
       position: relative;
       width: min(92vw, 800px);
-      aspect-ratio: 16/9;
+      max-width: 92vw;
+      max-height: 92vh;
+      --video-aspect: 16 / 9;
+      aspect-ratio: var(--video-aspect);
       background: #000;
       border-radius: 12px;
       box-shadow: 0 10px 40px #000a;
       overflow: hidden;
+    }
+
+    .modal-dialog.vertical {
+      --video-aspect: 9 / 16;
+      width: min(82vw, 420px);
     }
 
     .modal-close {
