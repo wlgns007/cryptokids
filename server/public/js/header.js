@@ -1,6 +1,26 @@
 let _headerInit = false;
 let _deferredPrompt = null;
 
+const IOS_DEVICES = /iPad|iPhone|iPod/;
+const IS_IOS = IOS_DEVICES.test(navigator.userAgent);
+const IS_STANDALONE = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+
+function applyIosHelper(btn) {
+  if (!btn) return;
+  if (IS_IOS && !IS_STANDALONE) {
+    btn.textContent = 'Add to Home Screen';
+    btn.style.display = '';
+    btn.onclick = () => alert('On iPhone: Share ▸ Add to Home Screen');
+  }
+}
+
+function showDeferredPrompt(btn) {
+  if (!btn) return;
+  if (_deferredPrompt) {
+    btn.style.display = '';
+  }
+}
+
 export function renderHeader({
   mountId = 'app-header',
   langs = ['en', 'ko'],
@@ -14,22 +34,23 @@ export function renderHeader({
   const mount = document.getElementById(mountId);
   if (!mount) return;
 
-  const bandClass = variant === 'band' ? ' ck-header--band' : '';
-  mount.innerHTML = `
-    <div class="ck-header-outer${bandClass}">
-      <div class="container">
-        <header class="ck-header">
-          <div class="ck-header-left">
-            <a class="ck-brand" href="/">CK WALLET</a>
-            <div id="lang-controls" class="ck-lang-wrap"></div>
-          </div>
-          <div class="ck-header-right">
-            ${showInstall ? `<button id="installBtn" class="btn-primary" style="display:none">Install App</button>` : ''}
-          </div>
-        </header>
-      </div>
+  const headerHtml = `
+  <div class="ck-header-outer ${variant === 'band' ? 'ck-header--band' : ''}">
+    <div class="container">
+      <header class="ck-header">
+        <div class="ck-header-left">
+          <a class="ck-brand" href="/">CK WALLET</a>
+          <div id="lang-controls" class="ck-lang-wrap"></div>
+        </div>
+        <div class="ck-header-right">
+          ${showInstall ? `<button id="installBtn" class="btn-primary" style="display:none">Install App</button>` : ''}
+        </div>
+      </header>
     </div>
-  `;
+  </div>
+`;
+
+  mount.innerHTML = headerHtml;
 
   const wrap = mount.querySelector('#lang-controls');
   if (wrap) {
@@ -50,32 +71,32 @@ export function renderHeader({
     });
   }
 
+  if (!showInstall) return;
+
   const installBtn = mount.querySelector('#installBtn');
-  if (!installBtn) return;
+  showDeferredPrompt(installBtn);
+  applyIosHelper(installBtn);
+}
 
-  window.addEventListener('beforeinstallprompt', (event) => {
-    event.preventDefault();
-    _deferredPrompt = event;
-    installBtn.style.display = '';
-  });
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredPrompt = e;
+  const btn = document.getElementById('installBtn');
+  if (btn) btn.style.display = '';
+});
 
-  installBtn.addEventListener('click', async () => {
-    if (!_deferredPrompt) return;
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'installBtn' && _deferredPrompt) {
     _deferredPrompt.prompt();
-    try {
-      await _deferredPrompt.userChoice;
-    } catch (error) {
-      console.warn('PWA install prompt failed', error);
-    } finally {
-      _deferredPrompt = null;
-    }
-  });
+    _deferredPrompt = null;
+  }
+});
 
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  if (isIOS && !isStandalone) {
-    installBtn.textContent = 'Add to Home Screen';
-    installBtn.style.display = '';
-    installBtn.onclick = () => alert('On iPhone: Share ▸ Add to Home Screen');
+if (IS_IOS && !IS_STANDALONE) {
+  const btn = document.getElementById('installBtn');
+  if (btn) {
+    btn.textContent = 'Add to Home Screen';
+    btn.style.display = '';
+    btn.onclick = () => alert('On iPhone: Share ▸ Add to Home Screen');
   }
 }
