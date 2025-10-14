@@ -1,22 +1,30 @@
+/* Grid: matches your cards/buttons alignment everywhere */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* Header block */
+.ck-header-outer {
+  margin: 8px 0 16px;
+  border-radius: 14px;
+}
+
+.ck-header-outer.ck-header--band {
+  background: linear-gradient(135deg, #2c2b5a 0%, #6f4ff6 100%);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  color: #fff;
+}
+
 .ck-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
   padding: 10px 12px;
+  flex-wrap: wrap;
 }
-
-.ck-header--band {
-  background: linear-gradient(135deg, #2c2b5a 0%, #6f4ff6 100%);
-  color: #fff;
-  border-radius: 14px;
-  margin: 8px 0 14px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-}
-
-.ck-header--band .ck-brand { color: #fff; opacity: 0.95; }
-.ck-header--band .chip.lang { background: rgba(255,255,255,0.15); border-color: transparent; color: #fff; }
 
 .ck-header-left,
 .ck-header-right {
@@ -29,7 +37,8 @@
 .ck-brand {
   font-weight: 700;
   text-decoration: none;
-  color: #111;
+  color: inherit;
+  opacity: .95;
 }
 
 .ck-lang-wrap {
@@ -41,23 +50,35 @@
 .chip.lang {
   padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid #e6e6ea;
-  background: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  background: rgba(255,255,255,.12);
+  color: #fff;
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 
-.chip.lang.active {
-  background: rgba(37, 99, 235, 0.12);
-  border-color: rgba(37, 99, 235, 0.4);
+.ck-header-outer:not(.ck-header--band) .chip.lang {
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: #fff;
+  color: #1f2937;
 }
 
-/* Ensure the install button never disappears on small screens */
+.chip.lang.active {
+  background: #fff;
+  color: #2c2b5a;
+  border-color: transparent;
+}
+
+.ck-header-outer:not(.ck-header--band) .chip.lang.active {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+/* Install button always visible when JS shows it; align with grid */
 .ck-header-right .btn-primary {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   padding: 8px 14px;
   border-radius: 999px;
   white-space: nowrap;
@@ -80,10 +101,10 @@
   outline: none;
 }
 
-/* Prevent accidental hiding by utility classes */
+/* Small screens: keep everything inside the container width */
 @media (max-width: 480px) {
   .ck-header { padding: 8px; }
-  .ck-header-right { width: 100%; justify-content: flex-start; }
+  .ck-header-right { margin-left: auto; }
 }
 
 .hero,
