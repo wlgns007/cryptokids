@@ -18,24 +18,6 @@
       balance: "Balance",
       invalid_youtube: "Invalid YouTube URL"
     },
-    es: {
-      nav_member: "Gestión de Miembros",
-      nav_register: "Registrar Nuevo Miembro",
-      nav_existing: "Miembros Existentes",
-      member_info: "Info del Miembro",
-      check_balance: "Ver Saldo",
-      view_history: "Ver Historial",
-      user_id: "ID de usuario",
-      name: "Nombre",
-      dob: "Fecha de nacimiento",
-      sex: "Sexo",
-      register_member: "Registrar miembro",
-      search_placeholder: "buscar id o nombre",
-      load_rewards: "Cargar recompensas",
-      redeem: "Canjear",
-      balance: "Saldo",
-      invalid_youtube: "URL de YouTube no válida"
-    },
     ko: {
       nav_member: "회원 관리",
       nav_register: "신규 회원 등록",
@@ -57,7 +39,9 @@
   };
 
   const LS = "ck.lang";
+  const SUPPORTED = ["en", "ko"];
   let lang = localStorage.getItem(LS) || "en";
+  if (!SUPPORTED.includes(lang)) lang = "en";
 
   function t(key) {
     return (STRINGS[lang] && STRINGS[lang][key]) || key;
@@ -76,12 +60,12 @@
   }
 
   function setLang(next) {
-    if (!STRINGS[next]) next = "en";
+    if (!SUPPORTED.includes(next)) next = "en";
     lang = next;
     localStorage.setItem(LS, lang);
     applyI18n();
   }
 
-  window.I18N = { t, setLang, getLang: () => lang, applyI18n, STRINGS };
+  window.I18N = { t, setLang, getLang: () => lang, applyI18n, STRINGS, SUPPORTED };
   applyI18n();
 })();
