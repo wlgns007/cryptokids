@@ -145,6 +145,30 @@
       gap: 16px;
     }
 
+    .lang-switch {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .lang-switch button {
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+
+    .lang-switch button.active {
+      background: #fff;
+      color: var(--ck-primary);
+      border-color: #fff;
+    }
+
     .app-pill {
       display: inline-flex;
       align-items: center;
@@ -689,6 +713,10 @@
     </div>
     <h1>Family rewards that feel fair</h1>
     <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
+    <div class="lang-switch">
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="ko">KO</button>
+    </div>
   </header>
 
   <main>

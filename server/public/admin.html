@@ -161,6 +161,31 @@
       gap: 12px;
     }
 
+    .lang-switch {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .lang-switch button {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .lang-switch button.active {
+      background: rgba(37, 99, 235, 0.12);
+      border-color: rgba(37, 99, 235, 0.38);
+    }
+
+    .header-intro .lang-switch {
+      margin-top: 12px;
+    }
+
     .install-cta {
       background: linear-gradient(135deg, #7c4dff, #5d34d6);
       color: #fff;
