@@ -1,0 +1,96 @@
+.ck-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+}
+
+.ck-header-left,
+.ck-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ck-brand {
+  font-weight: 700;
+  text-decoration: none;
+  opacity: 0.9;
+}
+
+.ck-lang-wrap {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip.lang {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #e6e6ea;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip.lang.active {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.4);
+}
+
+.ck-header .btn-primary {
+  background: linear-gradient(135deg, #7c4dff, #5d34d6);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(124, 77, 255, 0.26);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.ck-header .btn-primary:hover,
+.ck-header .btn-primary:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px rgba(124, 77, 255, 0.32);
+  outline: none;
+}
+
+.hero,
+.admin-hero {
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+.admin-hero-title {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.admin-hero-sub {
+  opacity: 0.8;
+  margin-top: 4px;
+}
+
+.admin-key-card {
+  margin-bottom: 12px;
+}
+
+.admin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pill {
+  border-radius: 999px;
+  padding: 8px 12px;
+  border: 1px solid #e6e6ea;
+  background: #f9fafb;
+  cursor: pointer;
+}

@@ -1,3 +1,5 @@
+import { renderHeader } from './js/header.js';
+
 function getYouTubeId(url) {
   if (!url) return "";
   try {

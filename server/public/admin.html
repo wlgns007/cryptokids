@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CryptoKids — Admin</title>
   <link rel="manifest" href="/ck-wallet-manifest.v1.webmanifest">
+  <link rel="stylesheet" href="/styles.css?v=12">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/ck-wallet-apple-touch-180.v1.png">
   <link rel="apple-touch-icon" sizes="152x152" href="/assets/icons/ck-wallet-apple-touch-152.v1.png">
   <meta name="theme-color" content="#2D2A6A">
@@ -243,27 +244,6 @@
       display: grid;
       gap: 10px;
       min-width: 220px;
-    }
-
-    .jump-links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      padding: 0;
-      margin: 0;
-      list-style: none;
-    }
-
-    .jump-links a {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.8);
-      text-decoration: none;
-      font-size: 14px;
     }
 
     main {
@@ -920,20 +900,18 @@
         <h1>CryptoKids Admin</h1>
         <p>Issue points, approve holds, and curate the earn menu.</p>
       </div>
-    </header>
+    </section>
 
-    <nav aria-label="Section navigation">
-      <ul class="jump-links">
-        <li><a href="#secMember">Member Management</a></li>
-        <li><a href="#secRegisterMember">Register New Member</a></li>
-        <li><a href="#secMemberList">Existing Members</a></li>
-        <li><a href="#secIssue">Issue Points</a></li>
-        <li><a href="#secHolds">Holding Rewards To Be Redeemed</a></li>
-        <li><a href="#secRewards">Rewards Menu</a></li>
-        <li><a href="#secRegisterReward">Register New Reward</a></li>
-        <li><a href="#secEarnMenu">Edit Earn Points Menu</a></li>
-        <li><a href="#activitySection">Activity</a></li>
-      </ul>
+    <nav class="admin-nav" aria-label="Admin sections">
+      <button type="button" class="pill" data-target="#secMember">Member Management</button>
+      <button type="button" class="pill" data-target="#secRegisterMember">Register New Member</button>
+      <button type="button" class="pill" data-target="#secMemberList">Existing Members</button>
+      <button type="button" class="pill" data-target="#secIssue">Issue Points</button>
+      <button type="button" class="pill" data-target="#secHolds">Holding Rewards To Be Redeemed</button>
+      <button type="button" class="pill" data-target="#secRewards">Rewards Menu</button>
+      <button type="button" class="pill" data-target="#secRegisterReward">Register New Reward</button>
+      <button type="button" class="pill" data-target="#secEarnMenu">Edit Earn Points Menu</button>
+      <button type="button" class="pill" data-target="#activitySection">Activity</button>
     </nav>
 
     <main>
@@ -1508,6 +1486,6 @@
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>
-  <script defer src="./admin.js?v=force1"></script>
+  <script type="module" src="./admin.js?v=12"></script>
 </body>
 </html>
