@@ -36,17 +36,15 @@ export function renderHeader({
 
   const headerHtml = `
   <div class="ck-header-outer ${variant === 'band' ? 'ck-header--band' : ''}">
-    <div class="container">
-      <header class="ck-header">
-        <div class="ck-header-left">
-          <a class="ck-brand" href="/">CK WALLET</a>
-          <div id="lang-controls" class="ck-lang-wrap"></div>
-        </div>
-        <div class="ck-header-right">
-          ${showInstall ? `<button id="installBtn" class="btn-primary" style="display:none">Install App</button>` : ''}
-        </div>
-      </header>
-    </div>
+    <header class="ck-header">
+      <div class="ck-header-left">
+        <a class="ck-brand" href="/">CK WALLET</a>
+        <div id="lang-controls" class="ck-lang-wrap"></div>
+      </div>
+      <div class="ck-header-right">
+        ${showInstall ? `<button id="installBtn" class="btn-primary" style="display:none">Install App</button>` : ''}
+      </div>
+    </header>
   </div>
 `;
 

@@ -1,39 +1,64 @@
-:root {
-  --page-max: 1200px;
-  --gutter: 16px;
+:root{
+  --edge-pad: 20px;   /* distance from screen edge for header + content */
 }
 
-/* shared page container */
-.container {
-  max-width: var(--page-max);
-  margin: 0 auto;
-  padding: 0 var(--gutter);
+/* Full-bleed container */
+.container, .page {
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0 var(--edge-pad);
 }
 
-.ck-header-outer { margin: 8px 0 16px; }
-.ck-header--band {
+/* Cards keep some breathing room */
+.card, .panel, .hero, .admin-key-card, .admin-nav, .section {
+  width: 100%;
+}
+
+/* Full-bleed band */
+.ck-header-outer{
+  width: 100%;
   background: linear-gradient(135deg,#2c2b5a 0%,#6f4ff6 100%);
   box-shadow: 0 8px 24px rgba(0,0,0,.12);
-  border-radius: 12px;
 }
 
-.ck-header {
+/* Header interior aligns to screen edges using edge pad */
+.ck-header{
   display:flex; align-items:center; justify-content:space-between;
-  gap:12px; padding:10px 12px; flex-wrap:wrap;
+  gap:12px; padding: 10px var(--edge-pad);
+  flex-wrap: wrap;
+  color:#fff;
 }
-.ck-header-left,.ck-header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-.ck-brand{font-weight:700;color:#fff;text-decoration:none;opacity:.95}
 
-/* Lang chips: visible on band */
-.ck-lang-wrap{display:flex;gap:8px;flex-wrap:wrap;}
+/* Left/Right groups */
+.ck-header-left, .ck-header-right{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+
+/* Brand */
+.ck-brand{ font-weight:700; color:#fff; text-decoration:none; opacity:.95 }
+
+/* Language chips (high-contrast on purple) */
+.ck-lang-wrap{ display:flex; gap:8px; flex-wrap:wrap; }
 .chip.lang{
-  padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.35);
-  background:rgba(255,255,255,.12); color:#fff; font-size:12px; line-height:1; cursor:pointer;
+  padding:6px 12px;
+  border-radius:999px;
+  background:#fff;
+  color:#3c2df0;         /* readable on band */
+  border:none;
+  font-weight:600;
+  font-size:12px;
+  line-height:1;
+  cursor:pointer;
 }
 
-/* Install button */
+/* Install button pinned right (JS toggles visibility) */
 .ck-header-right .btn-primary{
-  display:inline-flex; align-items:center; white-space:nowrap; padding:8px 14px; border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  padding:8px 14px;
+  border-radius:999px;
+  white-space:nowrap;
 }
 
 .btn-primary {
@@ -53,15 +78,15 @@
   outline: none;
 }
 
-/* mobile niceties */
+/* Mobile tweaks */
 @media (max-width: 480px){
-  .ck-header{padding:8px}
+  .ck-header{ padding:8px var(--edge-pad); }
+  .ck-header-right{ margin-left:auto; }
 }
 
 .chip.lang.active {
   background: #fff;
   color: #2c2b5a;
-  border-color: transparent;
 }
 
 .hero,
