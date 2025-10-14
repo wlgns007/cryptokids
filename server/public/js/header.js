@@ -1,77 +1,82 @@
-let _headerBooted = false;
+let _headerInit = false;
+let _deferredPrompt = null; // holds beforeinstallprompt for Android/Chrome
+
+export function bindPWAInstall() {
+  // Capture install prompt event once
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    _deferredPrompt = e;
+    const btn = document.getElementById('installBtn');
+    if (btn) btn.style.display = ''; // reveal when eligible
+  });
+
+  // iOS Safari has no beforeinstallprompt; show helper instead
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+
+  if (isIOS && !isStandalone) {
+    const btn = document.getElementById('installBtn');
+    if (btn) {
+      btn.textContent = 'Add to Home Screen';
+      btn.onclick = () => alert('On iPhone: Share ▸ Add to Home Screen');
+      btn.style.display = ''; // always show hint on iOS
+    }
+  }
+}
+
+export async function handleInstallClick() {
+  if (_deferredPrompt) {
+    _deferredPrompt.prompt();
+    const choice = await _deferredPrompt.userChoice.catch(() => null);
+    _deferredPrompt = null;
+  }
+}
 
 export function renderHeader({
   mountId = 'app-header',
-  langs = ['en', 'ko'],
+  langs = ['en','ko'],
   onLangChange,
+  variant = 'band',            // 'band' | 'plain'
   showInstall = true,
-  rightSlot
+  rightSlotHTML = ''           // optional HTML string to append on right
 } = {}) {
-  if (_headerBooted) return;
-  _headerBooted = true;
+  if (_headerInit) return;
+  _headerInit = true;
 
   const mount = document.getElementById(mountId);
   if (!mount) return;
 
+  const bandClass = variant === 'band' ? ' ck-header--band' : '';
   mount.innerHTML = `
-    <div class="ck-header">
+    <header class="ck-header${bandClass}">
       <div class="ck-header-left">
         <a class="ck-brand" href="/">CK WALLET</a>
         <div id="lang-controls" class="ck-lang-wrap"></div>
       </div>
       <div class="ck-header-right">
-        ${showInstall ? `<button id="installBtn" class="btn-primary">Install App</button>` : ''}
+        ${showInstall ? `<button id="installBtn" class="btn-primary" style="display:none">Install App</button>` : ''}
+        ${rightSlotHTML}
       </div>
-    </div>
+    </header>
   `;
 
+  // Language chips
   const wrap = mount.querySelector('#lang-controls');
-  if (!wrap) return;
   wrap.innerHTML = '';
-
-  const storedLang = readStoredLang(langs);
-  const buttons = [];
-
-  const updateActive = (active) => {
-    buttons.forEach((btn) => {
-      const isActive = btn.dataset.lang === active;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
-    });
-  };
-
-  langs.forEach((code) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'chip lang';
-    btn.textContent = code.toUpperCase();
-    btn.dataset.lang = code;
-    btn.setAttribute('aria-pressed', 'false');
-    btn.addEventListener('click', () => {
-      updateActive(code);
-      if (typeof onLangChange === 'function') {
-        onLangChange(code);
-      }
-    });
-    buttons.push(btn);
-    wrap.appendChild(btn);
+  langs.forEach(code => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip lang';
+    b.textContent = code.toUpperCase();
+    b.dataset.lang = code;
+    b.addEventListener('click', () => onLangChange && onLangChange(code));
+    wrap.appendChild(b);
   });
 
-  updateActive(storedLang);
-
-  if (rightSlot) {
-    const right = mount.querySelector('.ck-header-right');
-    if (right) right.appendChild(rightSlot);
+  // Install button behavior
+  const installBtn = document.getElementById('installBtn');
+  if (installBtn) {
+    installBtn.addEventListener('click', handleInstallClick);
+    bindPWAInstall();
   }
-}
-
-function readStoredLang(langs) {
-  if (!Array.isArray(langs) || !langs.length) return 'en';
-  try {
-    const value = window.localStorage?.getItem('ck.lang');
-    if (value && langs.includes(value)) return value;
-  } catch (error) {
-    console.warn('[CK Header] unable to read stored language', error);
-  }
-  return langs[0];
 }
