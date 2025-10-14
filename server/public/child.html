@@ -14,6 +14,7 @@
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; child-src 'self' https://www.youtube-nocookie.com https://www.youtube.com;"
   >
+  <script src="/assets/i18n.js" defer></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -142,6 +143,30 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
+    }
+
+    .lang-switch {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .lang-switch button {
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+
+    .lang-switch button.active {
+      background: #fff;
+      color: var(--ck-primary);
+      border-color: #fff;
     }
 
     .app-pill {
@@ -679,6 +704,10 @@
     </div>
     <h1>Family rewards that feel fair</h1>
     <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
+    <div class="lang-switch">
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="ko">KO</button>
+    </div>
   </header>
 
   <main>
@@ -695,8 +724,8 @@
     <section id="balance">
       <h2>Balance History</h2>
       <div class="row">
-        <input id="childUserId" placeholder="User ID" />
-        <button id="btnCheck" class="primary">Check Balance</button>
+        <input id="childUserId" placeholder="User ID" data-i18n-placeholder="user_id" />
+        <button id="btnCheck" class="primary" data-i18n="check_balance">Check Balance</button>
         <button id="btnHistory">Refresh History</button>
         <button id="btnCsv">Download CSV</button>
       </div>
@@ -737,7 +766,7 @@
     <section id="shop">
       <h2>Rewards Menu</h2>
       <div class="row">
-        <button id="btnLoadItems" class="primary" style="flex:0 0 auto;">Load Rewards</button>
+        <button id="btnLoadItems" class="primary" style="flex:0 0 auto;" data-i18n="load_rewards">Load Rewards</button>
         <button id="btnRecentRedeems" type="button" style="flex:0 0 auto;">Show Recent Redeemed</button>
         <button id="btnFullRedeems" type="button" style="flex:0 0 auto;">Show Full Redeemed History</button>
       </div>
@@ -776,6 +805,28 @@
     </div>
   </div>
 
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const buttons = Array.from(document.querySelectorAll(".lang-switch [data-lang]"));
+      const syncActive = () => {
+        const activeLang = I18N.getLang();
+        buttons.forEach(btn => {
+          const isActive = btn.dataset.lang === activeLang;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
+        });
+      };
+
+      buttons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          I18N.setLang(btn.dataset.lang);
+          syncActive();
+        });
+      });
+
+      syncActive();
+    });
+  </script>
   <script src="https://unpkg.com/jsqr"></script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>

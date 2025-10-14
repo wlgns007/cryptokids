@@ -13,6 +13,7 @@
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube.com; child-src 'self' https://www.youtube.com;"
   >
+  <script src="/assets/i18n.js" defer></script>
   <style>
     :root {
       color-scheme: light;
@@ -158,6 +159,31 @@
       align-items: flex-start;
       justify-content: flex-end;
       gap: 12px;
+    }
+
+    .lang-switch {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .lang-switch button {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .lang-switch button.active {
+      background: rgba(37, 99, 235, 0.12);
+      border-color: rgba(37, 99, 235, 0.38);
+    }
+
+    .header-intro .lang-switch {
+      margin-top: 12px;
     }
 
     .install-cta {
@@ -867,6 +893,10 @@
       <div class="header-intro">
         <h1>CryptoKids Admin</h1>
         <p>Issue points, approve holds, and curate the earn menu.</p>
+        <div class="lang-switch">
+          <button type="button" data-lang="en">EN</button>
+          <button type="button" data-lang="ko">KO</button>
+        </div>
       </div>
       <div class="header-tools">
         <button id="installCta" class="install-cta" type="button" hidden>Install App</button>
@@ -897,15 +927,16 @@
     <main>
       <section class="card" id="secMember">
         <div class="flex-between">
-          <h2>Member Management</h2>
+          <h2 data-i18n="nav_member">Member Management</h2>
           <div class="row compact" style="gap:10px; justify-content:flex-end; flex-wrap:wrap;">
-            <button id="btnMemberInfo">Member Info</button>
-            <button id="btnMemberBalance">Check Balance</button>
-            <button class="view-history" data-history-type="all" data-history-scope="member">View History</button>
+            <button id="btnMemberInfo" data-i18n="member_info">Member Info</button>
+            <button id="btnMemberBalance" data-i18n="check_balance">Check Balance</button>
+            <button class="view-history" data-history-type="all" data-history-scope="member" data-i18n="view_history">View History</button>
           </div>
         </div>
         <div class="stack">
-          <label>User ID
+          <label>
+            <span data-i18n="user_id">User ID</span>
             <input id="memberUserId" type="text" placeholder="e.g., leo" autocomplete="off">
           </label>
           <div id="memberInfoPanel" class="stack" style="border:1px solid var(--line); border-radius:12px; padding:12px; background:rgba(37,99,235,0.04);">
@@ -913,7 +944,7 @@
             <div id="memberBalanceContainer" class="stack member-balance-container" hidden>
               <details id="memberBalanceDetails" class="member-fold">
                 <summary>
-                  <span>Balance</span>
+                  <span data-i18n="balance">Balance</span>
                   <span class="summary-value" id="memberBalanceSummaryValue">—</span>
                 </summary>
                 <div class="member-fold-body" id="memberBalanceBody">
@@ -963,23 +994,27 @@
       <section class="card" id="secRegisterMember">
         <div class="collapsible" id="memberRegisterContainer">
           <button type="button" class="card-toggle" id="toggleMemberRegister" aria-controls="memberRegisterFields" aria-expanded="false">
-            <span class="card-toggle-title">Register New Member</span>
+            <span class="card-toggle-title" data-i18n="nav_register">Register New Member</span>
             <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
           </button>
           <div class="collapsible-content stack" id="memberRegisterFields" hidden>
             <div class="row">
-              <label>User ID
+              <label>
+                <span data-i18n="user_id">User ID</span>
                 <input id="memberRegisterId" type="text" placeholder="unique id">
               </label>
-              <label>Name
+              <label>
+                <span data-i18n="name">Name</span>
                 <input id="memberRegisterName" type="text" placeholder="full name">
               </label>
             </div>
             <div class="row">
-              <label>Date of Birth
+              <label>
+                <span data-i18n="dob">Date of Birth</span>
                 <input id="memberRegisterDob" type="date">
               </label>
-              <label>Sex
+              <label>
+                <span data-i18n="sex">Sex</span>
                 <select id="memberRegisterSex">
                   <option value="">Select sex</option>
                   <option value="Boy">Boy</option>
@@ -988,7 +1023,7 @@
               </label>
             </div>
             <div class="row compact" style="justify-content:flex-end;">
-              <button id="btnMemberRegister" class="primary">Register Member</button>
+              <button id="btnMemberRegister" class="primary" data-i18n="register_member">Register Member</button>
             </div>
           </div>
         </div>
@@ -997,14 +1032,14 @@
       <section class="card" id="secMemberList">
         <div class="collapsible" id="memberListContainer">
           <button type="button" class="card-toggle" id="toggleMemberList" aria-controls="memberListSection" aria-expanded="false">
-            <span class="card-toggle-title">Existing Members</span>
+            <span class="card-toggle-title" data-i18n="nav_existing">Existing Members</span>
             <span aria-hidden="true" class="card-toggle-arrow" data-arrow>▼</span>
           </button>
           <div class="stack" id="memberListSection" hidden>
             <div class="row compact" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
               <label style="flex:1 1 180px;">
                 <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em;">Search</span>
-                <input id="memberSearch" type="text" placeholder="search id or name">
+                <input id="memberSearch" type="text" placeholder="search id or name" data-i18n-placeholder="search_placeholder">
               </label>
               <button id="btnMemberReload">Reload</button>
             </div>
@@ -1458,6 +1493,28 @@
     </div>
   </div>
 
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const buttons = Array.from(document.querySelectorAll(".lang-switch [data-lang]"));
+      const syncActive = () => {
+        const activeLang = I18N.getLang();
+        buttons.forEach(btn => {
+          const isActive = btn.dataset.lang === activeLang;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
+        });
+      };
+
+      buttons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          I18N.setLang(btn.dataset.lang);
+          syncActive();
+        });
+      });
+
+      syncActive();
+    });
+  </script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>
