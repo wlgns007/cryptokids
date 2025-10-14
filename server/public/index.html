@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#0ea5e9">
   <script>navigator.serviceWorker?.register('/sw.js?v=__BUILD__');</script>
   <meta charset="utf-8" />
-  <title>Parents Shop (Web 2.5)</title>
+  <title data-i18n="index.pageTitle">Parents Shop (Web 2.5)</title>
   <style>
     body{font:14px system-ui,arial;margin:24px;max-width:900px}
     h2{margin-top:28px}
@@ -13,34 +13,42 @@
     button{cursor:pointer}
     .row{display:flex;gap:8px;flex-wrap:wrap}
     .card{border:1px solid #ddd;padding:10px;border-radius:8px}
+    .lang-switcher{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px}
+    .lang-switcher__label{font-weight:600}
+    .lang-switcher__buttons{display:flex;gap:6px}
+    .lang-switcher__button{padding:4px 10px;border:1px solid #d1d5db;border-radius:999px;background:#fff;font-size:13px;cursor:pointer}
+    .lang-switcher__button.is-active{background:#0ea5e9;border-color:#0ea5e9;color:#fff}
   </style>
+  <script src="/assets/i18n.js?v=1"></script>
 </head>
 <body>
-  <h1>Parents Shop (Web 2.5)</h1>
+  <div class="lang-switcher" id="langSwitcher"></div>
+  <h1 data-i18n="index.heading">Parents Shop (Web 2.5)</h1>
 
   <fieldset>
-    <legend>Kid</legend>
+    <legend data-i18n="index.kidLegend">Kid</legend>
     <div class="row">
-      <label>Pick kid:
+      <label>
+        <span data-i18n="index.pickKid">Pick kid:</span>
         <select id="kidSelect"></select>
       </label>
-      <button id="refresh">Refresh balance</button>
-      <div>RT balance: <b id="bal">—</b></div>
+      <button id="refresh" data-i18n="index.refresh">Refresh balance</button>
+      <div><span data-i18n="index.rtBalance">RT balance:</span> <b id="bal">—</b></div>
     </div>
   </fieldset>
 
   <fieldset>
-    <legend>Chores → RT</legend>
+    <legend data-i18n="index.choresLegend">Chores → RT</legend>
     <div id="chores" class="row"></div>
   </fieldset>
 
   <fieldset>
-    <legend>Parents Shop</legend>
+    <legend data-i18n="index.shopLegend">Parents Shop</legend>
     <div id="items" class="row"></div>
   </fieldset>
 
   <fieldset>
-    <legend>Badges (VC)</legend>
+    <legend data-i18n="index.badgesLegend">Badges (VC)</legend>
     <div id="badges" class="row"></div>
   </fieldset>
 
@@ -49,37 +57,37 @@ const API = location.origin;
 let kidId = null;
 
 const CHORES = [
-  {label:"Wake up early", rt:5},
-  {label:"Brush teeth", rt:2},
-  {label:"Make bed", rt:2},
-  {label:"Homework 30m", rt:6},
-  {label:"Read 20m", rt:4},
-  {label:"Practice music", rt:5},
-  {label:"Pack backpack", rt:2},
-  {label:"Feed pet", rt:3},
-  {label:"Help dishes", rt:4},
-  {label:"Exercise", rt:5},
+  {key:'wakeUp', rt:5},
+  {key:'brushTeeth', rt:2},
+  {key:'makeBed', rt:2},
+  {key:'homework', rt:6},
+  {key:'read', rt:4},
+  {key:'practiceMusic', rt:5},
+  {key:'packBackpack', rt:2},
+  {key:'feedPet', rt:3},
+  {key:'helpDishes', rt:4},
+  {key:'exercise', rt:5},
 ];
 
 const ITEMS = [
-  {id:1, name:"Sticker pack", price:6},
-  {id:2, name:"Small toy", price:15},
-  {id:3, name:"Extra screen 20m", price:8},
-  {id:4, name:"Comic", price:7},
-  {id:5, name:"Card pack", price:9},
-  {id:6, name:"Snack", price:5},
-  {id:7, name:"Puzzle", price:12},
-  {id:8, name:"Book", price:18},
-  {id:9, name:"Craft kit", price:14},
-  {id:10, name:"Outing pass", price:25},
+  {id:1, key:'stickerPack', price:6},
+  {id:2, key:'smallToy', price:15},
+  {id:3, key:'extraScreen', price:8},
+  {id:4, key:'comic', price:7},
+  {id:5, key:'cardPack', price:9},
+  {id:6, key:'snack', price:5},
+  {id:7, key:'puzzle', price:12},
+  {id:8, key:'book', price:18},
+  {id:9, key:'craftKit', price:14},
+  {id:10, key:'outingPass', price:25},
 ];
 
 const BADGES = [
-  {id:"EARLY_BIRD_7", name:"Early Bird (7 days)", bonus:10},
-  {id:"HOMEWORK_10D", name:"Homework streak", bonus:20},
-  {id:"READ_14D",     name:"Reading streak",  bonus:15},
-  {id:"TEETH_14D",    name:"Teeth streak",    bonus:12},
-  {id:"KINDNESS_5",   name:"Kindness x5",     bonus:10},
+  {id:'EARLY_BIRD_7', key:'earlyBird', bonus:10},
+  {id:'HOMEWORK_10D', key:'homework', bonus:20},
+  {id:'READ_14D',     key:'reading',  bonus:15},
+  {id:'TEETH_14D',    key:'teeth',    bonus:12},
+  {id:'KINDNESS_5',   key:'kindness', bonus:10},
 ];
 
 async function j(method, url, body){
@@ -118,13 +126,25 @@ function renderChores(){
   const box = document.getElementById('chores'); box.innerHTML = '';
   for (const c of CHORES){
     const div = document.createElement('div'); div.className='card';
-    div.innerHTML = `<div><b>${c.label}</b></div><div>${c.rt} RT</div>`;
-    const btn = document.createElement('button'); btn.textContent = `Give ${c.rt} RT`;
+    const name = document.createElement('div');
+    const bold = document.createElement('b');
+    bold.setAttribute('data-i18n', `index.chores.${c.key}`);
+    bold.textContent = i18n.t(`index.chores.${c.key}`);
+    name.appendChild(bold);
+    const amount = document.createElement('div');
+    amount.setAttribute('data-i18n', 'index.rtAmount');
+    amount.setAttribute('data-i18n-params', JSON.stringify({ amount: c.rt }));
+    amount.textContent = i18n.t('index.rtAmount', { amount: c.rt });
+    const btn = document.createElement('button');
+    btn.setAttribute('data-i18n', 'index.giveRt');
+    btn.setAttribute('data-i18n-params', JSON.stringify({ amount: c.rt }));
+    btn.textContent = i18n.t('index.giveRt', { amount: c.rt });
     btn.onclick = async ()=>{
       await j('POST', `${API}/api/kids/${kidId}/earn`, {amount: String(c.rt)});
       await refresh();
     };
-    div.appendChild(btn); box.appendChild(div);
+    div.append(name, amount, btn);
+    box.appendChild(div);
   }
 }
 
@@ -132,15 +152,26 @@ function renderItems(){
   const box = document.getElementById('items'); box.innerHTML = '';
   for (const it of ITEMS){
     const div = document.createElement('div'); div.className='card';
-    div.innerHTML = `<div><b>${it.name}</b></div><div>${it.price} RT</div>`;
-    const btn = document.createElement('button'); btn.textContent = `Buy`;
+    const name = document.createElement('div');
+    const bold = document.createElement('b');
+    bold.setAttribute('data-i18n', `index.items.${it.key}`);
+    bold.textContent = i18n.t(`index.items.${it.key}`);
+    name.appendChild(bold);
+    const price = document.createElement('div');
+    price.setAttribute('data-i18n', 'index.rtAmount');
+    price.setAttribute('data-i18n-params', JSON.stringify({ amount: it.price }));
+    price.textContent = i18n.t('index.rtAmount', { amount: it.price });
+    const btn = document.createElement('button');
+    btn.setAttribute('data-i18n', 'index.buy');
+    btn.textContent = i18n.t('index.buy');
     btn.onclick = async ()=>{
       try {
         await j('POST', `${API}/api/kids/${kidId}/buy`, {itemId: it.id, qty: 1});
         await refresh();
       } catch(e) { alert(e.message); }
     };
-    div.appendChild(btn); box.appendChild(div);
+    div.append(name, price, btn);
+    box.appendChild(div);
   }
 }
 
@@ -148,20 +179,45 @@ function renderBadges(){
   const box = document.getElementById('badges'); box.innerHTML='';
   for (const b of BADGES){
     const div = document.createElement('div'); div.className='card';
-    div.innerHTML = `<div><b>${b.name}</b></div><div>Bonus ${b.bonus} RT</div>`;
-    const issue = document.createElement('button'); issue.textContent='Issue to kid';
+    const name = document.createElement('div');
+    const bold = document.createElement('b');
+    bold.setAttribute('data-i18n', `index.badges.${b.key}`);
+    bold.textContent = i18n.t(`index.badges.${b.key}`);
+    name.appendChild(bold);
+    const bonus = document.createElement('div');
+    bonus.setAttribute('data-i18n', 'index.bonus');
+    bonus.setAttribute('data-i18n-params', JSON.stringify({ amount: b.bonus }));
+    bonus.textContent = i18n.t('index.bonus', { amount: b.bonus });
+    const issue = document.createElement('button');
+    issue.setAttribute('data-i18n', 'index.issue');
+    issue.textContent = i18n.t('index.issue');
     issue.onclick = async ()=>{ await j('POST', `${API}/api/kids/${kidId}/issue`, {badgeId: b.id}); };
-    const redeem = document.createElement('button'); redeem.textContent='Redeem';
+    const redeem = document.createElement('button');
+    redeem.setAttribute('data-i18n', 'index.redeem');
+    redeem.textContent = i18n.t('index.redeem');
     redeem.onclick = async ()=>{
       try { await j('POST', `${API}/api/kids/${kidId}/redeem`, {badgeId: b.id}); await refresh(); }
       catch(e){ alert(e.message); }
     };
-    div.append(issue, redeem); box.appendChild(div);
+    div.append(name, bonus, issue, redeem);
+    box.appendChild(div);
   }
 }
 
-document.getElementById('refresh').onclick = refresh;
-renderChores(); renderItems(); renderBadges(); loadKids();
+i18n.ready(() => {
+  i18n.registerSwitcher(document.getElementById('langSwitcher'));
+  document.getElementById('refresh').onclick = refresh;
+  renderChores();
+  renderItems();
+  renderBadges();
+  loadKids();
+});
+
+document.addEventListener('i18n:change', () => {
+  renderChores();
+  renderItems();
+  renderBadges();
+});
 </script>
 </body>
 </html>

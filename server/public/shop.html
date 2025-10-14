@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CryptoKids – Shop</title>
+  <title data-i18n="shop.pageTitle">CryptoKids – Shop</title>
   <style>
     body{font-family:system-ui,Arial;margin:16px;line-height:1.4}
     .row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
@@ -13,23 +13,30 @@
     .name{font-weight:600}
     .price{opacity:.7}
     #qr{margin-top:14px}
-  
+
     #msg{margin-top:8px}
+    .lang-switcher{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px}
+    .lang-switcher__label{font-weight:600}
+    .lang-switcher__buttons{display:flex;gap:6px}
+    .lang-switcher__button{padding:4px 10px;border:1px solid #d1d5db;border-radius:999px;background:#fff;font-size:13px;cursor:pointer}
+    .lang-switcher__button.is-active{background:#0ea5e9;border-color:#0ea5e9;color:#fff}
   </style>
+  <script src="/assets/i18n.js?v=1"></script>
 </head>
 <body>
-  <h2>CryptoKids – Shop</h2>
+  <div class="lang-switcher" id="langSwitcher"></div>
+  <h2 data-i18n="shop.heading">CryptoKids – Shop</h2>
 
   <div class="row">
-    <input id="userId" placeholder="Your ID (e.g., leo)" />
-    <button id="loadItemsBtn">Load Items</button>
+    <input id="userId" data-i18n-placeholder="shop.userIdPlaceholder" placeholder="Your ID (e.g., leo)" />
+    <button id="loadItemsBtn" data-i18n="shop.buttons.loadItems">Load Items</button>
 
   </div>
 
 <!-- ADD above your items list container -->
 <div id="shopEmpty" style="display:none; margin:12px 0; padding:12px; border:1px dashed #bbb; border-radius:10px;">
-  <div style="font-weight:600; margin-bottom:6px;">No RT to spend</div>
-  <div style="font-size:14px; line-height:1.4;">
+  <div style="font-weight:600; margin-bottom:6px;" data-i18n="shop.empty.title">No RT to spend</div>
+  <div style="font-size:14px; line-height:1.4;" data-i18n="shop.empty.message">
     You can still browse, but items you can’t afford are disabled. Earn RT first to unlock purchases.
   </div>
 </div>
@@ -40,7 +47,7 @@
   <div id="qrRewardLabel" style="display:none; margin-top:8px; font-weight:600;"></div>
 <!-- ADD: countdown line under the QR -->
 <div id="qrTimer" style="display:none; margin-top:6px; font-size:14px; opacity:.8;"></div>
-<div id="watchNote" style="display:none; margin-top:8px; font-size:14px; opacity:.8;">
+<div id="watchNote" style="display:none; margin-top:8px; font-size:14px; opacity:.8;" data-i18n="shop.watchNote">
   Watching for approval… (auto-refreshing balance)
 </div>
 
