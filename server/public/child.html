@@ -14,6 +14,7 @@
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; child-src 'self' https://www.youtube-nocookie.com https://www.youtube.com;"
   >
+  <script src="/assets/i18n.js" defer></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -676,6 +677,11 @@
     <div class="hero-bar">
       <span class="app-pill">CK Wallet</span>
       <button id="installCta" class="install-cta" type="button">Install App</button>
+      <div class="lang-switch">
+        <button type="button" data-lang="en">EN</button>
+        <button type="button" data-lang="es">ES</button>
+        <button type="button" data-lang="ko">KO</button>
+      </div>
     </div>
     <h1>Family rewards that feel fair</h1>
     <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
@@ -695,8 +701,8 @@
     <section id="balance">
       <h2>Balance History</h2>
       <div class="row">
-        <input id="childUserId" placeholder="User ID" />
-        <button id="btnCheck" class="primary">Check Balance</button>
+        <input id="childUserId" placeholder="User ID" data-i18n-placeholder="user_id" />
+        <button id="btnCheck" class="primary" data-i18n="check_balance">Check Balance</button>
         <button id="btnHistory">Refresh History</button>
         <button id="btnCsv">Download CSV</button>
       </div>
@@ -737,7 +743,7 @@
     <section id="shop">
       <h2>Rewards Menu</h2>
       <div class="row">
-        <button id="btnLoadItems" class="primary" style="flex:0 0 auto;">Load Rewards</button>
+        <button id="btnLoadItems" class="primary" style="flex:0 0 auto;" data-i18n="load_rewards">Load Rewards</button>
         <button id="btnRecentRedeems" type="button" style="flex:0 0 auto;">Show Recent Redeemed</button>
         <button id="btnFullRedeems" type="button" style="flex:0 0 auto;">Show Full Redeemed History</button>
       </div>
@@ -776,6 +782,13 @@
     </div>
   </div>
 
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll(".lang-switch [data-lang]").forEach(btn => {
+        btn.addEventListener("click", () => I18N.setLang(btn.dataset.lang));
+      });
+    });
+  </script>
   <script src="https://unpkg.com/jsqr"></script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>

@@ -343,6 +343,7 @@ details.member-fold .summary-value {
     window.openVideoModal = function openVideoModal(url) {
       const id = window.getYouTubeId ? getYouTubeId(url) : "";
       if (!id) {
+        if (typeof toast === "function") toast(I18N.t("invalid_youtube"), "error");
         console.warn("openVideoModal: no video id for url:", url);
         return;
       }
