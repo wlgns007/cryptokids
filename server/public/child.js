@@ -50,6 +50,7 @@ function bootHeader() {
     mountId: 'app-header',
     langs: SUPPORTED_LANGS,
     onLangChange: setLang,
+    variant: 'band',
     showInstall: true
   });
 

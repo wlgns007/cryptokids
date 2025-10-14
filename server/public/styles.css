@@ -4,20 +4,32 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 12px 0;
+  padding: 10px 12px;
 }
+
+.ck-header--band {
+  background: linear-gradient(135deg, #2c2b5a 0%, #6f4ff6 100%);
+  color: #fff;
+  border-radius: 14px;
+  margin: 8px 0 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.ck-header--band .ck-brand { color: #fff; opacity: 0.95; }
+.ck-header--band .chip.lang { background: rgba(255,255,255,0.15); border-color: transparent; color: #fff; }
 
 .ck-header-left,
 .ck-header-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .ck-brand {
   font-weight: 700;
   text-decoration: none;
-  opacity: 0.9;
+  color: #111;
 }
 
 .ck-lang-wrap {
@@ -41,12 +53,20 @@
   border-color: rgba(37, 99, 235, 0.4);
 }
 
+/* Ensure the install button never disappears on small screens */
+.ck-header-right .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .ck-header .btn-primary {
   background: linear-gradient(135deg, #7c4dff, #5d34d6);
   color: #fff;
   border: 0;
-  border-radius: 999px;
-  padding: 8px 14px;
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 10px 24px rgba(124, 77, 255, 0.26);
@@ -58,6 +78,12 @@
   transform: translateY(-1px);
   box-shadow: 0 14px 30px rgba(124, 77, 255, 0.32);
   outline: none;
+}
+
+/* Prevent accidental hiding by utility classes */
+@media (max-width: 480px) {
+  .ck-header { padding: 8px; }
+  .ck-header-right { width: 100%; justify-content: flex-start; }
 }
 
 .hero,
