@@ -54,14 +54,7 @@ function bootHeader() {
     showInstall: true
   });
 
-  const activeLang = readStoredLang();
-  syncHeaderLangButtons(activeLang);
-
-  const heroInstall = document.getElementById('installCta');
-  const headerInstall = document.getElementById('installBtn');
-  if (heroInstall && headerInstall) {
-    heroInstall.addEventListener('click', () => headerInstall.click());
-  }
+  setLang(readStoredLang());
 }
 
 if (document.readyState === 'loading') {
