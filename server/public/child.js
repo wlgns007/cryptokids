@@ -1,3 +1,74 @@
+import { renderHeader } from './js/header.js';
+
+const SUPPORTED_LANGS = ['en', 'ko'];
+
+function syncHeaderLangButtons(active) {
+  document
+    .querySelectorAll('#lang-controls button[data-lang]')
+    .forEach((btn) => {
+      const isActive = btn.dataset.lang === active;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+    });
+}
+
+function readStoredLang() {
+  try {
+    const stored = window.localStorage?.getItem('ck.lang');
+    if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
+  } catch (error) {
+    console.warn('Unable to read stored language', error);
+  }
+  if (window.I18N && typeof window.I18N.getLang === 'function') {
+    const current = window.I18N.getLang();
+    if (SUPPORTED_LANGS.includes(current)) return current;
+  }
+  return SUPPORTED_LANGS[0];
+}
+
+function setLang(code) {
+  const normalized = SUPPORTED_LANGS.includes(code) ? code : SUPPORTED_LANGS[0];
+  try {
+    window.localStorage?.setItem('ck.lang', normalized);
+  } catch (error) {
+    console.warn('Unable to store language preference', error);
+  }
+  syncHeaderLangButtons(normalized);
+  if (window.I18N && typeof window.I18N.setLang === 'function') {
+    window.I18N.setLang(normalized);
+  }
+  return normalized;
+}
+
+window.setLang = setLang;
+
+function bootHeader() {
+  if (bootHeader._ready) return;
+  bootHeader._ready = true;
+
+  renderHeader({
+    mountId: 'app-header',
+    langs: SUPPORTED_LANGS,
+    onLangChange: setLang,
+    showInstall: true
+  });
+
+  const activeLang = readStoredLang();
+  syncHeaderLangButtons(activeLang);
+
+  const heroInstall = document.getElementById('installCta');
+  const headerInstall = document.getElementById('installBtn');
+  if (heroInstall && headerInstall) {
+    heroInstall.addEventListener('click', () => headerInstall.click());
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootHeader, { once: true });
+} else {
+  bootHeader();
+}
+
 function getYouTubeId(url) {
   if (!url) return "";
   try {
@@ -63,7 +134,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
-    installButtonSelector: '#installCta',
+    installButtonSelector: '#installBtn',
     iosTipSelector: '#iosInstallTip',
     iosDismissSelector: '#dismissIosTip'
   });
