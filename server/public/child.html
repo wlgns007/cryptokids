@@ -15,7 +15,7 @@
     content="frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; child-src 'self' https://www.youtube-nocookie.com https://www.youtube.com;"
   >
   <script src="/assets/i18n.js" defer></script>
-  <link rel="stylesheet" href="/styles.css?v=16">
+  <link rel="stylesheet" href="/styles.css?v=17">
   <style>
     :root {
       color-scheme: light dark;
@@ -675,15 +675,16 @@
 </head>
 <body>
   <div id="app-header"></div>
-  <section class="hero">
-    <div class="hero-bar">
-      <span class="app-pill">CK Wallet</span>
-    </div>
-    <h1>Family rewards that feel fair</h1>
-    <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
-  </section>
+  <div class="container">
+    <section class="hero">
+      <div class="hero-bar">
+        <span class="app-pill">CK Wallet</span>
+      </div>
+      <h1>Family rewards that feel fair</h1>
+      <p>Earn, save, and redeem household tokens with lightning-fast QR codes. Kids stay motivated, adults stay in control.</p>
+    </section>
 
-  <main>
+    <main>
     <aside id="iosInstallTip" class="ios-tip" hidden>
       <strong>On iPhone or iPad?</strong>
       <div class="ios-tip-steps">
@@ -752,9 +753,11 @@
     </section>
   </main>
 
-  <footer>
-    Powered by CK Wallet · Earn, save, and celebrate together.
-  </footer>
+    <footer>
+      Powered by CK Wallet · Earn, save, and celebrate together.
+    </footer>
+
+  </div>
 
   <!-- Video Modal -->
   <div id="videoModal" class="modal hidden">
@@ -781,6 +784,6 @@
   <script src="https://unpkg.com/jsqr"></script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>
-  <script type="module" src="/child.js?v=16"></script>
+  <script type="module" src="/child.js?v=17"></script>
 </body>
 </html>
