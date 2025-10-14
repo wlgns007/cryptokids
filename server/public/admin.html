@@ -140,6 +140,62 @@
       height: 100%;
     }
 
+    header.page-header {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    #lang-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .header-intro {
+      display: grid;
+      gap: 6px;
+      max-width: 520px;
+    }
+
+    .chip.lang {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border, #e5e7eb);
+      background: var(--chip, #fff);
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .chip.lang.active {
+      background: rgba(37, 99, 235, 0.12);
+      border-color: rgba(37, 99, 235, 0.38);
+    }
+
+    .header .chip,
+    .header .btn-primary {
+      position: static;
+    }
+
     .btn-primary,
     .install-cta {
       background: linear-gradient(135deg, #7c4dff, #5d34d6);
@@ -801,6 +857,19 @@
         justify-content: flex-start;
       }
 
+      .header-actions .admin-key {
+        width: 100%;
+      }
+
+      .jump-links {
+        margin: 0;
+      }
+
+      .jump-links a {
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+
       section.card {
         padding: 18px;
       }
@@ -813,18 +882,23 @@
 </head>
 <body>
   <div class="page">
-    <div id="app-header"></div>
-
-    <section class="admin-hero">
-      <div class="admin-hero-title">CryptoKids Admin</div>
-      <div class="admin-hero-sub">Issue points, approve holds, and curate the earn menu.</div>
-    </section>
-
-    <section class="admin-key-card">
-      <label for="adminKey">Admin Key</label>
-      <div class="admin-key">
-        <input id="adminKey" type="text" placeholder="e.g., Mamapapa" />
-        <button id="saveAdminKey" class="btn-primary">Save</button>
+    <header class="page-header">
+      <div class="header">
+        <div id="lang-controls"></div>
+        <div class="header-actions">
+          <button id="installBtn" class="btn-primary install-cta" type="button" hidden>Install App</button>
+          <div class="admin-key">
+            <label>
+              Admin Key
+              <input id="adminKey" type="text" placeholder="enter admin key">
+            </label>
+            <button id="saveAdminKey">Save</button>
+          </div>
+        </div>
+      </div>
+      <div class="header-intro">
+        <h1>CryptoKids Admin</h1>
+        <p>Issue points, approve holds, and curate the earn menu.</p>
       </div>
     </section>
 

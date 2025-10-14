@@ -55,7 +55,14 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
 const SUPPORTED_LANGS = ['en', 'ko'];
 
-function updateHeaderLangButtons(activeLang) {
+function getCurrentLang() {
+  if (window.I18N && typeof window.I18N.getLang === 'function') {
+    return window.I18N.getLang();
+  }
+  return SUPPORTED_LANGS[0];
+}
+
+function updateActiveLangButtons(activeLang) {
   const wrap = document.getElementById('lang-controls');
   if (!wrap) return;
   wrap.querySelectorAll('button[data-lang]').forEach((btn) => {
@@ -67,34 +74,33 @@ function updateHeaderLangButtons(activeLang) {
 
 function setLang(code) {
   const normalized = SUPPORTED_LANGS.includes(code) ? code : SUPPORTED_LANGS[0];
-  try {
-    window.localStorage?.setItem('ck.lang', normalized);
-  } catch (error) {
-    console.warn('Unable to store language preference', error);
-  }
-  updateHeaderLangButtons(normalized);
   if (window.I18N && typeof window.I18N.setLang === 'function') {
     window.I18N.setLang(normalized);
   }
-  return normalized;
+  updateActiveLangButtons(normalized);
+}
+
+function renderLangButtons() {
+  const wrap = document.getElementById('lang-controls');
+  if (!wrap) return;
+
+  wrap.innerHTML = '';
+  const current = getCurrentLang();
+
+  SUPPORTED_LANGS.forEach((code) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip lang';
+    btn.textContent = code.toUpperCase();
+    btn.dataset.lang = code;
+    btn.setAttribute('aria-pressed', String(code === current));
+    if (code === current) btn.classList.add('active');
+    btn.addEventListener('click', () => setLang(code));
+    wrap.appendChild(btn);
+  });
 }
 
 window.setLang = setLang;
-
-function setupAdminNav() {
-  const nav = document.querySelector('.admin-nav');
-  if (!nav) return;
-  nav.querySelectorAll('button[data-target]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const selector = btn.dataset.target;
-      if (!selector) return;
-      const target = document.querySelector(selector);
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
-  });
-}
 
 let _booted = false;
 
@@ -102,31 +108,11 @@ function boot() {
   if (_booted) return;
   _booted = true;
 
-  renderHeader({
-    mountId: 'app-header',
-    langs: SUPPORTED_LANGS,
-    onLangChange: setLang,
-    showInstall: true
-  });
-  const currentLang = (() => {
-    try {
-      const stored = window.localStorage?.getItem('ck.lang');
-      if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
-    } catch (error) {
-      console.warn('Unable to read stored language', error);
-    }
-    return SUPPORTED_LANGS[0];
-  })();
-  updateHeaderLangButtons(currentLang);
-  setupAdminNav();
+  renderLangButtons();
   initAdmin();
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot, { once: true });
-} else {
-  boot();
-}
+document.addEventListener('DOMContentLoaded', boot);
 
 function initAdmin() {
   if (window.__CK_ADMIN_READY__) return;
