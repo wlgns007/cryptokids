@@ -1170,7 +1170,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
       }
 
       const btn = document.createElement('button');
-      btn.textContent = 'Redeem';
+      btn.textContent = I18N.t('redeem');
       btn.style.flex = '0 0 auto';
       btn.addEventListener('click', () => createHold(item));
       actions.appendChild(btn);
