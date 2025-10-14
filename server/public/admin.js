@@ -87,9 +87,7 @@ function setLang(lang) {
   } catch (error) {
     console.warn('Unable to store language preference', error);
   }
-  if (typeof applyAdminTranslations === 'function') {
-    applyAdminTranslations(normalized);
-  }
+  applyAdminTranslations?.(normalized);
   if (window.I18N && typeof window.I18N.setLang === 'function') {
     window.I18N.setLang(normalized);
   }

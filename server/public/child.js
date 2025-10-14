@@ -34,6 +34,7 @@ function setLang(code) {
     console.warn('Unable to store language preference', error);
   }
   syncHeaderLangButtons(normalized);
+  applyTranslations?.(normalized);
   if (window.I18N && typeof window.I18N.setLang === 'function') {
     window.I18N.setLang(normalized);
   }
