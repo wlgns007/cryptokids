@@ -63,8 +63,25 @@ function ensureFamilyColumn(table) {
   db.prepare(`UPDATE ${table} SET family_id = @family WHERE family_id IS NULL`).run({ family: "default" });
 }
 
+function logInvalidFamilies(db) {
+  try {
+    const rows = db
+      .prepare(`
+      SELECT m.family_id, COUNT(*) AS cnt
+      FROM "member" m
+      LEFT JOIN "family" f ON f.id = m.family_id
+      WHERE m.family_id IS NOT NULL AND f.id IS NULL
+      GROUP BY m.family_id
+    `)
+      .all();
+    if (rows.length) {
+      console.warn("[db] Found members with invalid family_id:", rows);
+    }
+  } catch {}
+}
+
 function enforceFamilyNotNull(db) {
-  // Ensure family table + default family exists
+  // 0) Ensure family table + default family exists BEFORE touching member
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${q("family")} (
       id TEXT PRIMARY KEY,
@@ -73,28 +90,29 @@ function enforceFamilyNotNull(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-
-  // One-time default family (id = 'default') if missing
-  const ensureDefaultFamily = db.prepare(`
+  db.prepare(`
     INSERT INTO ${q("family")} (id, name, created_at, updated_at)
     SELECT 'default', 'Default Family', datetime('now'), datetime('now')
     WHERE NOT EXISTS (SELECT 1 FROM ${q("family")} WHERE id = 'default')
-  `);
-  ensureDefaultFamily.run();
+  `).run();
 
-  // Read current member schema to decide if migration needed
+  // 1) Detect if we even need to migrate
   const pragma = db.prepare(`PRAGMA table_info(${q("member")})`).all();
   const hasFamilyId = pragma.some((c) => c.name === "family_id");
   const isFamilyNotNull = pragma.some((c) => c.name === "family_id" && c.notnull === 1);
+  if (hasFamilyId && isFamilyNotNull) return;
 
-  if (hasFamilyId && isFamilyNotNull) {
-    return; // already enforced
-  }
+  // 2) Optional: log invalid family_ids pre-migration (for observability)
+  try {
+    logInvalidFamilies?.(db);
+  } catch {}
 
-  // Build new schema for member (recreate-table pattern)
-  // Adjust the columns to match your current schema; keep all existing cols.
+  // 3) Migration using recreate-table pattern.
+  //    Turn off FK checks during the swap; we’ll end with a valid state.
+  db.exec("PRAGMA foreign_keys = OFF;");
   db.exec("BEGIN");
   try {
+    // New member schema (adjust columns if your project has more)
     db.exec(`
       CREATE TABLE ${q("member__new")} (
         id TEXT PRIMARY KEY,
@@ -109,39 +127,43 @@ function enforceFamilyNotNull(db) {
       );
     `);
 
-    // Copy data, backfilling family_id to 'default' if null/absent
-    const cols = pragma.map((c) => c.name);
-    // Columns present in old table
-    const hasCol = (c) => cols.includes(c);
-
-    const selectCols = [
-      "id",
-      hasCol("name") ? "name" : "NULL AS name",
-      hasCol("date_of_birth") ? "date_of_birth" : "NULL AS date_of_birth",
-      hasCol("sex") ? "sex" : "NULL AS sex",
-      hasCol("status") ? "status" : "'active' AS status",
-      hasCol("family_id") ? "COALESCE(family_id, 'default') AS family_id" : "'default' AS family_id",
-      hasCol("created_at") ? "created_at" : "datetime('now') AS created_at",
-      hasCol("updated_at") ? "updated_at" : "datetime('now') AS updated_at"
-    ].join(", ");
-
+    // Normalize family_id:
+    //  - If old family_id is NULL or blank -> 'default'
+    //  - If old family_id doesn't exist in family -> 'default'
+    //  - Else keep old family_id
     db.exec(`
-      INSERT INTO ${q("member__new")} (id, name, date_of_birth, sex, status, family_id, created_at, updated_at)
-      SELECT ${selectCols}
-      FROM ${q("member")};
+      INSERT INTO ${q("member__new")}
+        (id, name, date_of_birth, sex, status, family_id, created_at, updated_at)
+      SELECT
+        m.id,
+        m.name,
+        m.date_of_birth,
+        m.sex,
+        COALESCE(m.status, 'active') AS status,
+        COALESCE(
+          NULLIF((
+            SELECT f.id FROM ${q("family")} f WHERE f.id = m.family_id
+          ), ''),
+          'default'
+        ) AS family_id,
+        COALESCE(m.created_at, datetime('now')) AS created_at,
+        COALESCE(m.updated_at, datetime('now')) AS updated_at
+      FROM ${q("member")} m;
     `);
 
     // Swap tables
     db.exec(`DROP TABLE ${q("member")};`);
     db.exec(`ALTER TABLE ${q("member__new")} RENAME TO ${q("member")};`);
 
-    // Recreate indexes as needed
-    db.exec(`CREATE INDEX IF NOT EXISTS ${q("idx_member_family")} ON ${q("member")}(family_id);`);
+    // Indexes
+    db.exec(`CREATE INDEX IF NOT EXISTS ${q("idx_member_family")} ON ${q("member")} (family_id);`);
 
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
   }
 }
 

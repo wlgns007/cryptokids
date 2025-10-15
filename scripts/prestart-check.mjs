@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import db from "../server/db.js";
+
+console.log("[prestart] starting DB checks...");
+const { default: db } = await import("../server/db.js");
+console.log("[prestart] DB checks done.");
 
 function sha256(input) {
   return crypto.createHash("sha256").update(String(input)).digest("hex");
