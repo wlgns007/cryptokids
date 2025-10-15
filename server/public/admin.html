@@ -136,58 +136,6 @@
       height: 100%;
     }
 
-    .key-modal-dialog {
-      width: min(90vw, 420px);
-      max-width: 420px;
-      max-height: none;
-      aspect-ratio: auto;
-      background: #fff;
-      color: var(--fg);
-      padding: 24px;
-      display: grid;
-      gap: 16px;
-      border-radius: 12px;
-      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.24);
-    }
-
-    .key-modal-dialog .modal-close {
-      background: transparent;
-      color: var(--muted);
-    }
-
-    .key-modal-body {
-      display: grid;
-      gap: 16px;
-    }
-
-    .key-modal-body h3 {
-      margin: 0;
-    }
-
-    .key-modal-body p {
-      margin: 0;
-      color: var(--muted);
-    }
-
-    .key-modal-value {
-      font-family: "JetBrains Mono", "Fira Mono", monospace;
-      font-size: 16px;
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      background: rgba(37, 99, 235, 0.08);
-      letter-spacing: 0.04em;
-      text-align: center;
-      color: var(--fg);
-    }
-
-    .key-modal-actions {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      flex-wrap: wrap;
-    }
-
     header.page-header {
       display: flex;
       flex-direction: column;
@@ -215,6 +163,65 @@
       margin-left: auto;
       flex-wrap: wrap;
       align-items: center;
+    }
+
+    .modal-box {
+      background: #fff;
+      color: var(--fg);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+      width: min(420px, 92vw);
+      display: grid;
+      gap: 12px;
+      position: relative;
+    }
+
+    .modal-box h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .modal-box label {
+      font-weight: 600;
+      font-size: 14px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .modal-box input {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+
+    .modal-box .flex {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .modal-box .mt-3 {
+      margin-top: 12px;
+    }
+
+    .modal-box .text-sm {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .flex {
+      display: flex;
+    }
+
+    .gap-2 {
+      gap: 8px;
+    }
+
+    .mt-3 {
+      margin-top: 12px;
     }
 
     .admin-whoami {
@@ -282,6 +289,57 @@
       box-shadow: 0 10px 24px rgba(124, 77, 255, 0.32);
       cursor: pointer;
       transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .btn-secondary {
+      background: #fff;
+      color: var(--fg);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 120ms ease, color 120ms ease, border 120ms ease;
+    }
+
+    .btn-secondary:hover,
+    .btn-secondary:focus-visible {
+      background: #eef2ff;
+      border-color: #c7d2fe;
+      outline: none;
+    }
+
+    .btn-link {
+      background: transparent;
+      color: var(--accent);
+      border: 0;
+      padding: 6px 8px;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .btn-link:hover,
+    .btn-link:focus-visible {
+      color: #1d4ed8;
+      outline: none;
+    }
+
+    .btn {
+      background: #f3f4f6;
+      color: var(--fg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .btn:hover,
+    .btn:focus-visible {
+      background: #e5e7eb;
+      outline: none;
     }
 
     .btn-primary:hover,
@@ -980,6 +1038,51 @@
             <input id="adminKey" type="text" placeholder="enter admin key">
           </label>
           <button id="saveAdminKey">Save</button>
+          <div class="flex gap-2" style="margin-top: 8px;">
+            <button id="btn-new-family" class="btn-secondary">New family?</button>
+            <button id="btn-forgot-key" class="btn-link">Forgot admin key?</button>
+          </div>
+
+          <!-- Modal: New Family -->
+          <div id="modal-new-family" class="modal hidden">
+            <div class="modal-backdrop" data-close></div>
+            <div class="modal-box">
+              <h3>Register New Family</h3>
+              <label>Family name
+                <input id="nf-family" />
+              </label>
+              <label>Your name
+                <input id="nf-admin-name" />
+              </label>
+              <label>Email
+                <input id="nf-email" type="email" />
+              </label>
+              <label>Admin key (choose)
+                <input id="nf-admin-key" />
+              </label>
+              <div class="flex gap-2 mt-3">
+                <button id="nf-create" class="btn-primary">Create</button>
+                <button data-close="#modal-new-family" class="btn">Cancel</button>
+              </div>
+              <p id="nf-msg" class="text-sm mt-2"></p>
+            </div>
+          </div>
+
+          <!-- Modal: Forgot Key -->
+          <div id="modal-forgot-key" class="modal hidden">
+            <div class="modal-backdrop" data-close></div>
+            <div class="modal-box">
+              <h3>Recover Admin Key</h3>
+              <label>Email
+                <input id="fk-email" type="email" />
+              </label>
+              <div class="flex gap-2 mt-3">
+                <button id="fk-send" class="btn-primary">Send</button>
+                <button data-close="#modal-forgot-key" class="btn">Cancel</button>
+              </div>
+              <p id="fk-msg" class="text-sm mt-2"></p>
+            </div>
+          </div>
         </div>
         <div class="admin-whoami" id="adminWhoami" hidden>
           <div class="admin-whoami-role" id="adminRoleLabel">&nbsp;</div>
@@ -1025,7 +1128,6 @@
       <button type="button" class="pill" data-target="#secRewards">Rewards Menu</button>
       <button type="button" class="pill" data-target="#secRegisterReward">Register New Reward</button>
       <button type="button" class="pill" data-target="#secEarnMenu">Edit Earn Points Menu</button>
-      <button type="button" class="pill" data-target="#secAdminKeys" data-admin-role="master">Admin Keys</button>
       <button type="button" class="pill" data-target="#secFamilyManagement" data-admin-role="master">Family Management</button>
       <button type="button" class="pill" data-target="#activitySection">Activity</button>
     </nav>
@@ -1044,15 +1146,16 @@
               <table class="family-table">
                 <thead>
                   <tr>
-                    <th scope="col">Family ID</th>
-                    <th scope="col">Name</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" class="actions">Actions</th>
+                  <th scope="col">Family ID</th>
+                  <th scope="col">Name</th>
+                  <th scope="col">Email</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" class="actions">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="familyListTableBody">
                   <tr id="familyListEmpty">
-                    <td colspan="4" class="muted">No families yet.</td>
+                  <td colspan="5" class="muted">No families yet.</td>
                   </tr>
                 </tbody>
               </table>
@@ -1427,45 +1530,6 @@
           </div>
         </div>
       </section>
-      <section class="card" id="secAdminKeys" data-admin-role="master" hidden>
-        <div class="stack">
-          <div class="flex-between" style="gap:12px; align-items:center; flex-wrap:wrap;">
-            <h2>Admin Keys</h2>
-            <div class="row compact" style="gap:8px; justify-content:flex-end;">
-              <button id="btnAdminKeysRefresh" type="button">Refresh</button>
-            </div>
-          </div>
-          <p class="muted">
-            Manage admin keys for the selected family scope. Keys let other adults sign in to this admin panel.
-          </p>
-          <div class="row compact" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
-            <label style="flex:1 1 220px;">
-              <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em;">Label (optional)</span>
-              <input id="adminKeyLabel" type="text" placeholder="e.g., Grandma">
-            </label>
-            <button id="btnAdminKeyCreate" class="primary" type="button">Create Admin Key</button>
-          </div>
-          <small class="muted" id="adminKeysStatus"></small>
-          <div style="overflow:auto;">
-            <table class="table" id="adminKeysTable">
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="adminKeysTableBody">
-                <tr>
-                  <td colspan="4" class="muted">Select a family to view admin keys.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
       <section class="card" id="activitySection">
         <div class="collapsible" id="activityPanel">
           <button type="button" class="card-toggle" id="toggleActivity" aria-controls="activityFields" aria-expanded="false">
@@ -1677,22 +1741,6 @@
         </div>
       </form>
       <small class="muted">Returns tokens to the child. No money changes hands.</small>
-    </div>
-  </div>
-
-  <div id="adminKeyPlainModal" class="modal hidden">
-    <div class="modal-backdrop" data-close></div>
-    <div class="modal-dialog key-modal-dialog">
-      <button class="modal-close" type="button" aria-label="Close" id="btnAdminKeyPlainClose" data-close>×</button>
-      <div class="key-modal-body">
-        <h3>New Admin Key</h3>
-        <p>Copy this key now. For security it will not be shown again.</p>
-        <input id="adminKeyPlainValue" class="key-modal-value" type="text" readonly>
-        <div class="key-modal-actions">
-          <button type="button" id="btnAdminKeyPlainCopy" class="primary">Copy Key</button>
-          <button type="button" id="btnAdminKeyPlainDismiss">Close</button>
-        </div>
-      </div>
     </div>
   </div>
 

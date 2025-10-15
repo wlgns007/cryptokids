@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import db, { DATA_DIR, resolveAdminContext } from "./db.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
+import { router as coreRoutes } from "./routes.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
 import { readAdminKey } from "./auth.js";
@@ -194,20 +195,17 @@ const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
   : null;
 
 const insertFamilyStmt = db.prepare(
-  `INSERT INTO family (id, name, status, admin_key, created_at, updated_at)
-   VALUES (@id, @name, @status, @admin_key, @now, @now)`
+  `INSERT INTO family (id, name, email, status, admin_key, created_at, updated_at)
+   VALUES (@id, @name, @email, @status, @admin_key, @created_at, @updated_at)`
 );
 const selectFamilyByIdStmt = db.prepare(
-  "SELECT id, name, status, admin_key FROM family WHERE id = ? LIMIT 1"
-);
-const listFamiliesStmt = db.prepare(
-  "SELECT id, name, status, admin_key, created_at, updated_at FROM family ORDER BY created_at DESC, id DESC"
+  "SELECT id, name, email, status, admin_key, created_at, updated_at FROM family WHERE id = ? LIMIT 1"
 );
 const updateFamilyStmt = db.prepare(
-  `UPDATE family SET name = @name, status = @status, updated_at = @now WHERE id = @id`
+  `UPDATE family SET name = @name, status = @status, updated_at = @updated_at WHERE id = @id`
 );
 const updateFamilyAdminKeyStmt = db.prepare(
-  `UPDATE family SET admin_key = @admin_key, updated_at = @now WHERE id = @id`
+  `UPDATE family SET admin_key = @admin_key, updated_at = @updated_at WHERE id = @id`
 );
 
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
@@ -277,20 +275,7 @@ const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
-
-app.get("/api/whoami", authenticateAdmin, (req, res) => {
-  const role = req.auth?.role ?? null;
-  const familyId = req.auth?.familyId ?? req.auth?.family_id ?? null;
-  if (role === "master") {
-    res.json({ role: "master", familyId: null, family_id: null });
-    return;
-  }
-  if (role === "family") {
-    res.json({ role: "family", familyId, family_id: familyId });
-    return;
-  }
-  res.json({ role, familyId, family_id: familyId });
-});
+app.use(coreRoutes);
 
 app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
@@ -300,29 +285,43 @@ app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
     return;
   }
 
+  const rawEmail = body.email === undefined || body.email === null ? "" : String(body.email);
+  const email = rawEmail.trim().toLowerCase();
+  if (email && !/\S+@\S+\.\S+/.test(email)) {
+    res.status(400).json({ error: "invalid email" });
+    return;
+  }
+
   const providedKey = body.adminKey === undefined || body.adminKey === null ? "" : String(body.adminKey);
   const trimmedKey = providedKey.trim();
   const adminKey = trimmedKey || makeKey();
   const id = crypto.randomUUID();
-  const now = Date.now();
+  const timestamp = new Date().toISOString();
 
   try {
-    insertFamilyStmt.run({ id, name, status: "active", admin_key: adminKey, now });
+    insertFamilyStmt.run({
+      id,
+      name,
+      email: email || null,
+      status: "active",
+      admin_key: adminKey,
+      created_at: timestamp,
+      updated_at: timestamp
+    });
   } catch (err) {
     const message = String(err?.message || "");
     if (message.includes("UNIQUE") && message.includes("admin_key")) {
       res.status(409).json({ error: "adminKey already in use" });
       return;
     }
+    if (message.includes("UNIQUE") && message.includes("email")) {
+      res.status(409).json({ error: "email already registered" });
+      return;
+    }
     throw err;
   }
 
-  res.status(201).json({ id, name, adminKey });
-});
-
-app.get("/api/families", authenticateAdmin, requireMaster, (_req, res) => {
-  const families = listFamiliesStmt.all().map(({ admin_key, ...rest }) => rest);
-  res.json(families);
+  res.status(201).json({ id, name, email: email || null, adminKey });
 });
 
 app.post("/api/families/:id/rotate-key", authenticateAdmin, requireMaster, (req, res) => {
@@ -339,8 +338,8 @@ app.post("/api/families/:id/rotate-key", authenticateAdmin, requireMaster, (req,
   }
 
   const adminKey = makeKey();
-  const now = Date.now();
-  updateFamilyAdminKeyStmt.run({ id, admin_key: adminKey, now });
+  const updated_at = new Date().toISOString();
+  updateFamilyAdminKeyStmt.run({ id, admin_key: adminKey, updated_at });
   res.json({ id, adminKey });
 });
 
@@ -379,8 +378,8 @@ app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
     }
     status = normalizedStatus;
   }
-  const now = Date.now();
-  updateFamilyStmt.run({ id, name, status, now });
+  const updated_at = new Date().toISOString();
+  updateFamilyStmt.run({ id, name, status, updated_at });
   const updated = selectFamilyByIdStmt.get(id);
   if (updated) {
     const { admin_key, ...rest } = updated;
