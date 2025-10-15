@@ -150,6 +150,19 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
 
+  function readConfiguredFamilyId() {
+    if (typeof document === 'undefined') return null;
+    const bodyFamily = document.body?.dataset?.familyId;
+    if (bodyFamily && bodyFamily.trim()) {
+      return bodyFamily.trim();
+    }
+    const meta = document.querySelector('meta[name="ck:family-id"], meta[name="ck:family_id"]');
+    if (meta && meta.content && meta.content.trim()) {
+      return meta.content.trim();
+    }
+    return null;
+  }
+
   function readStoredAdminContext() {
     try {
       const raw = window.localStorage?.getItem(ADMIN_CONTEXT_STORAGE);
@@ -171,6 +184,10 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
       }
     } catch (error) {
       console.warn('family query parse failed', error);
+    }
+    const configured = readConfiguredFamilyId();
+    if (configured) {
+      return configured;
     }
     const globalFamily = typeof window !== 'undefined' ? window.currentFamilyId : null;
     if (typeof globalFamily === 'string' && globalFamily.trim()) {

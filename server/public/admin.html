@@ -978,17 +978,30 @@
         <div class="admin-whoami" id="adminWhoami" hidden>
           <div class="admin-whoami-role" id="adminRoleLabel">&nbsp;</div>
           <div class="admin-whoami-scope">
-            <label id="familyScopeWrapper" class="admin-whoami-scope-picker" hidden>
-              <span>Family scope</span>
-              <select id="familyScopeSelect">
-                <option value="">Select a family</option>
-              </select>
-            </label>
             <div id="familyScopeSummary" class="admin-whoami-summary" hidden></div>
           </div>
         </div>
       </div>
     </header>
+
+    <section id="masterToolbar" class="master-toolbar" data-admin-role="master" hidden>
+      <div class="master-toolbar-row">
+        <label id="familyScopeWrapper" class="admin-whoami-scope-picker master-toolbar-scope" hidden>
+          <span>Family scope</span>
+          <select id="familyScopeSelect">
+            <option value="">Select a family</option>
+          </select>
+        </label>
+        <div class="master-toolbar-actions">
+          <button type="button" id="btnFamilyManagement">Family Management</button>
+          <form id="familySearchForm" class="master-toolbar-search" autocomplete="off">
+            <label class="sr-only" for="familySearchInput">Search by Family ID</label>
+            <input id="familySearchInput" name="familyId" type="text" placeholder="Family ID">
+            <button type="submit">Go</button>
+          </form>
+        </div>
+      </div>
+    </section>
 
     <nav class="admin-nav" aria-label="Admin sections">
       <button type="button" class="pill" data-target="#secMember">Member Management</button>
@@ -1000,10 +1013,71 @@
       <button type="button" class="pill" data-target="#secRegisterReward">Register New Reward</button>
       <button type="button" class="pill" data-target="#secEarnMenu">Edit Earn Points Menu</button>
       <button type="button" class="pill" data-target="#secAdminKeys" data-admin-role="master">Admin Keys</button>
+      <button type="button" class="pill" data-target="#secFamilyManagement" data-admin-role="master">Family Management</button>
       <button type="button" class="pill" data-target="#activitySection">Activity</button>
     </nav>
 
     <main>
+      <section class="card" id="secFamilyManagement" data-admin-role="master" hidden>
+        <div class="flex-between section-header">
+          <h2>Family Management</h2>
+          <button type="button" id="btnFamiliesRefresh">Refresh</button>
+        </div>
+        <p class="muted">Create or update families and control their status.</p>
+        <div id="familyManagementPanel" class="stack family-management">
+          <div class="family-management-list">
+            <h3>Existing families</h3>
+            <div class="table-responsive">
+              <table class="family-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Family ID</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Status</th>
+                    <th scope="col" class="actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="familyListTableBody">
+                  <tr id="familyListEmpty">
+                    <td colspan="4" class="muted">No families yet.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="family-create">
+            <h3>Create new family</h3>
+            <form id="familyCreateForm" class="family-create-form">
+              <div class="family-form-grid">
+                <label>
+                  <span>Family name</span>
+                  <input id="familyCreateName" type="text" placeholder="e.g., Smith Family" autocomplete="organization" required>
+                </label>
+                <label>
+                  <span>Primary guardian first name</span>
+                  <input id="familyCreateFirstName" type="text" autocomplete="given-name" required>
+                </label>
+                <label>
+                  <span>Primary guardian last name</span>
+                  <input id="familyCreateLastName" type="text" autocomplete="family-name" required>
+                </label>
+                <label>
+                  <span>Primary phone</span>
+                  <input id="familyCreatePhone" type="tel" inputmode="tel" placeholder="(555) 123-4567" required>
+                </label>
+              </div>
+              <div class="family-id-preview-row">
+                <span class="label">Generated Family ID</span>
+                <output id="familyCreateIdPreview" for="familyCreateFirstName familyCreateLastName familyCreatePhone">—</output>
+              </div>
+              <p class="muted small">ID is based on last name, first initial, and phone digits. Collisions add a -a1 suffix.</p>
+              <div class="actions">
+                <button type="submit" id="btnCreateFamily" class="primary">Create family</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
       <section class="card" id="secMember">
         <div class="flex-between">
           <h2 data-i18n="nav_member">Member Management</h2>
