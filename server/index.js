@@ -24,7 +24,7 @@ const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 
 const selectAdminKeyStmt = db.prepare(
-  "SELECT id, role, family_id, label, status FROM admin_key WHERE key_hash = ? AND status = 'active' LIMIT 1"
+  "SELECT role, family_id FROM admin_key WHERE key_hash = ? AND status = 'active' LIMIT 1"
 );
 
 function sha256(value) {
@@ -38,7 +38,16 @@ function getAdminFromKey(plainKey) {
   }
   const hash = sha256(normalized);
   const row = selectAdminKeyStmt.get(hash);
-  return row || null;
+  if (!row) {
+    return null;
+  }
+  if (row.role === "family_admin") {
+    return { role: "family_admin", family_id: row.family_id ?? null };
+  }
+  if (row.role === "master") {
+    return { role: "master", family_id: null };
+  }
+  return null;
 }
 
 function authenticateAdmin(req, res, next) {
@@ -53,7 +62,6 @@ function authenticateAdmin(req, res, next) {
     return;
   }
   req.auth = {
-    admin_id: admin.id,
     family_id: admin.family_id ?? null,
     role: admin.role
   };
@@ -173,6 +181,38 @@ if (!REWARD_HAS_FAMILY_COLUMN) {
 if (REWARD_HAS_FAMILY_COLUMN) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
 }
+
+const REWARD_HAS_IMAGE_URL_COLUMN = tableHasColumn("reward", "image_url");
+const REWARD_HAS_YOUTUBE_URL_COLUMN = tableHasColumn("reward", "youtube_url");
+const REWARD_HAS_STATUS_COLUMN = tableHasColumn("reward", "status");
+
+const listPublicTasksStmt = EARN_TEMPLATES_HAS_FAMILY_COLUMN
+  ? db.prepare(
+      `SELECT id, title, points, description, youtube_url, sort_order
+       FROM earn_templates
+       WHERE family_id = @family_id AND active = 1
+       ORDER BY sort_order ASC, id ASC`
+    )
+  : null;
+
+const rewardPublicColumns = [
+  "id",
+  "name",
+  "description",
+  "cost",
+  REWARD_HAS_IMAGE_URL_COLUMN ? "image_url" : "NULL AS image_url",
+  REWARD_HAS_YOUTUBE_URL_COLUMN ? "youtube_url" : "NULL AS youtube_url",
+  REWARD_HAS_STATUS_COLUMN ? "status" : "'active' AS status"
+];
+
+const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
+  ? db.prepare(
+      `SELECT ${rewardPublicColumns.join(", ")}
+       FROM reward
+       WHERE family_id = @family_id AND (${REWARD_HAS_STATUS_COLUMN ? "status" : "'active'"} = 'active')
+       ORDER BY created_at DESC, id DESC`
+    )
+  : null;
 
 const insertFamilyStmt = db.prepare(
   `INSERT INTO family (id, name, status, created_at, updated_at)
@@ -1835,6 +1875,19 @@ function mapRewardRow(row) {
   };
 }
 
+function mapPublicReward(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name || "",
+    cost: Number(row.cost ?? 0) || 0,
+    description: row.description || "",
+    image_url: row.image_url || "",
+    youtube_url: row.youtube_url || "",
+    status: (row.status || "active").toString().trim().toLowerCase() || "active"
+  };
+}
+
 
 const telemetry = {
   startedAt: Date.now(),
@@ -2925,6 +2978,18 @@ function mapEarnTemplate(row) {
   };
 }
 
+function mapPublicTask(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title || "",
+    points: Number(row.points ?? 0) || 0,
+    description: row.description || "",
+    youtube_url: row.youtube_url || "",
+    sort_order: Number(row.sort_order ?? 0) || 0
+  };
+}
+
 app.get("/version", (_req, res) => {
   res.json({ build: BUILD });
 });
@@ -2975,7 +3040,7 @@ app.get("/summary/:userId", (req, res) => {
   });
 });
 
-app.get("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/api/admin/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const search = (req.query?.search || "").toString().trim().toLowerCase();
 
   if (!MULTITENANT_ENFORCE) {
@@ -3006,7 +3071,7 @@ app.get("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   }
 });
 
-app.post("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/api/admin/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const body = req.body || {};
   const userId = normId(body.userId);
   const name = (body.name || "").toString().trim();
@@ -3066,15 +3131,35 @@ app.post("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   res.status(201).json({ ok: true, member: getMember(userId) });
 });
 
-app.get("/api/members/:userId", requireAdminKey, (req, res) => {
+app.get("/api/admin/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
-  if (!userId) return res.status(400).json({ error: "userId required" });
-  const member = getMember(userId);
-  if (!member) return res.status(404).json({ error: "NOT_FOUND" });
-  res.json(member);
+  if (!userId) {
+    return res.status(400).json({ error: "userId required" });
+  }
+  const existingRow = selectMemberWithFamilyStmt.get(userId);
+  if (!existingRow) {
+    return res.status(404).json({ error: "NOT_FOUND" });
+  }
+
+  if (MEMBER_HAS_FAMILY_COLUMN) {
+    const scopedFamilyId = req.scope?.family_id ?? null;
+    const existingFamilyId = existingRow.family_id ?? null;
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      if (existingFamilyId && scopedFamilyId !== existingFamilyId) {
+        return res.status(404).json({ error: "NOT_FOUND" });
+      }
+    } else if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+  }
+
+  res.json(mapMember(existingRow));
 });
 
-app.patch("/api/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.patch("/api/admin/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
   const existingRow = selectMemberWithFamilyStmt.get(userId);
@@ -3148,7 +3233,7 @@ app.patch("/api/members/:userId", authenticateAdmin, resolveFamilyScope, (req, r
   res.json({ ok: true, member: getMember(userId) });
 });
 
-app.delete("/api/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.delete("/api/admin/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
 
@@ -3567,7 +3652,7 @@ app.post("/ck/adjust", authenticateAdmin, resolveFamilyScope, express.json(), (r
   }
 });
 
-app.get("/api/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const filters = [];
   const params = [];
   const query = req.query || {};
@@ -3618,7 +3703,7 @@ app.get("/api/features", (_req, res) => {
   res.json({ ...FEATURE_FLAGS });
 });
 
-app.post("/api/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
   try {
     const body = req.body || {};
     const name = (body.name || "").toString().trim();
@@ -3706,7 +3791,7 @@ app.post("/api/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
   }
 });
 
-app.patch("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const body = req.body || {};
@@ -3801,7 +3886,7 @@ app.patch("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) 
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
-app.delete("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.delete("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   try {
@@ -3831,6 +3916,72 @@ app.delete("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res)
     const code = err?.code === "SQLITE_CONSTRAINT_FOREIGNKEY" ? 409 : 500;
     const error = code === 409 ? "reward_in_use" : "delete_reward_failed";
     res.status(code).json({ error });
+  }
+});
+
+app.get("/api/public/rewards", (req, res) => {
+  if (!REWARD_HAS_FAMILY_COLUMN || !listPublicRewardsStmt) {
+    res.status(500).json({ error: "reward_missing_family_scope" });
+    return;
+  }
+  const familyId = (req.query?.family_id ?? "").toString().trim();
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  try {
+    const rows = listPublicRewardsStmt.all({ family_id: familyId }).map(mapPublicReward);
+    res.json(rows);
+  } catch (err) {
+    console.error("public rewards query failed", err);
+    res.status(500).json({ error: "FAILED" });
+  }
+});
+
+app.get("/api/public/tasks", (req, res) => {
+  if (!EARN_TEMPLATES_HAS_FAMILY_COLUMN || !listPublicTasksStmt) {
+    res.status(500).json({ error: "tasks_missing_family_scope" });
+    return;
+  }
+  const familyId = (req.query?.family_id ?? "").toString().trim();
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  try {
+    const rows = listPublicTasksStmt.all({ family_id: familyId }).map(mapPublicTask);
+    res.json(rows);
+  } catch (err) {
+    console.error("public tasks query failed", err);
+    res.status(500).json({ error: "FAILED" });
+  }
+});
+
+app.get("/api/public/members/:memberId", (req, res) => {
+  if (!MEMBER_HAS_FAMILY_COLUMN) {
+    res.status(500).json({ error: "member_missing_family_scope" });
+    return;
+  }
+  const familyId = (req.query?.family_id ?? "").toString().trim();
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  const userId = normId(req.params.memberId);
+  if (!userId) {
+    res.status(400).json({ error: "userId required" });
+    return;
+  }
+  try {
+    const row = selectMemberWithFamilyStmt.get(userId);
+    if (!row || (row.family_id ?? null) !== familyId) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    res.json({ userId: row.id, name: row.name || "", status: row.status || "active" });
+  } catch (err) {
+    console.error("public member lookup failed", err);
+    res.status(500).json({ error: "FAILED" });
   }
 });
 

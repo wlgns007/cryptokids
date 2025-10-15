@@ -200,6 +200,20 @@ function initAdmin() {
   const familyScopeWrapper = $k('familyScopeWrapper');
   const familyScopeSelect = $k('familyScopeSelect');
   const familyScopeSummary = $k('familyScopeSummary');
+  const adminKeysSection = $k('secAdminKeys');
+  const adminKeysTableBody = $k('adminKeysTableBody');
+  const adminKeysStatus = $k('adminKeysStatus');
+  const adminKeyLabelInput = $k('adminKeyLabel');
+  const adminKeyCreateButton = $k('btnAdminKeyCreate');
+  const adminKeysRefreshButton = $k('btnAdminKeysRefresh');
+  const adminKeyPlainModal = $k('adminKeyPlainModal');
+  const adminKeyPlainValue = $k('adminKeyPlainValue');
+  const adminKeyPlainCopyButton = $k('btnAdminKeyPlainCopy');
+  const adminKeyPlainCloseButton = $k('btnAdminKeyPlainClose');
+  const adminKeyPlainDismissButton = $k('btnAdminKeyPlainDismiss');
+  const roleVisibilityNodes = Array.from(document.querySelectorAll('[data-admin-role]'));
+  const ADMIN_KEYS_COLSPAN = 4;
+  let adminKeysCache = [];
 
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
@@ -270,6 +284,59 @@ function initAdmin() {
     }
   }
 
+  function renderAdminKeysPlaceholder(text) {
+    if (!adminKeysTableBody) return;
+    adminKeysTableBody.innerHTML = '';
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = ADMIN_KEYS_COLSPAN;
+    cell.className = 'muted';
+    cell.textContent = text;
+    row.appendChild(cell);
+    adminKeysTableBody.appendChild(row);
+  }
+
+  function resetAdminKeysTable(message = 'Select a family to view admin keys.') {
+    renderAdminKeysPlaceholder(message);
+    adminKeysCache = [];
+  }
+
+  function applyRoleVisibility() {
+    const activeRole = adminState.role || '';
+    const hasScope = Boolean(adminState.currentFamilyId);
+    if (adminKeyLabelInput) adminKeyLabelInput.disabled = activeRole !== 'master';
+    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = activeRole !== 'master' || !hasScope;
+    if (adminKeyCreateButton) adminKeyCreateButton.disabled = activeRole !== 'master' || !hasScope;
+    for (const node of roleVisibilityNodes) {
+      if (!node) continue;
+      const roles = (node.dataset.adminRole || '')
+        .split(',')
+        .map((role) => role.trim())
+        .filter(Boolean);
+      const show = roles.length === 0 || roles.includes(activeRole);
+      node.hidden = !show;
+    }
+
+    if (!activeRole) {
+      resetAdminKeysTable('Provide an admin key to manage admin access.');
+      if (adminKeysStatus) adminKeysStatus.textContent = '';
+      return;
+    }
+
+    if (activeRole !== 'master') {
+      resetAdminKeysTable('Master admin role required.');
+      if (adminKeysStatus) adminKeysStatus.textContent = '';
+      return;
+    }
+
+    if (!adminState.currentFamilyId) {
+      resetAdminKeysTable('Select a family to view admin keys.');
+      if (adminKeysStatus) adminKeysStatus.textContent = 'Choose a family to manage admin keys.';
+    }
+  }
+
+  applyRoleVisibility();
+
   function clearAdminContext() {
     adminState.role = null;
     adminState.familyId = null;
@@ -278,6 +345,10 @@ function initAdmin() {
     window.currentFamilyId = null;
     saveAdminContext(null);
     updateWhoamiBanner();
+    applyRoleVisibility();
+    resetAdminKeysTable('Provide an admin key to manage admin access.');
+    if (adminKeysStatus) adminKeysStatus.textContent = '';
+    if (adminKeyLabelInput) adminKeyLabelInput.value = '';
   }
 
   function setAdminState(partial = {}, { persist = true } = {}) {
@@ -304,6 +375,7 @@ function initAdmin() {
       });
     }
     updateWhoamiBanner();
+    applyRoleVisibility();
   }
 
   function findFamilyLabel(familyId) {
@@ -785,8 +857,33 @@ details.member-fold .summary-value {
     return { res, body };
   }
 
+  async function fetchFamilyDetail(familyId) {
+    if (!familyId) return null;
+    try {
+      const params = new URLSearchParams({ id: familyId }).toString();
+      const { res, body } = await adminFetch(`/api/families?${params}`, { skipScope: true });
+      if (!res.ok) return null;
+      if (Array.isArray(body)) {
+        return body.find((entry) => entry && entry.id === familyId) || null;
+      }
+      if (body && typeof body === 'object' && body.id === familyId) {
+        return body;
+      }
+    } catch (error) {
+      console.warn('fetchFamilyDetail failed', error);
+    }
+    return null;
+  }
+
   async function reloadScopedData() {
-    const loaders = [loadMembersList, loadRewards, loadTemplates, loadHolds, loadActivity];
+    const loaders = [
+      loadMembersList,
+      loadRewards,
+      loadTemplates,
+      loadHolds,
+      loadActivity,
+      loadAdminKeys
+    ];
     for (const loader of loaders) {
       if (typeof loader !== 'function') continue;
       try {
@@ -830,6 +927,17 @@ details.member-fold .summary-value {
         }
       } else if (nextState.role === 'family_admin') {
         nextState.currentFamilyId = nextState.family_id || null;
+        if (nextState.family_id) {
+          const detail = await fetchFamilyDetail(nextState.family_id);
+          if (detail) {
+            nextState.families = [detail];
+          } else if (Array.isArray(adminState.families)) {
+            const existing = adminState.families.find((entry) => entry && entry.id === nextState.family_id);
+            if (existing) {
+              nextState.families = [existing];
+            }
+          }
+        }
       } else {
         nextState.currentFamilyId = null;
       }
@@ -1489,7 +1597,7 @@ details.member-fold .summary-value {
     setMemberInfoMessage('Loading member info...');
     clearMemberLedger();
     try {
-      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`);
+      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(userId)}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         setMemberInfoMessage('Admin key invalid.');
@@ -1555,7 +1663,7 @@ details.member-fold .summary-value {
     }
     setMemberStatus('Registering member...');
     try {
-      const { res, body } = await adminFetch('/api/members', {
+      const { res, body } = await adminFetch('/api/admin/members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, name, dob: dob || undefined, sex: sex || undefined })
@@ -1651,7 +1759,7 @@ details.member-fold .summary-value {
     }
     try {
       const payload = { name, dob: dob || undefined, sex: sex || undefined };
-      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(userId)}`, {
+      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(userId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1691,7 +1799,7 @@ details.member-fold .summary-value {
     if (!member) return;
     if (!confirm(`Delete member "${member.userId}"? This cannot be undone.`)) return;
     try {
-      const { res, body } = await adminFetch(`/api/members/${encodeURIComponent(member.userId)}`, {
+      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(member.userId)}`, {
         method: 'DELETE'
       });
       if (res.status === 401) {
@@ -1732,7 +1840,7 @@ details.member-fold .summary-value {
     if (memberListStatus) memberListStatus.textContent = '';
     try {
       const qs = search ? `?search=${encodeURIComponent(search)}` : '';
-      const { res, body } = await adminFetch(`/api/members${qs}`);
+      const { res, body } = await adminFetch(`/api/admin/members${qs}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Admin key invalid.</td></tr>';
@@ -2438,7 +2546,7 @@ setupScanner({
         params.set('status', 'disabled');
       }
       const qs = params.toString() ? `?${params.toString()}` : '';
-      const { res, body } = await adminFetch(`/api/rewards${qs}`);
+      const { res, body } = await adminFetch(`/api/admin/rewards${qs}`);
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
         list.innerHTML = '<div class="muted">Admin key invalid.</div>';
@@ -2643,7 +2751,7 @@ setupScanner({
 
   async function updateReward(id, body) {
     try {
-      const { res, body: respBody } = await adminFetch(`/api/rewards/${id}`, {
+      const { res, body: respBody } = await adminFetch(`/api/admin/rewards/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -2663,7 +2771,7 @@ setupScanner({
   async function deleteReward(id) {
     if (!confirm('Delete this reward permanently?')) return;
     try {
-      const { res, body } = await adminFetch(`/api/rewards/${id}`, { method: 'DELETE' });
+      const { res, body } = await adminFetch(`/api/admin/rewards/${id}`, { method: 'DELETE' });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         return;
@@ -2699,7 +2807,7 @@ setupScanner({
     const description = descEl?.value?.trim() || '';
     if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
-    const { res, body } = await adminFetch('/api/rewards', {
+    const { res, body } = await adminFetch('/api/admin/rewards', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ name, cost, imageUrl, youtubeUrl, description }),
@@ -2767,6 +2875,280 @@ setupScanner({
       reader.readAsDataURL(file);
     });
   }
+
+  function showAdminKeyPlain(plainKey) {
+    if (!adminKeyPlainModal || !adminKeyPlainValue) return;
+    adminKeyPlainValue.value = plainKey || '';
+    adminKeyPlainModal.classList.remove('hidden');
+    window.setTimeout(() => {
+      try {
+        adminKeyPlainValue.focus();
+        adminKeyPlainValue.select();
+        adminKeyPlainValue.setSelectionRange(0, adminKeyPlainValue.value.length);
+      } catch {}
+    }, 0);
+  }
+
+  function hideAdminKeyPlain() {
+    if (!adminKeyPlainModal) return;
+    adminKeyPlainModal.classList.add('hidden');
+    if (adminKeyPlainValue) adminKeyPlainValue.value = '';
+  }
+
+  function renderAdminKeysTable(keys) {
+    if (!adminKeysTableBody) return;
+    adminKeysCache = Array.isArray(keys) ? keys.slice() : [];
+    if (!adminKeysCache.length) {
+      renderAdminKeysPlaceholder('No admin keys yet. Create one to invite another adult.');
+      return;
+    }
+    adminKeysTableBody.innerHTML = '';
+    for (const key of adminKeysCache) {
+      const tr = document.createElement('tr');
+
+      const labelCell = document.createElement('td');
+      labelCell.textContent = key.label ? String(key.label) : '—';
+      tr.appendChild(labelCell);
+
+      const statusCell = document.createElement('td');
+      const status = (key.status || '').toString().toLowerCase() === 'disabled' ? 'Disabled' : 'Active';
+      statusCell.textContent = status;
+      tr.appendChild(statusCell);
+
+      const createdCell = document.createElement('td');
+      const createdAt = Number(key.created_at ?? key.updated_at ?? 0);
+      createdCell.textContent = createdAt ? formatTime(createdAt) : '—';
+      tr.appendChild(createdCell);
+
+      const actionsCell = document.createElement('td');
+      actionsCell.style.display = 'flex';
+      actionsCell.style.flexWrap = 'wrap';
+      actionsCell.style.gap = '6px';
+      actionsCell.style.alignItems = 'center';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', () => handleRenameAdminKey(key, renameBtn));
+      actionsCell.appendChild(renameBtn);
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.textContent = status === 'Disabled' ? 'Enable' : 'Disable';
+      toggleBtn.addEventListener('click', () => handleToggleAdminKey(key, toggleBtn));
+      actionsCell.appendChild(toggleBtn);
+
+      tr.appendChild(actionsCell);
+      adminKeysTableBody.appendChild(tr);
+    }
+  }
+
+  async function patchAdminKey(keyId, payload, successMessage) {
+    try {
+      const { res, body } = await adminFetch(`/api/admin-keys/${encodeURIComponent(keyId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return false;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Failed to update admin key');
+        throw new Error(message);
+      }
+      if (successMessage) {
+        toast(successMessage);
+      }
+      await loadAdminKeys();
+      return true;
+    } catch (err) {
+      toast(err.message || 'Failed to update admin key', 'error');
+      return false;
+    }
+  }
+
+  async function handleRenameAdminKey(key, button) {
+    if (!key?.id) return;
+    const currentLabel = key.label ? String(key.label) : '';
+    const input = window.prompt('Update admin key label', currentLabel);
+    if (input === null) return;
+    const trimmed = input.trim();
+    const normalizedCurrent = currentLabel.trim();
+    if (trimmed === normalizedCurrent) {
+      toast('Label unchanged.');
+      return;
+    }
+    const payload = { label: trimmed.length ? trimmed : null };
+    button.disabled = true;
+    try {
+      await patchAdminKey(
+        key.id,
+        payload,
+        trimmed.length ? 'Admin key renamed.' : 'Admin key label cleared.'
+      );
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function handleToggleAdminKey(key, button) {
+    if (!key?.id) return;
+    const nextStatus = (key.status || '').toString().toLowerCase() === 'disabled' ? 'active' : 'disabled';
+    button.disabled = true;
+    try {
+      const successMessage = nextStatus === 'disabled' ? 'Admin key disabled.' : 'Admin key enabled.';
+      await patchAdminKey(key.id, { status: nextStatus }, successMessage);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function loadAdminKeys() {
+    if (!adminKeysTableBody) return;
+    if (adminState.role !== 'master') {
+      if (adminKeysStatus) adminKeysStatus.textContent = '';
+      return;
+    }
+
+    const familyId = adminState.currentFamilyId;
+    const hasScope = Boolean(familyId);
+    if (adminKeyCreateButton) adminKeyCreateButton.disabled = !hasScope;
+    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = !hasScope;
+
+    if (!hasScope) {
+      resetAdminKeysTable('Select a family to view admin keys.');
+      if (adminKeysStatus) adminKeysStatus.textContent = 'Choose a family to manage admin keys.';
+      return;
+    }
+
+    renderAdminKeysPlaceholder('Loading…');
+    if (adminKeysStatus) adminKeysStatus.textContent = 'Loading admin keys…';
+
+    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = true;
+    if (adminKeyCreateButton) adminKeyCreateButton.disabled = true;
+
+    try {
+      const params = new URLSearchParams({ family_id: familyId }).toString();
+      const { res, body } = await adminFetch(`/api/admin-keys?${params}`, { skipScope: true });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        renderAdminKeysPlaceholder('Admin key invalid.');
+        if (adminKeysStatus) adminKeysStatus.textContent = 'Admin key invalid.';
+        return;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Failed to load admin keys');
+        throw new Error(message);
+      }
+      const keys = Array.isArray(body) ? body : [];
+      renderAdminKeysTable(keys);
+      if (adminKeysStatus) {
+        adminKeysStatus.textContent = keys.length
+          ? `Showing ${keys.length} admin key${keys.length === 1 ? '' : 's'}.`
+          : 'No admin keys yet.';
+      }
+    } catch (err) {
+      console.warn('loadAdminKeys failed', err);
+      renderAdminKeysPlaceholder('Unable to load admin keys.');
+      if (adminKeysStatus) adminKeysStatus.textContent = err.message || 'Unable to load admin keys.';
+    } finally {
+      if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = false;
+      if (adminKeyCreateButton) adminKeyCreateButton.disabled = false;
+    }
+  }
+
+  adminKeysRefreshButton?.addEventListener('click', () => loadAdminKeys());
+
+  adminKeyCreateButton?.addEventListener('click', async () => {
+    if (adminState.role !== 'master') {
+      toast('Master admin role required.', 'error');
+      return;
+    }
+    const familyId = adminState.currentFamilyId;
+    if (!familyId) {
+      toast('Select a family scope first.', 'error');
+      return;
+    }
+    const label = (adminKeyLabelInput?.value || '').trim();
+    const payload = { family_id: familyId };
+    if (label) payload.label = label;
+
+    adminKeyCreateButton.disabled = true;
+    try {
+      const { res, body } = await adminFetch('/api/admin-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Failed to create admin key');
+        throw new Error(message);
+      }
+      const plainKey = body && typeof body === 'object' ? body.plain_key : null;
+      if (!plainKey) {
+        throw new Error('Server did not return the new admin key');
+      }
+      toast('Admin key created');
+      if (adminKeyLabelInput) adminKeyLabelInput.value = '';
+      showAdminKeyPlain(plainKey);
+      await loadAdminKeys();
+    } catch (err) {
+      toast(err.message || 'Failed to create admin key', 'error');
+    } finally {
+      adminKeyCreateButton.disabled = false;
+    }
+  });
+
+  adminKeyPlainCopyButton?.addEventListener('click', async () => {
+    const value = adminKeyPlainValue?.value || '';
+    if (!value) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        toast('Admin key copied to clipboard');
+        return;
+      }
+      throw new Error('Clipboard unavailable');
+    } catch {
+      try {
+        adminKeyPlainValue?.select?.();
+        adminKeyPlainValue?.setSelectionRange?.(0, value.length);
+        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+        if (ok) {
+          toast('Admin key copied to clipboard');
+          return;
+        }
+      } catch {}
+      toast('Copy failed. Select the key and copy manually.', 'error');
+    }
+  });
+
+  const closeAdminKeyModal = () => hideAdminKeyPlain();
+  adminKeyPlainCloseButton?.addEventListener('click', closeAdminKeyModal);
+  adminKeyPlainDismissButton?.addEventListener('click', closeAdminKeyModal);
+  adminKeyPlainModal?.addEventListener('click', (event) => {
+    if (
+      event.target === adminKeyPlainModal ||
+      event.target?.classList?.contains('modal-backdrop') ||
+      (event.target instanceof HTMLElement && event.target.matches('[data-close]'))
+    ) {
+      event.preventDefault();
+      closeAdminKeyModal();
+    }
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && adminKeyPlainModal && !adminKeyPlainModal.classList.contains('hidden')) {
+      closeAdminKeyModal();
+    }
+  });
 
   // ===== Earn templates =====
   const earnTableBody = $('earnTable')?.querySelector('tbody');

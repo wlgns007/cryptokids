@@ -4,6 +4,8 @@ import { once } from "node:events";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
+import Database from "better-sqlite3";
 
 import { MULTITENANT_ENFORCE } from "../server/config.js";
 
@@ -12,6 +14,9 @@ const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, "..");
 const DATA_DIR = join(REPO_ROOT, "data");
 const SMITH_KEY_FILE = join(DATA_DIR, "smoke-smith-key.txt");
+const DEFAULT_FAMILY_ID = "default";
+const JANG_FAMILY_ID = "JangJ6494";
+const JANG_ADMIN_KEY = "Mamapapa";
 
 const DEFAULT_PORT = process.env.SMOKE_PORT || "4100";
 const BASE_URL = process.env.SMOKE_BASE_URL || `http://127.0.0.1:${DEFAULT_PORT}`;
@@ -141,6 +146,19 @@ async function writeStoredSmithKey(key) {
   await fs.writeFile(SMITH_KEY_FILE, `${key}\n`, "utf8");
 }
 
+async function removeDbArtifacts(dbPath) {
+  if (!dbPath) return;
+  const suffixes = ["", "-shm", "-wal"];
+  for (const suffix of suffixes) {
+    const target = `${dbPath}${suffix}`;
+    try {
+      await fs.rm(target, { force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+}
+
 async function validateAdminKey(baseUrl, adminKey, expectedFamilyId) {
   if (!adminKey) {
     return false;
@@ -189,7 +207,7 @@ async function ensureFamilyAdminKey(baseUrl, masterKey, familyId) {
 }
 
 async function createScopedMember(baseUrl, adminKey, userId, name) {
-  const res = await fetch(new URL("/api/members", baseUrl), {
+  const res = await fetch(new URL("/api/admin/members", baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -206,7 +224,7 @@ async function listMembersForKey(baseUrl, adminKey, actAsFamily) {
   if (actAsFamily) {
     headers["X-Act-As-Family"] = actAsFamily;
   }
-  const res = await fetch(new URL("/api/members", baseUrl), { headers });
+  const res = await fetch(new URL("/api/admin/members", baseUrl), { headers });
   await ensureOk(res, "list members for key");
   return await res.json();
 }
@@ -246,7 +264,7 @@ async function createReward(baseUrl, adminKey, body, actAsFamily) {
   if (actAsFamily) {
     headers["X-Act-As-Family"] = actAsFamily;
   }
-  const res = await fetch(new URL("/api/rewards", baseUrl), {
+  const res = await fetch(new URL("/api/admin/rewards", baseUrl), {
     method: "POST",
     headers,
     body: JSON.stringify(body)
@@ -260,7 +278,7 @@ async function listRewards(baseUrl, adminKey, actAsFamily) {
   if (actAsFamily) {
     headers["X-Act-As-Family"] = actAsFamily;
   }
-  const res = await fetch(new URL("/api/rewards", baseUrl), { headers });
+  const res = await fetch(new URL("/api/admin/rewards", baseUrl), { headers });
   await ensureOk(res, "list rewards");
   return await res.json();
 }
@@ -432,6 +450,230 @@ export async function testC3() {
   );
 }
 
+export async function testF1() {
+  const masterKey = (process.env.MASTER_ADMIN_KEY || "").trim();
+  if (!masterKey) {
+    throw new Error("MASTER_ADMIN_KEY environment variable is required for testF1");
+  }
+
+  const log = (message) => console.log(`[testF1] ${message}`);
+  const dbPath = join(DATA_DIR, `smoke-f1-${Date.now()}.db`);
+
+  await removeDbArtifacts(dbPath);
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const seedDb = new Database(dbPath);
+    try {
+      const now = Date.now();
+      seedDb.exec(`
+        CREATE TABLE IF NOT EXISTS family (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS member (
+          id TEXT PRIMARY KEY,
+          name TEXT,
+          date_of_birth TEXT,
+          sex TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          family_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task (
+          id TEXT PRIMARY KEY,
+          title TEXT,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          family_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS reward (
+          id TEXT PRIMARY KEY,
+          name TEXT,
+          description TEXT,
+          cost INTEGER,
+          status TEXT NOT NULL DEFAULT 'active',
+          family_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ledger (
+          id TEXT PRIMARY KEY,
+          family_id TEXT NOT NULL,
+          member_id TEXT,
+          reward_id TEXT,
+          amount INTEGER NOT NULL,
+          verb TEXT,
+          description TEXT,
+          note TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      seedDb.prepare(
+        `INSERT INTO family (id, name, status, created_at, updated_at)
+         VALUES (@id, @name, 'active', @now, @now)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, status=excluded.status, updated_at=excluded.updated_at`
+      ).run({ id: DEFAULT_FAMILY_ID, name: "Default Family", now });
+      const memberId = crypto.randomUUID();
+      const taskId = crypto.randomUUID();
+      const rewardId = crypto.randomUUID();
+      const ledgerId = crypto.randomUUID();
+      seedDb.prepare(
+        `INSERT INTO member (id, name, status, family_id, created_at, updated_at)
+         VALUES (@id, @name, 'active', @family_id, @now, @now)`
+      ).run({ id: memberId, name: "Seed Kid", family_id: DEFAULT_FAMILY_ID, now });
+      seedDb.prepare(
+        `INSERT INTO task (id, title, description, status, family_id, created_at, updated_at)
+         VALUES (@id, @title, @description, 'active', @family_id, @now, @now)`
+      ).run({
+        id: taskId,
+        title: "Seed Task",
+        description: "Ensure duplication",
+        family_id: DEFAULT_FAMILY_ID,
+        now
+      });
+      seedDb.prepare(
+        `INSERT INTO reward (id, name, description, cost, status, family_id, created_at, updated_at)
+         VALUES (@id, @name, @description, @cost, 'active', @family_id, @now, @now)`
+      ).run({
+        id: rewardId,
+        name: "Seed Reward",
+        description: "Ensure duplication",
+        cost: 5,
+        family_id: DEFAULT_FAMILY_ID,
+        now
+      });
+      seedDb.prepare(
+        `INSERT INTO ledger (id, family_id, member_id, reward_id, amount, verb, description, note, created_at, updated_at)
+         VALUES (@id, @family_id, @member_id, @reward_id, @amount, @verb, @description, @note, @now, @now)`
+      ).run({
+        id: ledgerId,
+        family_id: DEFAULT_FAMILY_ID,
+        member_id: memberId,
+        reward_id: rewardId,
+        amount: 10,
+        verb: "earn",
+        description: "Seed duplication",
+        note: "",
+        now
+      });
+    } finally {
+      seedDb.close();
+    }
+
+    await withServer(
+      BASE_URL,
+      {
+        MASTER_ADMIN_KEY: masterKey,
+        DB_PATH: dbPath
+      },
+      async () => {
+        log("validating Jang family seed snapshot");
+        const db = new Database(dbPath, { readonly: true });
+        try {
+          const familyRow = db.prepare("SELECT id FROM family WHERE id = ?").get(JANG_FAMILY_ID);
+          if (!familyRow) {
+            throw new Error("Jang family was not created by prestart seed");
+          }
+          const tables = ["member", "task", "reward", "ledger"];
+          for (const table of tables) {
+            const exists = db
+              .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1")
+              .get(table);
+            if (!exists) {
+              throw new Error(`expected table ${table} to exist for seed validation`);
+            }
+            const row = db
+              .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE family_id = ?`)
+              .get(JANG_FAMILY_ID);
+            const rawCount = row?.count ?? 0;
+            const count = typeof rawCount === "number" ? rawCount : Number(rawCount);
+            log(`${table} rows for ${JANG_FAMILY_ID}: ${count}`);
+            if (!Number.isFinite(count) || count <= 0) {
+              throw new Error(`expected backup rows for ${table} in family ${JANG_FAMILY_ID}`);
+            }
+          }
+        } finally {
+          db.close();
+        }
+
+        log("verifying whoami for master key");
+        const masterRes = await fetch(new URL("/api/whoami", BASE_URL), {
+          headers: { "X-ADMIN-KEY": masterKey }
+        });
+        await ensureOk(masterRes, "master whoami");
+        const masterPayload = await masterRes.json();
+        if (masterPayload?.role !== "master") {
+          throw new Error(`expected master role, received ${masterPayload?.role ?? "unknown"}`);
+        }
+
+        log("verifying whoami for seeded Jang admin key");
+        const jangRes = await fetch(new URL("/api/whoami", BASE_URL), {
+          headers: { "X-ADMIN-KEY": JANG_ADMIN_KEY }
+        });
+        await ensureOk(jangRes, "jang whoami");
+        const jangPayload = await jangRes.json();
+        if (
+          jangPayload?.role !== "family_admin" ||
+          (jangPayload?.family_id ?? null) !== JANG_FAMILY_ID
+        ) {
+          throw new Error("Jang admin key did not resolve to expected family scope");
+        }
+
+        log("verifying public rewards feed for Jang family");
+        const jangRewardsRes = await fetch(
+          new URL(`/api/public/rewards?family_id=${encodeURIComponent(JANG_FAMILY_ID)}`, BASE_URL)
+        );
+        await ensureOk(jangRewardsRes, "public rewards (jang)");
+        const jangRewards = await jangRewardsRes.json();
+        if (!Array.isArray(jangRewards) || jangRewards.length === 0) {
+          throw new Error("expected public rewards for Jang family to be non-empty");
+        }
+
+        log("verifying public rewards feed for default family");
+        const defaultRewardsRes = await fetch(
+          new URL(`/api/public/rewards?family_id=${encodeURIComponent(DEFAULT_FAMILY_ID)}`, BASE_URL)
+        );
+        await ensureOk(defaultRewardsRes, "public rewards (default)");
+        const defaultRewards = await defaultRewardsRes.json();
+        if (!Array.isArray(defaultRewards) || defaultRewards.length === 0) {
+          throw new Error("expected public rewards for default family to be non-empty");
+        }
+
+        const verifyDb = new Database(dbPath, { readonly: true });
+        try {
+          const jangRewardCountRow = verifyDb
+            .prepare("SELECT COUNT(*) AS count FROM reward WHERE family_id = ?")
+            .get(JANG_FAMILY_ID);
+          const defaultRewardCountRow = verifyDb
+            .prepare("SELECT COUNT(*) AS count FROM reward WHERE family_id = ?")
+            .get(DEFAULT_FAMILY_ID);
+          const jangRewardCount = Number(jangRewardCountRow?.count ?? 0);
+          const defaultRewardCount = Number(defaultRewardCountRow?.count ?? 0);
+          log(`public rewards returned ${jangRewards.length} Jang rows (expected ${jangRewardCount})`);
+          log(`public rewards returned ${defaultRewards.length} default rows (expected ${defaultRewardCount})`);
+          if (jangRewards.length !== jangRewardCount) {
+            throw new Error("public rewards Jang count mismatch");
+          }
+          if (defaultRewards.length !== defaultRewardCount) {
+            throw new Error("public rewards default count mismatch");
+          }
+        } finally {
+          verifyDb.close();
+        }
+      }
+    );
+  } finally {
+    await removeDbArtifacts(dbPath);
+  }
+}
+
 export async function testC4() {
   const masterKey = (process.env.MASTER_ADMIN_KEY || "").trim();
   if (!masterKey) {
@@ -519,7 +761,7 @@ export async function testC5() {
       }
 
       log("attempting to delete smith reward while scoped to default family");
-      const deleteDefaultRes = await fetch(new URL(`/api/rewards/${reward.id}`, BASE_URL), {
+      const deleteDefaultRes = await fetch(new URL(`/api/admin/rewards/${reward.id}`, BASE_URL), {
         method: "DELETE",
         headers: {
           "X-ADMIN-KEY": masterKey,
@@ -547,7 +789,7 @@ export async function testC5() {
       }
 
       log("cleaning up reward via master scoped to smith");
-      const deleteSmithRes = await fetch(new URL(`/api/rewards/${reward.id}`, BASE_URL), {
+      const deleteSmithRes = await fetch(new URL(`/api/admin/rewards/${reward.id}`, BASE_URL), {
         method: "DELETE",
         headers: {
           "X-ADMIN-KEY": masterKey,
@@ -573,8 +815,8 @@ export async function testC6() {
       MASTER_ADMIN_KEY: masterKey
     },
     async () => {
-      log("requesting /api/members without family scope");
-      const res = await fetch(new URL("/api/members", BASE_URL), {
+      log("requesting /api/admin/members without family scope");
+      const res = await fetch(new URL("/api/admin/members", BASE_URL), {
         headers: {
           "X-ADMIN-KEY": masterKey
         }
@@ -607,7 +849,8 @@ const tests = {
   testC3,
   testC4,
   testC5,
-  testC6
+  testC6,
+  testF1
 };
 
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
