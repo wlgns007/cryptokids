@@ -39,55 +39,68 @@ try {
   console.warn('[db] unable to ensure family indexes', err?.message || err);
 }
 
-// Ensure family has email, admin_key; remove phone if present
+// ---- Family table migration (email + admin_key) ----
 (function migrateFamilyTable() {
-  const cols = db.prepare(`PRAGMA table_info("family")`).all();
-  const names = new Set(cols.map(c => c.name));
-  const needsEmail = !names.has('email');
-  const hasPhone = names.has('phone');
-  const needsAdminKey = !names.has('admin_key');
+  try {
+    const cols = db.prepare(`PRAGMA table_info("family")`).all();
+    const names = new Set(cols.map(c => c.name));
+    const hasEmail = names.has('email');
+    const hasPhone = names.has('phone');
+    const hasAdminKey = names.has('admin_key');
 
-  if (needsEmail || hasPhone || needsAdminKey) {
+    // If already correct, nothing to do
+    if (hasEmail && hasAdminKey && !hasPhone) return;
+
+    console.log('[db] migrating family table → add email/admin_key, drop phone');
+
     db.exec('PRAGMA foreign_keys=OFF; BEGIN;');
-    try {
-      db.exec(`
-        CREATE TABLE "family__new" (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          email TEXT UNIQUE,
-          admin_key TEXT UNIQUE,
-          status TEXT NOT NULL DEFAULT 'active',
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-      `);
+
+    // Create the new shape first — don't touch "email" yet
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS "family__new" (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE,
+        admin_key TEXT UNIQUE,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    // Copy over from old family if it exists
+    if (cols.length > 0) {
+      const selectCols = cols.map(c => c.name);
+      const colList = [
+        selectCols.includes('id') ? 'id' : "NULL AS id",
+        selectCols.includes('name') ? 'name' : "NULL AS name",
+        selectCols.includes('email') ? 'email' : "NULL AS email",
+        selectCols.includes('admin_key') ? 'admin_key' : "NULL AS admin_key",
+        selectCols.includes('status') ? 'status' : "'active' AS status",
+        selectCols.includes('created_at') ? 'created_at' : "datetime('now') AS created_at",
+        selectCols.includes('updated_at') ? 'updated_at' : "datetime('now') AS updated_at"
+      ].join(', ');
 
       db.exec(`
         INSERT INTO "family__new"(id, name, email, admin_key, status, created_at, updated_at)
-        SELECT
-          id,
-          name,
-          CASE
-            WHEN instr(lower(coalesce(email, '')), '@') > 0 THEN email
-            ELSE NULL
-          END AS email,
-          admin_key,
-          COALESCE(status, 'active'),
-          COALESCE(created_at, datetime('now')),
-          COALESCE(updated_at, datetime('now'))
+        SELECT ${colList}
         FROM "family";
       `);
-
       db.exec(`DROP TABLE "family";`);
-      db.exec(`ALTER TABLE "family__new" RENAME TO "family";`);
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_email" ON "family"(email);`);
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key);`);
-
-      db.exec('COMMIT; PRAGMA foreign_keys=ON;');
-    } catch (e) {
-      db.exec('ROLLBACK; PRAGMA foreign_keys=ON;');
-      throw e;
     }
+
+    // Rename and index
+    db.exec(`
+      ALTER TABLE "family__new" RENAME TO "family";
+      CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_email" ON "family"(email);
+      CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key);
+    `);
+
+    db.exec('COMMIT; PRAGMA foreign_keys=ON;');
+  } catch (e) {
+    db.exec('ROLLBACK; PRAGMA foreign_keys=ON;');
+    console.error('[db] family migration failed', e);
+    throw e;
   }
 })();
 
