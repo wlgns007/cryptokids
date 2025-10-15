@@ -194,12 +194,29 @@ function initAdmin() {
     families: [],
     currentFamilyId: null
   };
+  const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
 
   const whoamiBanner = $k('adminWhoami');
   const whoamiRoleLabel = $k('adminRoleLabel');
+  const masterToolbar = $k('masterToolbar');
   const familyScopeWrapper = $k('familyScopeWrapper');
   const familyScopeSelect = $k('familyScopeSelect');
   const familyScopeSummary = $k('familyScopeSummary');
+  const familySearchForm = $k('familySearchForm');
+  const familySearchInput = $k('familySearchInput');
+  const familyManagementButton = $k('btnFamilyManagement');
+  const familyManagementSection = $k('secFamilyManagement');
+  const familyManagementPanel = $k('familyManagementPanel');
+  const familiesRefreshButton = $k('btnFamiliesRefresh');
+  const familyListTableBody = $k('familyListTableBody');
+  const familyListEmptyRow = $k('familyListEmpty');
+  const familyCreateForm = $k('familyCreateForm');
+  const familyCreateNameInput = $k('familyCreateName');
+  const familyCreateFirstNameInput = $k('familyCreateFirstName');
+  const familyCreateLastNameInput = $k('familyCreateLastName');
+  const familyCreatePhoneInput = $k('familyCreatePhone');
+  const familyCreateIdPreview = $k('familyCreateIdPreview');
+  const familyCreateSubmitButton = $k('btnCreateFamily');
   const adminKeysSection = $k('secAdminKeys');
   const adminKeysTableBody = $k('adminKeysTableBody');
   const adminKeysStatus = $k('adminKeysStatus');
@@ -304,6 +321,11 @@ function initAdmin() {
   function applyRoleVisibility() {
     const activeRole = adminState.role || '';
     const hasScope = Boolean(adminState.currentFamilyId);
+    if (familySearchInput) familySearchInput.disabled = activeRole !== 'master';
+    const searchSubmit = familySearchForm?.querySelector('button[type="submit"]');
+    if (searchSubmit) searchSubmit.disabled = activeRole !== 'master';
+    if (familyManagementButton) familyManagementButton.disabled = activeRole !== 'master';
+    if (familiesRefreshButton) familiesRefreshButton.disabled = activeRole !== 'master';
     if (adminKeyLabelInput) adminKeyLabelInput.disabled = activeRole !== 'master';
     if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = activeRole !== 'master' || !hasScope;
     if (adminKeyCreateButton) adminKeyCreateButton.disabled = activeRole !== 'master' || !hasScope;
@@ -333,6 +355,8 @@ function initAdmin() {
       resetAdminKeysTable('Select a family to view admin keys.');
       if (adminKeysStatus) adminKeysStatus.textContent = 'Choose a family to manage admin keys.';
     }
+
+    updateFamilyCreateButtonState();
   }
 
   applyRoleVisibility();
@@ -349,6 +373,14 @@ function initAdmin() {
     resetAdminKeysTable('Provide an admin key to manage admin access.');
     if (adminKeysStatus) adminKeysStatus.textContent = '';
     if (adminKeyLabelInput) adminKeyLabelInput.value = '';
+    if (familySearchInput) familySearchInput.value = '';
+    if (familyCreateForm) familyCreateForm.reset();
+    if (familyCreateIdPreview) {
+      familyCreateIdPreview.textContent = '—';
+      familyCreateIdPreview.dataset.value = '';
+    }
+    updateFamilyCreateButtonState();
+    renderFamilyManagement();
   }
 
   function setAdminState(partial = {}, { persist = true } = {}) {
@@ -358,13 +390,22 @@ function initAdmin() {
     if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
       adminState.familyId = partial.family_id ?? null;
     }
+    const hasCurrentFamilyId = Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId');
     if (Object.prototype.hasOwnProperty.call(partial, 'families')) {
       adminState.families = Array.isArray(partial.families) ? partial.families.slice() : [];
+      if (!hasCurrentFamilyId && adminState.role === 'master') {
+        const available = adminState.families || [];
+        if (!available.some((family) => family && family.id === adminState.currentFamilyId)) {
+          adminState.currentFamilyId = available.length ? available[0]?.id || null : null;
+        }
+      }
     }
-    if (Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId')) {
+    if (hasCurrentFamilyId) {
       adminState.currentFamilyId = partial.currentFamilyId || null;
     } else if (adminState.role === 'family_admin') {
       adminState.currentFamilyId = adminState.familyId || null;
+    } else if (adminState.role === 'master' && !adminState.currentFamilyId && adminState.families.length) {
+      adminState.currentFamilyId = adminState.families[0]?.id || null;
     }
     window.currentFamilyId = adminState.currentFamilyId || null;
     if (persist) {
@@ -376,6 +417,7 @@ function initAdmin() {
     }
     updateWhoamiBanner();
     applyRoleVisibility();
+    renderFamilyManagement();
   }
 
   function findFamilyLabel(familyId) {
@@ -383,6 +425,83 @@ function initAdmin() {
     const entry = adminState.families.find((family) => family && family.id === familyId);
     if (!entry) return familyId;
     return entry.name ? `${entry.name} (${entry.id})` : entry.id;
+  }
+
+  function lettersOnly(value) {
+    return (value ?? '').toString().replace(/[^A-Za-z]/g, '');
+  }
+
+  function digitsOnly(value) {
+    return (value ?? '').toString().replace(/\D/g, '');
+  }
+
+  function capitalizeWord(value) {
+    const lower = (value ?? '').toString().toLowerCase();
+    if (!lower) return '';
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }
+
+  function generateFamilyIdBase({ firstName, lastName, phone }) {
+    const last = lettersOnly(lastName);
+    const first = lettersOnly(firstName);
+    const digits = digitsOnly(phone).slice(-4);
+    if (!last || !first || digits.length < 4) return '';
+    return `${capitalizeWord(last)}${first.charAt(0).toUpperCase()}${digits}`;
+  }
+
+  function ensureUniqueFamilyId(base) {
+    if (!base) return '';
+    const existingIds = new Set(
+      (adminState.families || [])
+        .map((family) => (family && family.id ? String(family.id) : null))
+        .filter(Boolean)
+    );
+    if (!existingIds.has(base)) return base;
+    for (let attempt = 1; attempt <= 20; attempt += 1) {
+      const candidate = `${base}-a${attempt}`;
+      if (!existingIds.has(candidate)) return candidate;
+    }
+    let fallback = 1;
+    while (fallback <= 100) {
+      const candidate = `${base}-${fallback}`;
+      if (!existingIds.has(candidate)) return candidate;
+      fallback += 1;
+    }
+    return `${base}-${Date.now().toString().slice(-4)}`;
+  }
+
+  function computeFamilyIdSuggestion({ firstName, lastName, phone } = {}) {
+    const base = generateFamilyIdBase({ firstName, lastName, phone });
+    if (!base) return '';
+    return ensureUniqueFamilyId(base);
+  }
+
+  function readFamilyFormValues() {
+    return {
+      firstName: familyCreateFirstNameInput?.value || '',
+      lastName: familyCreateLastNameInput?.value || '',
+      phone: familyCreatePhoneInput?.value || ''
+    };
+  }
+
+  function updateFamilyCreateButtonState() {
+    if (!familyCreateSubmitButton) return;
+    if (adminState.role !== 'master') {
+      familyCreateSubmitButton.disabled = true;
+      return;
+    }
+    const nameReady = (familyCreateNameInput?.value || '').trim().length > 0;
+    const idReady = Boolean(familyCreateIdPreview?.dataset?.value);
+    familyCreateSubmitButton.disabled = !(nameReady && idReady);
+  }
+
+  function refreshFamilyIdPreview() {
+    if (!familyCreateIdPreview) return '';
+    const suggestion = computeFamilyIdSuggestion(readFamilyFormValues());
+    familyCreateIdPreview.textContent = suggestion || '—';
+    familyCreateIdPreview.dataset.value = suggestion || '';
+    updateFamilyCreateButtonState();
+    return suggestion;
   }
 
   function updateWhoamiBanner() {
@@ -397,17 +516,24 @@ function initAdmin() {
 
     whoamiBanner.hidden = false;
     if (whoamiRoleLabel) {
-      let roleLabel = '';
-      if (role === 'master') {
-        roleLabel = 'Master admin';
-      } else if (role === 'family_admin') {
-        roleLabel = familyId ? `Family admin · ${familyId}` : 'Family admin';
-      } else if (role) {
-        roleLabel = role;
-      } else {
-        roleLabel = 'Admin';
+      whoamiRoleLabel.innerHTML = '';
+      if (role) {
+        const chip = document.createElement('span');
+        chip.className = 'role-chip';
+        if (role === 'master') {
+          chip.classList.add('role-chip--master');
+          chip.textContent = 'Master';
+        } else if (role === 'family_admin') {
+          chip.classList.add('role-chip--family');
+          const familyLabel = adminState.familyId || familyId || '';
+          chip.textContent = familyLabel
+            ? `Family Admin (${familyLabel})`
+            : 'Family Admin';
+        } else {
+          chip.textContent = role;
+        }
+        whoamiRoleLabel.appendChild(chip);
       }
-      whoamiRoleLabel.textContent = roleLabel;
     }
 
     if (role === 'master') {
@@ -459,6 +585,204 @@ function initAdmin() {
         familyScopeSelect.innerHTML = '';
       }
     }
+  }
+
+  async function fetchFamiliesStrict() {
+    const { res, body } = await adminFetch('/api/families', { skipScope: true });
+    if (res.status === 401) {
+      const error = new Error(ADMIN_INVALID_MSG);
+      error.code = 'UNAUTHORIZED';
+      throw error;
+    }
+    if (!res.ok) {
+      const message = presentError(body?.error, 'Failed to load families');
+      const error = new Error(message);
+      error.code = res.status;
+      throw error;
+    }
+    return Array.isArray(body) ? body : [];
+  }
+
+  async function refreshFamiliesFromServer({ silent = false } = {}) {
+    if (adminState.role !== 'master') return false;
+    try {
+      const families = await fetchFamiliesStrict();
+      const nextState = { families };
+      if (!families.some((family) => family && family.id === adminState.currentFamilyId)) {
+        nextState.currentFamilyId = families.length ? families[0]?.id || null : null;
+      }
+      setAdminState(nextState);
+      return true;
+    } catch (error) {
+      if (!silent) {
+        toast(error.message || 'Failed to load families', 'error');
+      } else {
+        console.warn('refreshFamiliesFromServer failed', error);
+      }
+      return false;
+    }
+  }
+
+  async function handleFamilyRowSave({ id, nameInput, statusSelect, button }) {
+    if (!id || !nameInput || !statusSelect || !button) return;
+    const trimmedName = nameInput.value.trim();
+    const originalName = (nameInput.dataset.originalValue || '').trim();
+    const currentStatus = statusSelect.value;
+    const originalStatus = statusSelect.dataset.originalValue || '';
+    const payload = {};
+    if (trimmedName !== originalName) {
+      if (!trimmedName) {
+        toast('Family name is required.', 'error');
+        return;
+      }
+      payload.name = trimmedName;
+    }
+    if (currentStatus !== originalStatus) {
+      payload.status = currentStatus;
+    }
+    if (!Object.keys(payload).length) {
+      button.disabled = true;
+      return;
+    }
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Saving...';
+    try {
+      const { res, body } = await adminFetch(`/api/families/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Failed to update family');
+        throw new Error(message);
+      }
+      toast('Family updated.');
+      await refreshFamiliesFromServer({ silent: true });
+    } catch (error) {
+      toast(error.message || 'Failed to update family', 'error');
+    } finally {
+      button.textContent = originalLabel;
+      button.disabled = true;
+    }
+  }
+
+  function createFamilyRow(family, statusOptions) {
+    if (!familyListTableBody || !family) return;
+    const row = document.createElement('tr');
+    if (family.id) row.dataset.familyId = String(family.id);
+    if (family.id && family.id === adminState.currentFamilyId) {
+      row.classList.add('is-active');
+    }
+
+    const idCell = document.createElement('td');
+    idCell.textContent = family.id || '—';
+    row.appendChild(idCell);
+
+    const nameCell = document.createElement('td');
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    const originalName = family.name ? String(family.name) : '';
+    nameInput.value = originalName;
+    nameInput.dataset.originalValue = originalName;
+    nameInput.placeholder = 'Family name';
+    nameCell.appendChild(nameInput);
+    row.appendChild(nameCell);
+
+    const statusCell = document.createElement('td');
+    const statusSelect = document.createElement('select');
+    statusSelect.className = 'family-status-select';
+    const normalizedStatus = (family.status ?? 'active').toString().trim().toLowerCase() || 'active';
+    statusSelect.dataset.originalValue = normalizedStatus;
+    for (const option of statusOptions) {
+      const opt = document.createElement('option');
+      opt.value = option;
+      opt.textContent = option.charAt(0).toUpperCase() + option.slice(1);
+      statusSelect.appendChild(opt);
+    }
+    if (statusSelect.value !== normalizedStatus) {
+      statusSelect.value = normalizedStatus;
+    }
+    statusCell.appendChild(statusSelect);
+    row.appendChild(statusCell);
+
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'actions';
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.textContent = 'Save';
+    saveButton.disabled = true;
+    actionsCell.appendChild(saveButton);
+    row.appendChild(actionsCell);
+
+    const evaluateDirtyState = () => {
+      const currentName = nameInput.value.trim();
+      const originalNameNormalized = (nameInput.dataset.originalValue || '').trim();
+      const currentStatus = statusSelect.value;
+      const originalStatus = statusSelect.dataset.originalValue || '';
+      const changed = currentName !== originalNameNormalized || currentStatus !== originalStatus;
+      saveButton.disabled = !changed;
+    };
+
+    nameInput.addEventListener('input', evaluateDirtyState);
+    statusSelect.addEventListener('change', evaluateDirtyState);
+    saveButton.addEventListener('click', () =>
+      handleFamilyRowSave({ id: family.id, nameInput, statusSelect, button: saveButton })
+    );
+
+    familyListTableBody.appendChild(row);
+  }
+
+  function renderFamilyManagement() {
+    if (!familyManagementPanel) return;
+    const isMaster = adminState.role === 'master';
+    if (!isMaster) {
+      if (familyListTableBody) {
+        familyListTableBody.innerHTML = '';
+        if (familyListEmptyRow) {
+          const cell = familyListEmptyRow.querySelector('td');
+          if (cell) cell.textContent = 'Master access required.';
+          familyListTableBody.appendChild(familyListEmptyRow);
+        }
+      }
+      if (familyCreateIdPreview) {
+        familyCreateIdPreview.textContent = '—';
+        familyCreateIdPreview.dataset.value = '';
+      }
+      updateFamilyCreateButtonState();
+      return;
+    }
+
+    const families = Array.isArray(adminState.families) ? adminState.families : [];
+    if (familyListTableBody) {
+      familyListTableBody.innerHTML = '';
+      if (!families.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 4;
+        cell.className = 'muted';
+        cell.textContent = 'No families yet.';
+        row.appendChild(cell);
+        familyListTableBody.appendChild(row);
+      } else {
+        const statusSet = new Set(FAMILY_STATUS_OPTIONS);
+        for (const family of families) {
+          const normalizedStatus = (family?.status ?? 'active').toString().trim().toLowerCase() || 'active';
+          statusSet.add(normalizedStatus);
+        }
+        const statusOptions = Array.from(statusSet);
+        for (const family of families) {
+          createFamilyRow(family, statusOptions);
+        }
+      }
+    }
+
+    refreshFamilyIdPreview();
   }
 
   function ensureMemberPanelStyles() {
@@ -798,6 +1122,117 @@ details.member-fold .summary-value {
     await reloadScopedData();
   });
 
+  familyManagementButton?.addEventListener('click', () => {
+    if (adminState.role !== 'master') return;
+    if (!familyManagementSection) return;
+    if (typeof familyManagementSection.scrollIntoView === 'function') {
+      familyManagementSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+
+  familySearchForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (adminState.role !== 'master') return;
+    const query = (familySearchInput?.value || '').trim();
+    if (!query) {
+      toast('Enter a family ID to search.', 'error');
+      return;
+    }
+    const submitButton = familySearchForm?.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const families = await fetchFamiliesStrict();
+      const match = families.find((family) => family && String(family.id) === query);
+      if (!match) {
+        toast('Family not found.', 'error');
+        return;
+      }
+      if (adminState.currentFamilyId === match.id) {
+        toast(`Already viewing ${findFamilyLabel(match.id)}.`);
+        return;
+      }
+      setAdminState({ families, currentFamilyId: match.id });
+      await reloadScopedData();
+    } catch (error) {
+      toast(error.message || 'Unable to search families.', 'error');
+    } finally {
+      if (submitButton) submitButton.disabled = adminState.role !== 'master';
+    }
+  });
+
+  familiesRefreshButton?.addEventListener('click', async () => {
+    if (familiesRefreshButton.disabled) return;
+    const originalLabel = familiesRefreshButton.textContent;
+    familiesRefreshButton.disabled = true;
+    familiesRefreshButton.textContent = 'Refreshing...';
+    try {
+      await refreshFamiliesFromServer({ silent: false });
+    } finally {
+      familiesRefreshButton.textContent = originalLabel || 'Refresh';
+      familiesRefreshButton.disabled = adminState.role !== 'master';
+    }
+  });
+
+  familyCreateNameInput?.addEventListener('input', () => updateFamilyCreateButtonState());
+  [familyCreateFirstNameInput, familyCreateLastNameInput, familyCreatePhoneInput]
+    .filter(Boolean)
+    .forEach((input) => input.addEventListener('input', () => refreshFamilyIdPreview()));
+
+  familyCreateForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (adminState.role !== 'master') return;
+    const familyName = (familyCreateNameInput?.value || '').trim();
+    if (!familyName) {
+      toast('Family name is required.', 'error');
+      return;
+    }
+    const generatedId = refreshFamilyIdPreview();
+    if (!generatedId) {
+      toast('Provide guardian details to generate an ID.', 'error');
+      return;
+    }
+    const payload = { id: generatedId, name: familyName, status: 'active' };
+    if (familyCreateSubmitButton) {
+      familyCreateSubmitButton.disabled = true;
+      familyCreateSubmitButton.textContent = 'Creating...';
+    }
+    try {
+      const { res, body } = await adminFetch('/api/families', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (res.status === 409) {
+        toast('Family ID already exists. Refresh and try again.', 'error');
+        await refreshFamiliesFromServer({ silent: true });
+        refreshFamilyIdPreview();
+        return;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Failed to create family');
+        throw new Error(message);
+      }
+      toast('Family created.');
+      familyCreateForm.reset();
+      refreshFamilyIdPreview();
+      await refreshFamiliesFromServer({ silent: true });
+    } catch (error) {
+      toast(error.message || 'Failed to create family', 'error');
+    } finally {
+      if (familyCreateSubmitButton) {
+        familyCreateSubmitButton.textContent = 'Create family';
+      }
+      updateFamilyCreateButtonState();
+    }
+  });
+
+  refreshFamilyIdPreview();
+
   async function loadFeatureFlagsFromServer() {
     try {
       const { res, body } = await adminFetch('/api/features');
@@ -912,17 +1347,24 @@ details.member-fold .summary-value {
         family_id: payload.family_id ?? null
       };
       if (nextState.role === 'master') {
-        const { res: famRes, body: famBody } = await adminFetch('/api/families', { skipScope: true });
-        if (famRes.ok && Array.isArray(famBody)) {
-          nextState.families = famBody;
+        try {
+          const families = await fetchFamiliesStrict();
+          nextState.families = families;
           const previous = adminState.currentFamilyId;
-          let scope = previous && famBody.some((family) => family?.id === previous) ? previous : null;
-          if (!scope && famBody.length) {
-            scope = famBody[0]?.id || null;
+          let scope = previous && families.some((family) => family?.id === previous) ? previous : null;
+          if (!scope && families.length) {
+            scope = families[0]?.id || null;
           }
-          nextState.currentFamilyId = scope || null;
-        } else {
-          console.warn('Unable to fetch family list', famBody);
+          if (scope) {
+            nextState.currentFamilyId = scope;
+          } else {
+            nextState.currentFamilyId = families.length ? families[0]?.id || null : null;
+          }
+        } catch (error) {
+          if (!silent) {
+            console.warn('Unable to fetch family list', error);
+          }
+          nextState.families = Array.isArray(adminState.families) ? adminState.families.slice() : [];
           nextState.currentFamilyId = adminState.currentFamilyId || null;
         }
       } else if (nextState.role === 'family_admin') {

@@ -4,7 +4,8 @@ const DEFAULT_FAMILY_ID = "default";
 const JANG_FAMILY_ID = "JangJ6494";
 const JANG_FAMILY_NAME = "Jang";
 const JANG_ADMIN_KEY = "Mamapapa";
-const MASTER_ADMIN_KEY = (process.env.MASTER_ADMIN_KEY || "").trim();
+const MASTER_ADMIN_KEY_RAW = process.env.MASTER_ADMIN_KEY;
+const MASTER_ADMIN_KEY = (MASTER_ADMIN_KEY_RAW || "").trim();
 
 console.log("[prestart] starting DB checks...");
 const { default: db } = await import("../server/db.js");
@@ -70,7 +71,8 @@ function ensureDefaultFamily() {
 }
 
 function ensureMasterAdminKey() {
-  if (!MASTER_ADMIN_KEY) {
+  if (!MASTER_ADMIN_KEY_RAW || !MASTER_ADMIN_KEY) {
+    console.warn("[prestart] MASTER_ADMIN_KEY is not set; master admin will be unavailable.");
     return { ok: false, changed: false };
   }
   const hash = sha256(MASTER_ADMIN_KEY);

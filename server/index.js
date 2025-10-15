@@ -24,7 +24,7 @@ const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 
 const selectAdminKeyStmt = db.prepare(
-  "SELECT role, family_id FROM admin_key WHERE key_hash = ? AND status = 'active' LIMIT 1"
+  "SELECT role, family_id, status FROM admin_key WHERE key_hash = ? LIMIT 1"
 );
 
 function sha256(value) {
@@ -41,13 +41,21 @@ function getAdminFromKey(plainKey) {
   if (!row) {
     return null;
   }
-  if (row.role === "family_admin") {
-    return { role: "family_admin", family_id: row.family_id ?? null };
+  const admin = {
+    role: row.role,
+    family_id: row.family_id ?? null,
+    status: row.status
+  };
+  if (admin.status !== "active") {
+    return admin;
   }
-  if (row.role === "master") {
-    return { role: "master", family_id: null };
+  if (admin.role === "family_admin") {
+    return { ...admin, role: "family_admin" };
   }
-  return null;
+  if (admin.role === "master") {
+    return { ...admin, family_id: null };
+  }
+  return admin;
 }
 
 function authenticateAdmin(req, res, next) {
@@ -59,6 +67,10 @@ function authenticateAdmin(req, res, next) {
   const admin = getAdminFromKey(key);
   if (!admin) {
     res.status(403).json({ error: "invalid key" });
+    return;
+  }
+  if ((admin.status || "").toString().toLowerCase() !== "active") {
+    res.status(403).json({ error: "key inactive" });
     return;
   }
   req.auth = {
@@ -216,13 +228,16 @@ const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
 
 const insertFamilyStmt = db.prepare(
   `INSERT INTO family (id, name, status, created_at, updated_at)
-   VALUES (@id, @name, 'active', @now, @now)`
+   VALUES (@id, @name, @status, @now, @now)`
 );
 const selectFamilyByIdStmt = db.prepare(
   "SELECT id, name, status FROM family WHERE id = ? LIMIT 1"
 );
 const listFamiliesStmt = db.prepare(
   "SELECT id, name, status FROM family ORDER BY created_at DESC, id DESC"
+);
+const updateFamilyStmt = db.prepare(
+  `UPDATE family SET name = @name, status = @status, updated_at = @now WHERE id = @id`
 );
 
 const insertAdminKeyStmt = db.prepare(
@@ -316,20 +331,71 @@ app.get("/api/whoami", authenticateAdmin, (req, res) => {
 });
 
 app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
-  const name = (req.body?.name ?? "").toString().trim();
+  const body = req.body ?? {};
+  const name = (body.name ?? "").toString().trim();
+  let id = (body.id ?? "").toString().trim();
+  const requestedStatus = (body.status ?? "active").toString().trim().toLowerCase();
   if (!name) {
     res.status(400).json({ error: "name required" });
     return;
   }
+  if (!id) {
+    id = crypto.randomUUID();
+  }
+  if (selectFamilyByIdStmt.get(id)) {
+    res.status(409).json({ error: "family id exists" });
+    return;
+  }
+  const status = requestedStatus === "inactive" ? "inactive" : "active";
   const now = Date.now();
-  const id = crypto.randomUUID();
-  insertFamilyStmt.run({ id, name, now });
-  res.json({ id, name });
+  insertFamilyStmt.run({ id, name, status, now });
+  res.json({ id, name, status });
 });
 
 app.get("/api/families", authenticateAdmin, requireMaster, (_req, res) => {
   const families = listFamiliesStmt.all();
   res.json(families);
+});
+
+app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "family id required" });
+    return;
+  }
+  const existing = selectFamilyByIdStmt.get(id);
+  if (!existing) {
+    res.status(404).json({ error: "family not found" });
+    return;
+  }
+  const body = req.body ?? {};
+  const hasName = Object.prototype.hasOwnProperty.call(body, "name");
+  const hasStatus = Object.prototype.hasOwnProperty.call(body, "status");
+  if (!hasName && !hasStatus) {
+    res.status(400).json({ error: "no changes provided" });
+    return;
+  }
+  let name = existing.name;
+  if (hasName) {
+    name = (body.name ?? "").toString().trim();
+    if (!name) {
+      res.status(400).json({ error: "name required" });
+      return;
+    }
+  }
+  let status = existing.status ?? "active";
+  if (hasStatus) {
+    const normalizedStatus = (body.status ?? "").toString().trim().toLowerCase();
+    if (!normalizedStatus) {
+      res.status(400).json({ error: "status required" });
+      return;
+    }
+    status = normalizedStatus;
+  }
+  const now = Date.now();
+  updateFamilyStmt.run({ id, name, status, now });
+  const updated = selectFamilyByIdStmt.get(id);
+  res.json(updated);
 });
 
 app.post("/api/admin-keys", authenticateAdmin, requireMaster, (req, res) => {
@@ -3930,6 +3996,7 @@ app.get("/api/public/rewards", (req, res) => {
     return;
   }
   try {
+    res.set("Cache-Control", "no-store");
     const rows = listPublicRewardsStmt.all({ family_id: familyId }).map(mapPublicReward);
     res.json(rows);
   } catch (err) {
@@ -3949,6 +4016,7 @@ app.get("/api/public/tasks", (req, res) => {
     return;
   }
   try {
+    res.set("Cache-Control", "no-store");
     const rows = listPublicTasksStmt.all({ family_id: familyId }).map(mapPublicTask);
     res.json(rows);
   } catch (err) {
@@ -3978,6 +4046,7 @@ app.get("/api/public/members/:memberId", (req, res) => {
       res.status(404).json({ error: "NOT_FOUND" });
       return;
     }
+    res.set("Cache-Control", "no-store");
     res.json({ userId: row.id, name: row.name || "", status: row.status || "active" });
   } catch (err) {
     console.error("public member lookup failed", err);
