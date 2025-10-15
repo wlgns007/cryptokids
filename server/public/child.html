@@ -14,7 +14,6 @@
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com; child-src 'self' https://www.youtube-nocookie.com https://www.youtube.com;"
   >
-  <script src="/assets/i18n.js" defer></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -675,6 +674,7 @@
 <body>
   <div id="app-header"></div>
   <link rel="stylesheet" href="/styles.css?v=18">
+  <script src="/js/i18n.js?v=1"></script>
   <script type="module" src="/child.js?v=18"></script>
   <div class="container">
     <section class="hero">
@@ -699,7 +699,12 @@
     <section id="balance">
       <h2>Balance History</h2>
       <div class="row">
-        <input id="childUserId" placeholder="User ID" data-i18n-placeholder="user_id" />
+        <input
+          id="childUserId"
+          placeholder="User ID"
+          data-i18n="user_id"
+          data-i18n-attr="placeholder"
+        />
         <button id="btnCheck" class="primary" data-i18n="check_balance">Check Balance</button>
         <button id="btnHistory">Refresh History</button>
         <button id="btnCsv">Download CSV</button>

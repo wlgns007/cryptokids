@@ -1,6 +1,7 @@
 import { renderHeader } from './js/header.js';
 
 const SUPPORTED_LANGS = ['en', 'ko'];
+let ckI18nApi = {};
 
 function syncHeaderLangButtons(active) {
   document
@@ -12,57 +13,76 @@ function syncHeaderLangButtons(active) {
     });
 }
 
-function readStoredLang() {
+function readStoredLang(getLangFn) {
+  if (typeof getLangFn === 'function') {
+    const current = getLangFn();
+    if (SUPPORTED_LANGS.includes(current)) return current;
+  }
   try {
     const stored = window.localStorage?.getItem('ck.lang');
     if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
   } catch (error) {
     console.warn('Unable to read stored language', error);
   }
-  if (window.I18N && typeof window.I18N.getLang === 'function') {
-    const current = window.I18N.getLang();
-    if (SUPPORTED_LANGS.includes(current)) return current;
-  }
   return SUPPORTED_LANGS[0];
 }
 
-function setLang(code) {
-  const normalized = SUPPORTED_LANGS.includes(code) ? code : SUPPORTED_LANGS[0];
-  try {
-    window.localStorage?.setItem('ck.lang', normalized);
-  } catch (error) {
-    console.warn('Unable to store language preference', error);
-  }
-  syncHeaderLangButtons(normalized);
-  applyTranslations?.(normalized);
-  if (window.I18N && typeof window.I18N.setLang === 'function') {
-    window.I18N.setLang(normalized);
-  }
-  return normalized;
+function translate(key, fallback = key) {
+  const translator = ckI18nApi.t || (window.ckI18n && window.ckI18n.t);
+  return typeof translator === 'function' ? translator(key) : fallback;
 }
 
-window.setLang = setLang;
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('child.js loaded ok');
 
-function bootHeader() {
-  if (bootHeader._ready) return;
-  bootHeader._ready = true;
+  const { setLang: setLangGlobal, applyAdminTranslations, getLang, t } = window.ckI18n || {};
+  if (typeof setLangGlobal !== 'function' || typeof applyAdminTranslations !== 'function') {
+    console.error('i18n not loaded before child.js');
+    return;
+  }
+
+  ckI18nApi = { setLang: setLangGlobal, applyAdminTranslations, getLang, t };
+
+  applyAdminTranslations(document);
+
+  const titleEl = document.querySelector('[data-i18n="app.title"]');
+  if (titleEl && typeof t === 'function') {
+    titleEl.textContent = t('app.title');
+  }
+
+  function handleSetLang(code) {
+    const normalized = SUPPORTED_LANGS.includes(code) ? code : SUPPORTED_LANGS[0];
+    setLangGlobal(normalized);
+    syncHeaderLangButtons(normalized);
+    return normalized;
+  }
+
+  const bindLangButton = (lang) => {
+    const btn = document.querySelector(`[data-lang="${lang}"]`);
+    if (!btn || btn.dataset.i18nBound) return;
+    btn.dataset.i18nBound = 'true';
+    btn.addEventListener('click', () => handleSetLang(lang));
+  };
+
+  bindLangButton('en');
+  bindLangButton('ko');
 
   renderHeader({
     mountId: 'app-header',
     langs: SUPPORTED_LANGS,
-    onLangChange: setLang,
+    onLangChange: handleSetLang,
     variant: 'band',
     showInstall: true
   });
 
-  setLang(readStoredLang());
-}
+  bindLangButton('en');
+  bindLangButton('ko');
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootHeader, { once: true });
-} else {
-  bootHeader();
-}
+  const initialLang = readStoredLang(getLang);
+  handleSetLang(initialLang);
+
+  window.setLang = handleSetLang;
+});
 
 function getYouTubeId(url) {
   if (!url) return "";
@@ -1236,7 +1256,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
       }
 
       const btn = document.createElement('button');
-      btn.textContent = I18N.t('redeem');
+      btn.textContent = translate('redeem');
       btn.style.flex = '0 0 auto';
       btn.addEventListener('click', () => createHold(item));
       actions.appendChild(btn);
