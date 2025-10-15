@@ -149,6 +149,36 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
+  const CHILD_ID_STORAGE = 'ck.childUserId';
+
+  function storageGet(key) {
+    try {
+      return window.localStorage?.getItem(key) ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (value === null || value === undefined) {
+        window.localStorage?.removeItem(key);
+      } else {
+        window.localStorage?.setItem(key, String(value));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function getStoredChildId() {
+    return storageGet(CHILD_ID_STORAGE) || '';
+  }
+
+  function setStoredChildId(value) {
+    storageSet(CHILD_ID_STORAGE, value || '');
+  }
 
   function readConfiguredFamilyId() {
     if (typeof document === 'undefined') return null;
@@ -375,6 +405,17 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   function getUserId() {
     return $('childUserId').value.trim();
   }
+
+  const childIdInput = $('childUserId');
+  const childIdSaveButton = $('child-save-id');
+  if (childIdInput && !childIdInput.value) {
+    childIdInput.value = getStoredChildId();
+  }
+  childIdSaveButton?.addEventListener('click', () => {
+    const value = childIdInput?.value?.trim() || '';
+    setStoredChildId(value);
+    console.log('[CK] Child ID saved:', value);
+  });
 
   function saveFilters(filters) {
     const payload = JSON.stringify(filters || {});

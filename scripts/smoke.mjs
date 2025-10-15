@@ -173,7 +173,8 @@ async function validateAdminKey(baseUrl, adminKey, expectedFamilyId) {
       return false;
     }
     const payload = await res.json();
-    return payload.role === "family_admin" && payload.family_id === expectedFamilyId;
+    const payloadFamily = payload.family_id ?? payload.familyId ?? null;
+    return payload.role === "family" && payloadFamily === expectedFamilyId;
   } catch {
     return false;
   }
@@ -619,10 +620,8 @@ export async function testF1() {
         });
         await ensureOk(jangRes, "jang whoami");
         const jangPayload = await jangRes.json();
-        if (
-          jangPayload?.role !== "family_admin" ||
-          (jangPayload?.family_id ?? null) !== JANG_FAMILY_ID
-        ) {
+        const jangFamily = jangPayload?.family_id ?? jangPayload?.familyId ?? null;
+        if (jangPayload?.role !== "family" || jangFamily !== JANG_FAMILY_ID) {
           throw new Error("Jang admin key did not resolve to expected family scope");
         }
 
