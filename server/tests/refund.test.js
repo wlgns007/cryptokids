@@ -8,6 +8,7 @@ process.env.NODE_ENV = 'test';
 const TEST_DB = path.join(process.cwd(), 'data', `test-refund-${randomUUID()}.db`);
 process.env.DB_PATH = TEST_DB;
 process.env.CK_REFUND_WINDOW_DAYS = '30';
+const DEFAULT_FAMILY_ID = 'default';
 
 const {
   createRefundTransaction,
@@ -17,6 +18,15 @@ const {
   __resetRefundRateLimiter
 } = await import('../index.js');
 import db from '../db.js';
+
+function ensureDefaultFamily() {
+  const now = Date.now();
+  db.prepare(
+    "INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)"
+  ).run(DEFAULT_FAMILY_ID, 'Default Family', now, now);
+}
+
+ensureDefaultFamily();
 
 test.after(() => {
   fs.rmSync(TEST_DB, { force: true });
@@ -34,19 +44,28 @@ function resetDatabase() {
   `);
   db.exec('PRAGMA foreign_keys = ON;');
   __resetRefundRateLimiter();
+  ensureDefaultFamily();
 }
 
-function insertMember(id, name = id) {
+function insertMember(id, name = id, familyId = DEFAULT_FAMILY_ID) {
   const now = Date.now();
   db.prepare(
-    'INSERT OR REPLACE INTO member (id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(id, name, 'active', now, now);
+    "INSERT INTO member (id, family_id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)\n       ON CONFLICT(id) DO UPDATE SET\n         family_id=excluded.family_id,\n         name=excluded.name,\n         status=excluded.status,\n         updated_at=excluded.updated_at"
+  ).run(id, familyId, name, 'active', now, now);
 }
 
 test('partial refunds and over-refund guard', () => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
-  applyLedger({ userId: 'kid', delta: 100, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 100,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
   const redeem = applyLedger({
     userId: 'kid',
     delta: -60,
@@ -54,7 +73,8 @@ test('partial refunds and over-refund guard', () => {
     note: 'Ice Cream',
     actor: 'admin',
     verb: 'redeem',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   });
   const redeemRow = redeem.row;
 
@@ -64,7 +84,8 @@ test('partial refunds and over-refund guard', () => {
     amount: 20,
     reason: 'duplicate',
     notes: 'partial refund',
-    actorId: 'admin1'
+    actorId: 'admin1',
+    familyId: DEFAULT_FAMILY_ID
   });
   assert.equal(first.balance, 60);
   assert.equal(first.remaining, 40);
@@ -77,7 +98,8 @@ test('partial refunds and over-refund guard', () => {
     amount: 40,
     reason: 'staff_error',
     notes: 'final make-good',
-    actorId: 'admin1'
+    actorId: 'admin1',
+    familyId: DEFAULT_FAMILY_ID
   });
   assert.equal(second.balance, 100);
   assert.equal(second.remaining, 0);
@@ -89,12 +111,13 @@ test('partial refunds and over-refund guard', () => {
         redeemTxId: String(redeemRow.id),
         amount: 1,
         reason: 'duplicate',
-        actorId: 'admin1'
+        actorId: 'admin1',
+        familyId: DEFAULT_FAMILY_ID
       }),
     /REFUND_NOT_ALLOWED/
   );
 
-  const view = getLedgerViewForUser('kid');
+  const view = getLedgerViewForUser('kid', DEFAULT_FAMILY_ID);
   assert.ok(Array.isArray(view.redeems));
   const firstRedeem = view.redeems.find((r) => String(r.id) === String(redeemRow.id));
   assert.ok(firstRedeem, 'redeem row should exist');
@@ -107,7 +130,15 @@ test('rejects mismatched users and invalid parents', () => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
   insertMember('other', 'Other Tester');
-  applyLedger({ userId: 'kid', delta: 80, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 80,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
   const redeem = applyLedger({
     userId: 'kid',
     delta: -30,
@@ -115,7 +146,8 @@ test('rejects mismatched users and invalid parents', () => {
     note: 'Toy',
     actor: 'admin',
     verb: 'redeem',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   });
   const redeemRow = redeem.row;
 
@@ -126,7 +158,8 @@ test('rejects mismatched users and invalid parents', () => {
         redeemTxId: String(redeemRow.id),
         amount: 5,
         reason: 'duplicate',
-        actorId: 'admin2'
+        actorId: 'admin2',
+        familyId: DEFAULT_FAMILY_ID
       }),
     /USER_MISMATCH/
   );
@@ -138,7 +171,8 @@ test('rejects mismatched users and invalid parents', () => {
         redeemTxId: 'non-existent',
         amount: 5,
         reason: 'duplicate',
-        actorId: 'admin2'
+        actorId: 'admin2',
+        familyId: DEFAULT_FAMILY_ID
       }),
     /REDEEM_NOT_FOUND/
   );
@@ -150,7 +184,8 @@ test('rejects mismatched users and invalid parents', () => {
     note: 'bonus',
     actor: 'coach',
     verb: 'earn',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   }).row;
 
   assert.throws(
@@ -160,7 +195,8 @@ test('rejects mismatched users and invalid parents', () => {
         redeemTxId: String(earnRow.id),
         amount: 5,
         reason: 'duplicate',
-        actorId: 'admin2'
+        actorId: 'admin2',
+        familyId: DEFAULT_FAMILY_ID
       }),
     /NOT_REDEEM_TX/
   );
@@ -169,7 +205,15 @@ test('rejects mismatched users and invalid parents', () => {
 test('idempotency returns existing refund details', () => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
-  applyLedger({ userId: 'kid', delta: 50, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 50,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
   const redeem = applyLedger({
     userId: 'kid',
     delta: -20,
@@ -177,7 +221,8 @@ test('idempotency returns existing refund details', () => {
     note: 'Snack',
     actor: 'admin',
     verb: 'redeem',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   });
   const redeemRow = redeem.row;
   const key = 'test-idempotency';
@@ -188,7 +233,8 @@ test('idempotency returns existing refund details', () => {
     amount: 10,
     reason: 'duplicate',
     actorId: 'admin1',
-    idempotencyKey: key
+    idempotencyKey: key,
+    familyId: DEFAULT_FAMILY_ID
   });
   assert.equal(first.remaining, 10);
 
@@ -199,7 +245,8 @@ test('idempotency returns existing refund details', () => {
       amount: 10,
       reason: 'duplicate',
       actorId: 'admin1',
-      idempotencyKey: key
+      idempotencyKey: key,
+      familyId: DEFAULT_FAMILY_ID
     });
     assert.fail('Expected idempotency conflict');
   } catch (err) {
@@ -216,7 +263,15 @@ test('idempotency returns existing refund details', () => {
 test('enforces refund window', () => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
-  applyLedger({ userId: 'kid', delta: 40, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 40,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
   const redeem = applyLedger({
     userId: 'kid',
     delta: -20,
@@ -224,7 +279,8 @@ test('enforces refund window', () => {
     note: 'Book',
     actor: 'admin',
     verb: 'redeem',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   });
   const redeemRow = redeem.row;
   const thirtyOneDays = 31 * 24 * 60 * 60 * 1000;
@@ -238,7 +294,8 @@ test('enforces refund window', () => {
         redeemTxId: String(redeemRow.id),
         amount: 5,
         reason: 'duplicate',
-        actorId: 'admin3'
+        actorId: 'admin3',
+        familyId: DEFAULT_FAMILY_ID
       }),
     /REFUND_WINDOW_EXPIRED/
   );
@@ -247,7 +304,15 @@ test('enforces refund window', () => {
 test('state hints surface refund capacity', () => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
-  applyLedger({ userId: 'kid', delta: 100, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 100,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
   const redeemResult = applyLedger({
     userId: 'kid',
     delta: -40,
@@ -255,10 +320,11 @@ test('state hints surface refund capacity', () => {
     note: 'Toy',
     actor: 'admin',
     verb: 'redeem',
-    returnRow: true
+    returnRow: true,
+    familyId: DEFAULT_FAMILY_ID
   });
   const redeemRow = redeemResult.row;
-  let hints = getStateHints('kid');
+  let hints = getStateHints('kid', DEFAULT_FAMILY_ID);
   assert.equal(hints.balance, 60);
   assert.equal(hints.can_refund, true);
   assert.equal(hints.max_refund, 40);
@@ -268,10 +334,11 @@ test('state hints surface refund capacity', () => {
     redeemTxId: String(redeemRow.id),
     amount: 10,
     reason: 'duplicate',
-    actorId: 'admin1'
+    actorId: 'admin1',
+    familyId: DEFAULT_FAMILY_ID
   });
 
-  hints = getStateHints('kid');
+  hints = getStateHints('kid', DEFAULT_FAMILY_ID);
   assert.equal(hints.balance, 70);
   assert.equal(hints.max_refund, 30);
   assert.ok(Array.isArray(hints.refundable_redeems));

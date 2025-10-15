@@ -1,32 +1,73 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { execSync, spawnSync } from "node:child_process";
-import Database from "better-sqlite3";
+import crypto from "node:crypto";
+import db from "../server/db.js";
 
-execSync("node --check server/index.js", { stdio: "inherit" });
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const serverPath = join(__dirname, "..", "server", "index.js");
-const startLine = 790;
-const endLine = 835;
-const source = readFileSync(serverPath, "utf8").split("\n");
-const excerpt = source.slice(startLine - 1, endLine);
-
-console.log(`\n--- server/index.js (lines ${startLine}-${endLine}) ---`);
-console.log(excerpt.join("\n"));
-console.log("--- end excerpt ---\n");
-
-const db = new Database(process.env.DB_PATH || "./data.sqlite", { fileMustExist: false });
-const cols = db.prepare("PRAGMA table_info(ledger)").all().map(c => `${c.name}:${c.type}`);
-console.log("Ledger columns at prestart:", cols.join(", "));
-db.close();
-
-const result = spawnSync(process.execPath, ["--check", serverPath], {
-  stdio: "inherit"
-});
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
+function sha256(input) {
+  return crypto.createHash("sha256").update(String(input)).digest("hex");
 }
+
+function ensureDefaultFamily() {
+  const now = Date.now();
+  const familyCountRow = db.prepare("SELECT COUNT(*) as count FROM family").get();
+  if (familyCountRow?.count > 0) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at)
+     VALUES (@id, @name, 'active', @now, @now)`
+  ).run({ id: "default", name: "Default Family", now });
+}
+
+function ensureMasterAdminKey() {
+  const envKey = (process.env.MASTER_ADMIN_KEY || "").trim();
+  if (!envKey) {
+    return false;
+  }
+  const existing = db.prepare("SELECT id FROM admin_key WHERE role = 'master' LIMIT 1").get();
+  if (existing) {
+    return true;
+  }
+  const now = Date.now();
+  const id = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
+     VALUES (@id, @hash, 'master', NULL, NULL, 'active', @now, @now)`
+  ).run({ id, hash: sha256(envKey), now });
+  return true;
+}
+
+function ensureDefaultFamilyAdminKey() {
+  const existing = db
+    .prepare(
+      "SELECT id FROM admin_key WHERE role = 'family_admin' AND family_id = 'default' LIMIT 1"
+    )
+    .get();
+  if (existing) {
+    return null;
+  }
+  const plainKey = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  const id = crypto.randomUUID();
+  db.prepare(
+    `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
+     VALUES (@id, @hash, 'family_admin', 'default', 'Default Family Admin', 'active', @now, @now)`
+  ).run({ id, hash: sha256(plainKey), now });
+  return plainKey;
+}
+
+ensureDefaultFamily();
+const masterKeyPresent = ensureMasterAdminKey();
+const defaultFamilyAdminKey = ensureDefaultFamilyAdminKey();
+
+const familyCount = db.prepare("SELECT COUNT(*) as count FROM family").get()?.count ?? 0;
+const adminKeyCount = db.prepare("SELECT COUNT(*) as count FROM admin_key").get()?.count ?? 0;
+
+console.log(`families: ${familyCount}`);
+console.log(`admin_keys: ${adminKeyCount}`);
+if (!masterKeyPresent) {
+  console.warn("MASTER_ADMIN_KEY env var missing or blank; master admin key not created");
+}
+if (defaultFamilyAdminKey) {
+  console.log("[DEV ONLY] Default family admin key:", defaultFamilyAdminKey);
+}
+
+process.exit(0);

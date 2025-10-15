@@ -1,6 +1,7 @@
 // server/ledger/core.js — unified ledger helpers
 import crypto from "node:crypto";
 import db from "../db.js";
+import { MULTITENANT_ENFORCE } from "../config.js";
 
 const LEDGER_VERBS = new Set(["earn", "redeem", "refund", "adjust"]);
 
@@ -28,15 +29,74 @@ function resolveVerb(verb, amount) {
   return "adjust";
 }
 
-function fetchBalance(userId) {
-  const row = db.prepare("SELECT COALESCE(SUM(amount), 0) AS balance FROM ledger WHERE user_id = ?").get(userId);
+let selectMemberFamilyStmt = null;
+
+function getMemberFamilyRow(userId) {
+  try {
+    if (!selectMemberFamilyStmt) {
+      selectMemberFamilyStmt = db.prepare(
+        "SELECT family_id FROM member WHERE LOWER(id) = LOWER(?) LIMIT 1"
+      );
+    }
+    return selectMemberFamilyStmt.get(userId);
+  } catch (err) {
+    if (err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || "")) {
+      selectMemberFamilyStmt = null;
+      return null;
+    }
+    throw err;
+  }
+}
+
+function resolveFamilyId(userId, explicitFamilyId = null) {
+  const normalizedExplicit = explicitFamilyId ? String(explicitFamilyId) : null;
+  const row = getMemberFamilyRow(userId);
+  const memberFamily = row?.family_id || null;
+  if (normalizedExplicit) {
+    if (memberFamily && memberFamily !== normalizedExplicit) {
+      if (MULTITENANT_ENFORCE) {
+        const err = new Error("FAMILY_SCOPE_MISMATCH");
+        err.status = 403;
+        throw err;
+      }
+      return memberFamily;
+    }
+    if (!memberFamily && MULTITENANT_ENFORCE) {
+      const err = new Error("FAMILY_SCOPE_UNKNOWN_MEMBER");
+      err.status = 404;
+      throw err;
+    }
+    return normalizedExplicit;
+  }
+  if (memberFamily) {
+    return memberFamily;
+  }
+  if (!MULTITENANT_ENFORCE) {
+    return "default";
+  }
+  return null;
+}
+
+function fetchBalance(userId, familyId = null) {
+  const resolvedFamilyId = resolveFamilyId(userId, familyId);
+  if (resolvedFamilyId) {
+    const row = db
+      .prepare(
+        "SELECT COALESCE(SUM(amount), 0) AS balance FROM ledger WHERE user_id = ? AND family_id = ?"
+      )
+      .get(userId, resolvedFamilyId);
+    return Number(row?.balance ?? 0);
+  }
+  const row = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) AS balance FROM ledger WHERE user_id = ?")
+    .get(userId);
   return Number(row?.balance ?? 0);
 }
 
-export function balanceOf(memberId) {
+export function balanceOf(memberId, familyId = null) {
   const normalized = normalizeId(memberId);
   if (!normalized) return 0;
-  return fetchBalance(normalized);
+  return fetchBalance(normalized, familyId);
 }
 
 export function ensureMemberAccount(memberId) {
@@ -61,6 +121,7 @@ function coerceAmount(rawAmount, verb) {
 
 export function recordLedgerEntry({
   userId,
+  familyId = null,
   amount,
   verb,
   description = null,
@@ -94,10 +155,27 @@ export function recordLedgerEntry({
   const resolvedVerb = resolveVerb(verb, Number(amount));
   const signedAmount = coerceAmount(amount, resolvedVerb);
 
+  const resolvedFamilyId = resolveFamilyId(normalizedUser, familyId);
+  if (!resolvedFamilyId && MULTITENANT_ENFORCE) {
+    const err = new Error("FAMILY_SCOPE_REQUIRED");
+    err.status = 400;
+    throw err;
+  }
+
   const ledgerKey = idempotencyKey ? String(idempotencyKey).trim() : null;
   if (ledgerKey) {
     const existing = db.prepare("SELECT * FROM ledger WHERE idempotency_key = ?").get(ledgerKey);
     if (existing) {
+      if (
+        MULTITENANT_ENFORCE &&
+        resolvedFamilyId &&
+        existing.family_id &&
+        existing.family_id !== resolvedFamilyId
+      ) {
+        const err = new Error("IDEMPOTENCY_FAMILY_MISMATCH");
+        err.status = 409;
+        throw err;
+      }
       return {
         id: existing.id,
         balance_after: Number(existing.balance_after),
@@ -106,7 +184,7 @@ export function recordLedgerEntry({
     }
   }
 
-  const balanceBefore = fetchBalance(normalizedUser);
+  const balanceBefore = fetchBalance(normalizedUser, resolvedFamilyId);
   const balanceAfter = balanceBefore + signedAmount;
   if (balanceAfter < 0) {
     const err = new Error("INSUFFICIENT_FUNDS");
@@ -123,6 +201,7 @@ export function recordLedgerEntry({
     `INSERT INTO ledger (
       id,
       user_id,
+      family_id,
       actor_id,
       reward_id,
       parent_hold_id,
@@ -147,12 +226,13 @@ export function recordLedgerEntry({
       user_agent,
       created_at,
       updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
 
   insert.run(
     id,
     normalizedUser,
+    resolvedFamilyId,
     trimmedActor,
     trimmedReward,
     trimmedHold,
@@ -182,10 +262,11 @@ export function recordLedgerEntry({
   return { id, balance_after: balanceAfter };
 }
 
-export function earn({ memberId, amount, reason = null, actorId = null, idempotencyKey = null, source = null, tags = null, campaignId = null, metadata = null, sourceId = null } = {}) {
+export function earn({ memberId, amount, reason = null, actorId = null, idempotencyKey = null, source = null, tags = null, campaignId = null, metadata = null, sourceId = null, familyId = null } = {}) {
   const entryMetadata = metadata ?? (sourceId ? { sourceId } : null);
   const result = recordLedgerEntry({
     userId: memberId,
+    familyId,
     amount,
     verb: 'earn',
     description: reason || 'earn',
@@ -199,9 +280,10 @@ export function earn({ memberId, amount, reason = null, actorId = null, idempote
   return result.id;
 }
 
-export function redeem({ memberId, amount, rewardId = null, actorId = null, holdId = null, idempotencyKey = null, source = null, tags = null, campaignId = null, metadata = null } = {}) {
+export function redeem({ memberId, amount, rewardId = null, actorId = null, holdId = null, idempotencyKey = null, source = null, tags = null, campaignId = null, metadata = null, familyId = null } = {}) {
   const result = recordLedgerEntry({
     userId: memberId,
+    familyId,
     amount,
     verb: 'redeem',
     rewardId,
