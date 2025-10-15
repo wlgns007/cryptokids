@@ -166,6 +166,48 @@
       align-items: center;
     }
 
+    .admin-whoami {
+      display: grid;
+      gap: 4px;
+      min-width: 220px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: rgba(37, 99, 235, 0.08);
+      color: var(--fg);
+      box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+    }
+
+    .admin-whoami-role {
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .admin-whoami-scope {
+      display: grid;
+      gap: 6px;
+    }
+
+    .admin-whoami-scope-picker {
+      display: grid;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .admin-whoami-scope-picker select {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 6px 8px;
+      font-size: 13px;
+      color: inherit;
+      background: #fff;
+    }
+
+    .admin-whoami-summary {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
     .header-intro {
       display: grid;
       gap: 6px;
@@ -842,6 +884,10 @@
         width: 100%;
       }
 
+      .header-actions .admin-whoami {
+        width: 100%;
+      }
+
       .jump-links {
         margin: 0;
       }
@@ -878,6 +924,18 @@
             <input id="adminKey" type="text" placeholder="enter admin key">
           </label>
           <button id="saveAdminKey">Save</button>
+        </div>
+        <div class="admin-whoami" id="adminWhoami" hidden>
+          <div class="admin-whoami-role" id="adminRoleLabel">&nbsp;</div>
+          <div class="admin-whoami-scope">
+            <label id="familyScopeWrapper" class="admin-whoami-scope-picker" hidden>
+              <span>Family scope</span>
+              <select id="familyScopeSelect">
+                <option value="">Select a family</option>
+              </select>
+            </label>
+            <div id="familyScopeSummary" class="admin-whoami-summary" hidden></div>
+          </div>
         </div>
       </div>
     </header>

@@ -122,6 +122,20 @@ function initAdmin() {
   const keyInput = $k('adminKey'); // use current ID
   const memoryStore = {};
 
+  const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
+  const adminState = {
+    role: null,
+    familyId: null,
+    families: [],
+    currentFamilyId: null
+  };
+
+  const whoamiBanner = $k('adminWhoami');
+  const whoamiRoleLabel = $k('adminRoleLabel');
+  const familyScopeWrapper = $k('familyScopeWrapper');
+  const familyScopeSelect = $k('familyScopeSelect');
+  const familyScopeSummary = $k('familyScopeSummary');
+
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
     installButtonSelector: '#installBtn'
@@ -160,6 +174,154 @@ function initAdmin() {
     }
     delete memoryStore[key];
     return ok;
+  }
+
+  function loadAdminContext() {
+    try {
+      const raw = storageGet(ADMIN_CONTEXT_STORAGE);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return {
+        role: parsed.role ?? null,
+        family_id: parsed.family_id ?? null,
+        currentFamilyId: parsed.currentFamilyId ?? null
+      };
+    } catch (error) {
+      console.warn('Unable to parse stored admin context', error);
+      return null;
+    }
+  }
+
+  function saveAdminContext(context) {
+    if (!context || (context.role == null && context.family_id == null && context.currentFamilyId == null)) {
+      storageRemove(ADMIN_CONTEXT_STORAGE);
+      return;
+    }
+    try {
+      storageSet(ADMIN_CONTEXT_STORAGE, JSON.stringify(context));
+    } catch (error) {
+      console.warn('Unable to persist admin context', error);
+    }
+  }
+
+  function clearAdminContext() {
+    adminState.role = null;
+    adminState.familyId = null;
+    adminState.families = [];
+    adminState.currentFamilyId = null;
+    window.currentFamilyId = null;
+    saveAdminContext(null);
+    updateWhoamiBanner();
+  }
+
+  function setAdminState(partial = {}, { persist = true } = {}) {
+    if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
+      adminState.role = partial.role ?? null;
+    }
+    if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
+      adminState.familyId = partial.family_id ?? null;
+    }
+    if (Object.prototype.hasOwnProperty.call(partial, 'families')) {
+      adminState.families = Array.isArray(partial.families) ? partial.families.slice() : [];
+    }
+    if (Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId')) {
+      adminState.currentFamilyId = partial.currentFamilyId || null;
+    } else if (adminState.role === 'family_admin') {
+      adminState.currentFamilyId = adminState.familyId || null;
+    }
+    window.currentFamilyId = adminState.currentFamilyId || null;
+    if (persist) {
+      saveAdminContext({
+        role: adminState.role,
+        family_id: adminState.familyId,
+        currentFamilyId: adminState.currentFamilyId
+      });
+    }
+    updateWhoamiBanner();
+  }
+
+  function findFamilyLabel(familyId) {
+    if (!familyId) return '';
+    const entry = adminState.families.find((family) => family && family.id === familyId);
+    if (!entry) return familyId;
+    return entry.name ? `${entry.name} (${entry.id})` : entry.id;
+  }
+
+  function updateWhoamiBanner() {
+    if (!whoamiBanner) return;
+    const { role, familyId, families, currentFamilyId } = adminState;
+    if (!role) {
+      whoamiBanner.hidden = true;
+      if (familyScopeWrapper) familyScopeWrapper.hidden = true;
+      if (familyScopeSummary) familyScopeSummary.hidden = true;
+      return;
+    }
+
+    whoamiBanner.hidden = false;
+    if (whoamiRoleLabel) {
+      let roleLabel = '';
+      if (role === 'master') {
+        roleLabel = 'Master admin';
+      } else if (role === 'family_admin') {
+        roleLabel = familyId ? `Family admin · ${familyId}` : 'Family admin';
+      } else if (role) {
+        roleLabel = role;
+      } else {
+        roleLabel = 'Admin';
+      }
+      whoamiRoleLabel.textContent = roleLabel;
+    }
+
+    if (role === 'master') {
+      if (familyScopeWrapper) {
+        familyScopeWrapper.hidden = false;
+      }
+      if (familyScopeSelect) {
+        const existingValue = familyScopeSelect.value;
+        familyScopeSelect.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = families && families.length ? 'Select a family' : 'No families available';
+        familyScopeSelect.appendChild(placeholder);
+        if (Array.isArray(families)) {
+          for (const family of families) {
+            if (!family || !family.id) continue;
+            const option = document.createElement('option');
+            option.value = family.id;
+            option.textContent = family.name ? `${family.name} (${family.id})` : family.id;
+            familyScopeSelect.appendChild(option);
+          }
+        }
+        const desired = currentFamilyId || '';
+        familyScopeSelect.value = desired;
+        if (familyScopeSelect.value !== desired) {
+          familyScopeSelect.value = '';
+        }
+      }
+      if (familyScopeSummary) {
+        familyScopeSummary.hidden = false;
+        familyScopeSummary.textContent = currentFamilyId
+          ? `Family scope: ${findFamilyLabel(currentFamilyId)}`
+          : 'Choose a family to manage';
+      }
+    } else {
+      if (familyScopeWrapper) {
+        familyScopeWrapper.hidden = true;
+      }
+      if (familyScopeSummary) {
+        const scopeLabel = adminState.currentFamilyId || familyId;
+        if (scopeLabel) {
+          familyScopeSummary.hidden = false;
+          familyScopeSummary.textContent = `Family scope: ${findFamilyLabel(scopeLabel)}`;
+        } else {
+          familyScopeSummary.hidden = true;
+        }
+      }
+      if (familyScopeSelect) {
+        familyScopeSelect.innerHTML = '';
+      }
+    }
   }
 
   function ensureMemberPanelStyles() {
@@ -330,7 +492,7 @@ details.member-fold .summary-value {
 
   if (keyInput) {
     keyInput.placeholder = 'enter admin key';
-    const saved = storageGet('CK_ADMIN_KEY');
+    const saved = loadAdminKey();
     if (saved) keyInput.value = saved;
   }
 
@@ -461,18 +623,47 @@ details.member-fold .summary-value {
     return storageSet(ADMIN_KEY_STORAGE, value);
   }
 
-  $('saveAdminKey')?.addEventListener('click', () => {
+  function loadAdminKey() {
+    return storageGet(ADMIN_KEY_STORAGE);
+  }
+
+  $('saveAdminKey')?.addEventListener('click', async () => {
     const value = (keyInput?.value || '').trim();
     const persisted = saveAdminKey(value);
     toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
     if (value) {
-      loadFeatureFlagsFromServer();
+      const ok = await refreshAdminContext({ showToastOnError: true });
+      if (ok) {
+        await loadFeatureFlagsFromServer();
+        await reloadScopedData();
+      }
+    } else {
+      clearAdminContext();
     }
   });
 
-  document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', async () => {
     const saved = loadAdminKey();
     if (saved && keyInput) keyInput.value = saved;
+    const storedContext = loadAdminContext();
+    if (storedContext) {
+      setAdminState(storedContext, { persist: false });
+    } else {
+      updateWhoamiBanner();
+    }
+    if (saved) {
+      const ok = await refreshAdminContext({ silent: true });
+      if (ok) {
+        await loadFeatureFlagsFromServer();
+        await reloadScopedData();
+      }
+    }
+  });
+
+  familyScopeSelect?.addEventListener('change', async () => {
+    const selected = familyScopeSelect.value || null;
+    setAdminState({ currentFamilyId: selected });
+    await reloadScopedData();
   });
 
   async function loadFeatureFlagsFromServer() {
@@ -495,11 +686,8 @@ details.member-fold .summary-value {
   function ensureAdminKey() {
     return getAdminKey();
   }
-  function ensureAdminKey() {
-    return getAdminKey();
-  }
   async function adminFetch(url, opts = {}) {
-    const { idempotencyKey, headers: extraHeaders, ...fetchOpts } = opts;
+    const { idempotencyKey, headers: extraHeaders, skipScope = false, ...fetchOpts } = opts;
     const key = ensureAdminKey();
     if (!key) {
       return {
@@ -517,11 +705,79 @@ details.member-fold .summary-value {
       'x-actor-role': 'admin',
       ...(extraHeaders || {})
     };
+    if (!skipScope) {
+      const scopeId = adminState.currentFamilyId || null;
+      if (scopeId) {
+        headers['x-act-as-family'] = scopeId;
+      }
+    }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const res = await fetch(url, { ...fetchOpts, headers });
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
+  }
+
+  async function reloadScopedData() {
+    const loaders = [loadMembersList, loadRewards, loadTemplates, loadHolds, loadActivity];
+    for (const loader of loaders) {
+      if (typeof loader !== 'function') continue;
+      try {
+        await loader();
+      } catch (error) {
+        console.warn('Scoped data reload failed', error);
+      }
+    }
+  }
+
+  async function refreshAdminContext({ showToastOnError = false, silent = false } = {}) {
+    const key = ensureAdminKey();
+    if (!key) {
+      clearAdminContext();
+      return false;
+    }
+    try {
+      const { res, body } = await adminFetch('/api/whoami', { skipScope: true });
+      if (!res.ok) {
+        const message = body && typeof body === 'object' ? body.error || res.statusText : res.statusText;
+        throw new Error(message || 'Unable to verify admin key');
+      }
+      const payload = body && typeof body === 'object' ? body : {};
+      const nextState = {
+        role: payload.role ?? null,
+        family_id: payload.family_id ?? null
+      };
+      if (nextState.role === 'master') {
+        const { res: famRes, body: famBody } = await adminFetch('/api/families', { skipScope: true });
+        if (famRes.ok && Array.isArray(famBody)) {
+          nextState.families = famBody;
+          const previous = adminState.currentFamilyId;
+          let scope = previous && famBody.some((family) => family?.id === previous) ? previous : null;
+          if (!scope && famBody.length) {
+            scope = famBody[0]?.id || null;
+          }
+          nextState.currentFamilyId = scope || null;
+        } else {
+          console.warn('Unable to fetch family list', famBody);
+          nextState.currentFamilyId = adminState.currentFamilyId || null;
+        }
+      } else if (nextState.role === 'family_admin') {
+        nextState.currentFamilyId = nextState.family_id || null;
+      } else {
+        nextState.currentFamilyId = null;
+      }
+      setAdminState(nextState);
+      return true;
+    } catch (error) {
+      if (!silent) {
+        console.warn('Admin context refresh failed', error);
+      }
+      if (showToastOnError) {
+        toast(error?.message || 'Admin key validation failed', 'error');
+      }
+      clearAdminContext();
+      return false;
+    }
   }
 
   const ERROR_MESSAGES = {

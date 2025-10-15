@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -9,6 +9,7 @@ process.env.NODE_ENV = 'test';
 const TEST_DB = path.join(process.cwd(), 'data', `test-holds-${randomUUID()}.db`);
 process.env.DB_PATH = TEST_DB;
 process.env.CK_REFUND_WINDOW_DAYS = '30';
+const DEFAULT_FAMILY_ID = 'default';
 
 const fetch = globalThis.fetch;
 
@@ -18,6 +19,25 @@ const {
   __resetRefundRateLimiter
 } = await import('../index.js');
 import db from '../db.js';
+
+function ensureDefaultFamily() {
+  const now = Date.now();
+  db.prepare(
+    "INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)"
+  ).run(DEFAULT_FAMILY_ID, 'Default Family', now, now);
+}
+
+function ensureFamilyAdminKey(key = 'Mamapapa', familyId = DEFAULT_FAMILY_ID) {
+  const now = Date.now();
+  const hash = createHash('sha256').update(key).digest('hex');
+  db.prepare(
+    `INSERT OR IGNORE INTO admin_key (id, key_hash, role, family_id, status, created_at, updated_at)
+     VALUES (?, ?, 'family_admin', ?, 'active', ?, ?)`
+  ).run(`test-admin-${familyId}`, hash, familyId, now, now);
+}
+
+ensureDefaultFamily();
+ensureFamilyAdminKey();
 
 test.after(() => {
   fs.rmSync(TEST_DB, { force: true });
@@ -35,25 +55,35 @@ function resetDatabase() {
   `);
   db.exec('PRAGMA foreign_keys = ON;');
   __resetRefundRateLimiter();
+  ensureDefaultFamily();
+  ensureFamilyAdminKey();
 }
 
-function insertMember(id, name = id) {
+function insertMember(id, name = id, familyId = DEFAULT_FAMILY_ID) {
   const now = Date.now();
   db.prepare(
-    'INSERT OR REPLACE INTO member (id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(id, name, 'active', now, now);
+    "INSERT INTO member (id, family_id, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)\n       ON CONFLICT(id) DO UPDATE SET\n         family_id=excluded.family_id,\n         name=excluded.name,\n         status=excluded.status,\n         updated_at=excluded.updated_at"
+  ).run(id, familyId, name, 'active', now, now);
 }
 
 test('hold endpoints include state hints and honor admin gating', async (t) => {
   resetDatabase();
   insertMember('kid', 'Kid Tester');
-  applyLedger({ userId: 'kid', delta: 150, action: 'earn_seed', note: 'seed', actor: 'tester', verb: 'earn' });
+  applyLedger({
+    userId: 'kid',
+    delta: 150,
+    action: 'earn_seed',
+    note: 'seed',
+    actor: 'tester',
+    verb: 'earn',
+    familyId: DEFAULT_FAMILY_ID
+  });
 
   const rewardId = 'lego-set';
   const now = Date.now();
   db.prepare(
-    'INSERT INTO reward (id, name, cost, description, image_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)' 
-  ).run(rewardId, 'Lego Set', 50, 'Blocks', '', 'active', now, now);
+    'INSERT INTO reward (id, family_id, name, cost, description, image_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)' 
+  ).run(rewardId, DEFAULT_FAMILY_ID, 'Lego Set', 50, 'Blocks', '', 'active', now, now);
 
   const server = app.listen(0);
   await once(server, 'listening');
@@ -122,7 +152,7 @@ test('hold endpoints include state hints and honor admin gating', async (t) => {
   });
   assert.equal(unauthorizedRes.status, 401);
   const unauthorizedBody = await unauthorizedRes.json();
-  assert.deepEqual(unauthorizedBody, { error: 'UNAUTHORIZED' });
+  assert.deepEqual(unauthorizedBody, { error: 'missing admin key' });
 
   const cancelRes = await fetch(`${base}/api/holds/${secondReserveBody.holdId}/cancel`, {
     method: 'POST',

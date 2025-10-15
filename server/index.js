@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import QRCode from "qrcode";
 import db, { DATA_DIR } from "./db.js";
+import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
@@ -21,6 +22,182 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
 const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
+
+const selectAdminKeyStmt = db.prepare(
+  "SELECT id, role, family_id, label, status FROM admin_key WHERE key_hash = ? AND status = 'active' LIMIT 1"
+);
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex");
+}
+
+function getAdminFromKey(plainKey) {
+  const normalized = (plainKey ?? "").toString().trim();
+  if (!normalized) {
+    return null;
+  }
+  const hash = sha256(normalized);
+  const row = selectAdminKeyStmt.get(hash);
+  return row || null;
+}
+
+function authenticateAdmin(req, res, next) {
+  const key = (req.header("X-ADMIN-KEY") || "").toString().trim();
+  if (!key) {
+    res.status(401).json({ error: "missing admin key" });
+    return;
+  }
+  const admin = getAdminFromKey(key);
+  if (!admin) {
+    res.status(403).json({ error: "invalid key" });
+    return;
+  }
+  req.auth = {
+    admin_id: admin.id,
+    family_id: admin.family_id ?? null,
+    role: admin.role
+  };
+  next();
+}
+
+function createFamilyScopeResolver(options = {}) {
+  const { requireFamilyId = true } = options;
+
+  return function resolveFamilyScope(req, res, next) {
+    if (!MULTITENANT_ENFORCE) {
+      next();
+      return;
+    }
+
+    if (!req.auth?.role) {
+      res.status(403).json({ error: "unauthorized" });
+      return;
+    }
+
+    if (req.auth.role === "family_admin") {
+      if (!req.auth.family_id) {
+        res.status(403).json({ error: "family scope missing" });
+        return;
+      }
+      req.scope = { family_id: req.auth.family_id };
+      next();
+      return;
+    }
+
+    if (req.auth.role === "master") {
+      const headerScope = (req.header("X-Act-As-Family") || "").toString().trim();
+      const queryScope = (req.query?.family_id || "").toString().trim();
+      const familyId = headerScope || queryScope;
+      if (!familyId) {
+        if (requireFamilyId) {
+          res.status(400).json({ error: "family_id required" });
+          return;
+        }
+        req.scope = { family_id: null };
+        next();
+        return;
+      }
+      req.scope = { family_id: familyId };
+      next();
+      return;
+    }
+
+    res.status(403).json({ error: "unsupported role" });
+  };
+}
+
+const resolveFamilyScope = createFamilyScopeResolver({ requireFamilyId: true });
+
+function requireMaster(req, res, next) {
+  if (req.auth?.role !== "master") {
+    res.status(403).json({ error: "master only" });
+    return;
+  }
+  next();
+}
+
+function tableHasColumn(table, column) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+    return rows.some((row) => row.name === column);
+  } catch {
+    return false;
+  }
+}
+
+function ensureEarnTemplatesSchema() {
+  const exists = !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'earn_templates'")
+    .get();
+  if (!exists) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS earn_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        points INTEGER NOT NULL,
+        description TEXT,
+        youtube_url TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+  }
+  if (!tableHasColumn("earn_templates", "family_id")) {
+    db.exec("ALTER TABLE earn_templates ADD COLUMN family_id TEXT");
+    db.prepare("UPDATE earn_templates SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_earn_templates_family ON earn_templates(family_id)");
+}
+
+ensureEarnTemplatesSchema();
+
+const EARN_TEMPLATES_HAS_FAMILY_COLUMN = tableHasColumn("earn_templates", "family_id");
+let REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
+if (!REWARD_HAS_FAMILY_COLUMN) {
+  try {
+    db.exec("ALTER TABLE reward ADD COLUMN family_id TEXT");
+    db.prepare("UPDATE reward SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
+    REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
+    if (REWARD_HAS_FAMILY_COLUMN) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
+    }
+  } catch (err) {
+    if (!(err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || ""))) {
+      console.warn("[multitenant] unable to ensure reward.family_id column", err);
+    }
+  }
+}
+if (REWARD_HAS_FAMILY_COLUMN) {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
+}
+
+const insertFamilyStmt = db.prepare(
+  `INSERT INTO family (id, name, status, created_at, updated_at)
+   VALUES (@id, @name, 'active', @now, @now)`
+);
+const selectFamilyByIdStmt = db.prepare(
+  "SELECT id, name, status FROM family WHERE id = ? LIMIT 1"
+);
+const listFamiliesStmt = db.prepare(
+  "SELECT id, name, status FROM family ORDER BY created_at DESC, id DESC"
+);
+
+const insertAdminKeyStmt = db.prepare(
+  `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
+   VALUES (@id, @hash, 'family_admin', @family_id, @label, 'active', @now, @now)`
+);
+const listAdminKeysByFamilyStmt = db.prepare(
+  `SELECT id, label, status, created_at, updated_at
+   FROM admin_key
+   WHERE family_id = @family_id AND role = 'family_admin'
+   ORDER BY created_at DESC`
+);
+const getAdminKeyByIdStmt = db.prepare(
+  `SELECT id, role, family_id, label, status FROM admin_key WHERE id = ? LIMIT 1`
+);
 
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
 const PORT = process.env.PORT || 4000;
@@ -49,7 +226,8 @@ const REFUND_RATE_WINDOW_MS = 60 * 60 * 1000;
 const refundRateLimiter = new Map();
 
 const FEATURE_FLAGS = Object.freeze({
-  refunds: (process.env.FEATURE_REFUNDS ?? "true").toString().toLowerCase() !== "false"
+  refunds: (process.env.FEATURE_REFUNDS ?? "true").toString().toLowerCase() !== "false",
+  multitenantEnforce: MULTITENANT_ENFORCE
 });
 
 let BUILD = (process.env.BUILD_VERSION || process.env.RENDER_GIT_COMMIT || process.env.COMMIT_HASH || "").trim();
@@ -84,6 +262,138 @@ const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
+
+app.get("/api/whoami", authenticateAdmin, (req, res) => {
+  if (req.auth?.role === "master") {
+    res.json({ role: "master" });
+    return;
+  }
+  if (req.auth?.role === "family_admin") {
+    res.json({ role: "family_admin", family_id: req.auth.family_id ?? null });
+    return;
+  }
+  res.json({ role: req.auth?.role ?? null });
+});
+
+app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
+  const name = (req.body?.name ?? "").toString().trim();
+  if (!name) {
+    res.status(400).json({ error: "name required" });
+    return;
+  }
+  const now = Date.now();
+  const id = crypto.randomUUID();
+  insertFamilyStmt.run({ id, name, now });
+  res.json({ id, name });
+});
+
+app.get("/api/families", authenticateAdmin, requireMaster, (_req, res) => {
+  const families = listFamiliesStmt.all();
+  res.json(families);
+});
+
+app.post("/api/admin-keys", authenticateAdmin, requireMaster, (req, res) => {
+  const body = req.body ?? {};
+  const familyId = (body.family_id ?? "").toString().trim();
+  const hasLabel = Object.prototype.hasOwnProperty.call(body, "label");
+  let label =
+    !hasLabel || body.label === null || body.label === undefined
+      ? null
+      : String(body.label).trim();
+  if (label !== null && label.length === 0) {
+    label = null;
+  }
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  const family = selectFamilyByIdStmt.get(familyId);
+  if (!family) {
+    res.status(404).json({ error: "family not found" });
+    return;
+  }
+  const plainKey = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  const id = crypto.randomUUID();
+  insertAdminKeyStmt.run({
+    id,
+    hash: sha256(plainKey),
+    family_id: family.id,
+    label,
+    now
+  });
+  res.json({ id, plain_key: plainKey });
+});
+
+app.get("/api/admin-keys", authenticateAdmin, requireMaster, (req, res) => {
+  const familyId = (req.query?.family_id ?? "").toString().trim();
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  const keys = listAdminKeysByFamilyStmt.all({ family_id: familyId });
+  res.json(keys);
+});
+
+app.patch("/api/admin-keys/:id", authenticateAdmin, requireMaster, (req, res) => {
+  const keyId = req.params?.id;
+  if (!keyId) {
+    res.status(404).json({ error: "admin key not found" });
+    return;
+  }
+  const existing = getAdminKeyByIdStmt.get(keyId);
+  if (!existing) {
+    res.status(404).json({ error: "admin key not found" });
+    return;
+  }
+  if (existing.role !== "family_admin") {
+    res.status(400).json({ error: "cannot modify this admin key" });
+    return;
+  }
+
+  const updates = [];
+  const params = { id: keyId, now: Date.now() };
+  const body = req.body ?? {};
+  if (Object.prototype.hasOwnProperty.call(body, "label")) {
+    const rawLabel = body.label;
+    if (rawLabel === null || rawLabel === undefined) {
+      params.label = null;
+    } else {
+      const trimmed = String(rawLabel).trim();
+      params.label = trimmed.length === 0 ? null : trimmed;
+    }
+    updates.push("label = @label");
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "status")) {
+    const statusValue = (body.status ?? "").toString().trim().toLowerCase();
+    const allowedStatuses = new Set(["active", "disabled"]);
+    if (!allowedStatuses.has(statusValue)) {
+      res.status(400).json({ error: "invalid status" });
+      return;
+    }
+    params.status = statusValue;
+    updates.push("status = @status");
+  }
+
+  if (updates.length === 0) {
+    res.status(400).json({ error: "no changes requested" });
+    return;
+  }
+  updates.push("updated_at = @now");
+
+  const updateStatement = db.prepare(
+    `UPDATE admin_key SET ${updates.join(", ")} WHERE id = @id`
+  );
+  updateStatement.run(params);
+
+  const refreshed = getAdminKeyByIdStmt.get(keyId);
+  res.json({
+    id: refreshed.id,
+    label: refreshed.label,
+    status: refreshed.status,
+    updated_at: refreshed.updated_at
+  });
+});
 
 app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
   sendVersioned(res, "child.html");
@@ -570,7 +880,10 @@ function rebuildLedgerTableIfLegacy() {
   const sys = db.prepare("SELECT 1 FROM member WHERE id = 'system'").get();
   if (!sys) {
     const ts = Date.now();
-    db.prepare(`INSERT INTO member (id, name, status, created_at, updated_at) VALUES ('system','System','active',?,?)`).run(ts, ts);
+    db.prepare(`
+      INSERT INTO member (id, family_id, name, status, created_at, updated_at)
+      VALUES ('system', 'default', 'System', 'active', ?, ?)
+    `).run(ts, ts);
   }
 
   db.exec("PRAGMA foreign_keys = OFF;");
@@ -602,6 +915,7 @@ function rebuildLedgerTableIfLegacy() {
       refund_reason TEXT,
       refund_notes TEXT,
       idempotency_key TEXT,
+      family_id TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES member(id) ON DELETE CASCADE,
       FOREIGN KEY (reward_id) REFERENCES reward(id),
       FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
@@ -746,6 +1060,7 @@ function ensureLedgerSchema() {
       refund_reason TEXT,
       refund_notes TEXT,
       idempotency_key TEXT,
+      family_id TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES member(id),
       FOREIGN KEY (reward_id) REFERENCES reward(id),
       FOREIGN KEY (parent_hold_id) REFERENCES hold(id),
@@ -795,6 +1110,7 @@ function ensureMemberTable() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS member (
       id TEXT PRIMARY KEY,
+      family_id TEXT NOT NULL,
       name TEXT NOT NULL,
       date_of_birth TEXT,
       sex TEXT,
@@ -847,6 +1163,7 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
       id TEXT PRIMARY KEY,
+      family_id TEXT NOT NULL,
       name TEXT NOT NULL,
       cost INTEGER NOT NULL,
       description TEXT DEFAULT '',
@@ -924,7 +1241,7 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS spend_request (
       id TEXT PRIMARY KEY,
-      token TEXT UNIQUE NOT NULL,
+      token TEXT UNIQUE,
       user_id TEXT NOT NULL,
       reward_id TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -960,7 +1277,7 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ledger (
       id TEXT PRIMARY KEY,
-      token TEXT UNIQUE NOT NULL,
+      token TEXT UNIQUE,
       user_id TEXT NOT NULL,
       reward_id TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -974,6 +1291,7 @@ const ensureTables = db.transaction(() => {
       campaign_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      family_id TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES member(id),
       FOREIGN KEY (reward_id) REFERENCES reward(id)
     );
@@ -1088,6 +1406,21 @@ importLegacyRewards();
 importLegacyMembers();
 ensureSystemMember();
 ensureDefaultMembers();
+
+function ensureMemberFamilyColumn() {
+  try {
+    const columns = db.prepare("PRAGMA table_info(member)").all();
+    const hasFamily = columns.some((col) => col.name === "family_id");
+    if (!hasFamily) {
+      db.exec("ALTER TABLE member ADD COLUMN family_id TEXT");
+      db.prepare("UPDATE member SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
+    }
+  } catch (err) {
+    console.warn("ensureMemberFamilyColumn failed", err);
+  }
+}
+
+ensureMemberFamilyColumn();
 function getHoldRow(holdId) {
   return db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
 }
@@ -1097,6 +1430,12 @@ function nowSec() {
 
 const selectMemberStmt = db.prepare(`
   SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  WHERE id = ?
+`);
+
+const selectMemberWithFamilyStmt = db.prepare(`
+  SELECT id, family_id, name, date_of_birth, sex, status, created_at, updated_at
   FROM member
   WHERE id = ?
 `);
@@ -1116,25 +1455,31 @@ const searchMembersStmt = db.prepare(`
   LIMIT 200
 `);
 
+const listMembersByFamilyStmt = db.prepare(`
+  SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  WHERE family_id = @family_id
+  ORDER BY id ASC
+  LIMIT 200
+`);
+
+const searchMembersByFamilyStmt = db.prepare(`
+  SELECT id, name, date_of_birth, sex, status, created_at, updated_at
+  FROM member
+  WHERE family_id = @family_id
+    AND (id LIKE @like OR LOWER(name) LIKE @like)
+  ORDER BY id ASC
+  LIMIT 200
+`);
+
 const insertMemberStmt = db.prepare(`
-  INSERT INTO member (id, name, date_of_birth, sex, status, created_at, updated_at)
-  VALUES (@id, @name, @date_of_birth, @sex, @status, @created_at, @updated_at)
+  INSERT INTO member (id, family_id, name, date_of_birth, sex, status, created_at, updated_at)
+  VALUES (@id, @family_id, @name, @date_of_birth, @sex, @status, @created_at, @updated_at)
 `);
 
-const updateMemberStmt = db.prepare(`
-  UPDATE member
-  SET name = @name,
-      date_of_birth = @date_of_birth,
-      sex = @sex,
-      status = @status,
-      updated_at = @updated_at
-  WHERE id = @id
-`);
+const insertMemberForFamilyStmt = insertMemberStmt;
 
-const deleteMemberStmt = db.prepare(`
-  DELETE FROM member
-  WHERE id = ?
-`);
+const MEMBER_HAS_FAMILY_COLUMN = tableHasColumn("member", "family_id");
 
 function ensureDefaultMembers() {
   ensureMemberTable();
@@ -1150,8 +1495,8 @@ function ensureDefaultMembers() {
 
   const checkStmt = db.prepare("SELECT 1 FROM member WHERE id = ?");
   const insertStmt = db.prepare(`
-    INSERT INTO member (id, name, date_of_birth, sex, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO member (id, family_id, name, date_of_birth, sex, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertMissing = db.transaction(members => {
@@ -1160,6 +1505,7 @@ function ensureDefaultMembers() {
         const ts = Date.now();
         insertStmt.run(
           member.id,
+          "default",
           member.name,
           member.date_of_birth,
           member.sex,
@@ -1179,8 +1525,8 @@ function ensureSystemMember() {
   if (!exists) {
     const ts = Date.now();
     db.prepare(`
-      INSERT INTO member (id, name, status, created_at, updated_at)
-      VALUES ('system', 'System', 'active', ?, ?)
+      INSERT INTO member (id, family_id, name, status, created_at, updated_at)
+      VALUES ('system', 'default', 'System', 'active', ?, ?)
     `).run(ts, ts);
   }
 }
@@ -1188,8 +1534,8 @@ function ensureSystemMember() {
 ensureDefaultMembers();
 ensureSystemMember();
 
-function getBalance(userId) {
-  return Number(balanceOf(userId) || 0);
+function getBalance(userId, familyId = null) {
+  return Number(balanceOf(userId, familyId) || 0);
 }
 
 function mapMember(row) {
@@ -1220,29 +1566,97 @@ function listMembers(search) {
   return listMembersStmt.all().map(mapMember);
 }
 
+let LEDGER_HAS_FAMILY_COLUMN = tableHasColumn("ledger", "family_id");
+if (!LEDGER_HAS_FAMILY_COLUMN) {
+  try {
+    db.exec("ALTER TABLE ledger ADD COLUMN family_id TEXT");
+    db.prepare("UPDATE ledger SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
+    LEDGER_HAS_FAMILY_COLUMN = tableHasColumn("ledger", "family_id");
+  } catch (err) {
+    if (!(err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || ""))) {
+      console.warn("[multitenant] unable to ensure ledger.family_id column", err);
+    }
+  }
+}
+
 const selectLedgerByIdStmt = db.prepare("SELECT * FROM ledger WHERE id = ?");
 const selectLedgerByKeyStmt = db.prepare("SELECT * FROM ledger WHERE idempotency_key = ?");
 const sumRefundsByParentStmt = db.prepare(
   "SELECT COALESCE(SUM(amount), 0) AS total FROM ledger WHERE parent_ledger_id = ? AND verb = 'refund'"
 );
-const listLedgerByUserStmt = db.prepare(`
+const listLedgerByUserStmt = db.prepare(
+  LEDGER_HAS_FAMILY_COLUMN
+    ? `
   SELECT *
   FROM ledger
-  WHERE user_id = ?
+  WHERE user_id = @user_id
+    AND (@family_id IS NULL OR family_id = @family_id)
   ORDER BY created_at DESC, id DESC
-`);
+`
+    : `
+  SELECT *
+  FROM ledger
+  WHERE user_id = @user_id
+  ORDER BY created_at DESC, id DESC
+`
+);
 const checkTokenStmt = db.prepare("SELECT 1 FROM consumed_tokens WHERE id = ?");
 const consumeTokenStmt = db.prepare(
   "INSERT INTO consumed_tokens (id, token, typ, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
 );
-const listRecentRedeemsStmt = db.prepare(`
+const listRecentRedeemsStmt = db.prepare(
+  LEDGER_HAS_FAMILY_COLUMN
+    ? `
   SELECT id, created_at, amount
   FROM ledger
-  WHERE user_id = ?
+  WHERE user_id = @user_id
+    AND (@family_id IS NULL OR family_id = @family_id)
     AND verb = 'redeem'
   ORDER BY created_at DESC, id DESC
   LIMIT 50
-`);
+`
+    : `
+  SELECT id, created_at, amount
+  FROM ledger
+  WHERE user_id = @user_id
+    AND verb = 'redeem'
+  ORDER BY created_at DESC, id DESC
+  LIMIT 50
+`
+);
+
+const historyPreviewByUserStmt = db.prepare(
+  LEDGER_HAS_FAMILY_COLUMN
+    ? `
+  SELECT created_at AS at, description AS action, amount AS delta, balance_after, note
+  FROM ledger
+  WHERE user_id = @user_id
+    AND (@family_id IS NULL OR family_id = @family_id)
+  ORDER BY created_at DESC, id DESC
+  LIMIT @limit
+`
+    : `
+  SELECT created_at AS at, description AS action, amount AS delta, balance_after, note
+  FROM ledger
+  WHERE user_id = @user_id
+  ORDER BY created_at DESC, id DESC
+  LIMIT @limit
+`
+);
+
+function listLedgerRowsForUser(normalizedUserId, familyId) {
+  if (LEDGER_HAS_FAMILY_COLUMN) {
+    return listLedgerByUserStmt.all({ user_id: normalizedUserId, family_id: familyId });
+  }
+  return listLedgerByUserStmt.all({ user_id: normalizedUserId });
+}
+
+function listRecentRedeemsForUser(normalizedUserId, familyId) {
+  if (LEDGER_HAS_FAMILY_COLUMN) {
+    return listRecentRedeemsStmt.all({ user_id: normalizedUserId, family_id: familyId });
+  }
+  return listRecentRedeemsStmt.all({ user_id: normalizedUserId });
+}
 const findRecentHoldsStmt = db.prepare(`
   SELECT id, status, quoted_amount, final_amount, created_at
   FROM hold
@@ -1256,6 +1670,47 @@ const countPendingHoldsStmt = db.prepare(`
   WHERE user_id = ?
     AND status = 'pending'
 `);
+
+let selectMemberFamilyStmt = null;
+
+function getMemberFamilyRow(normalizedUserId) {
+  try {
+    if (!selectMemberFamilyStmt) {
+      selectMemberFamilyStmt = db.prepare(
+        "SELECT family_id FROM member WHERE LOWER(id) = LOWER(?) LIMIT 1"
+      );
+    }
+    return selectMemberFamilyStmt.get(normalizedUserId);
+  } catch (err) {
+    if (err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || "")) {
+      selectMemberFamilyStmt = null;
+      return null;
+    }
+    throw err;
+  }
+}
+
+function resolveMemberFamilyId(normalizedUserId, explicitFamilyId = null) {
+  const normalizedExplicit = explicitFamilyId ? String(explicitFamilyId) : null;
+  if (!normalizedUserId) {
+    return normalizedExplicit ?? (MULTITENANT_ENFORCE ? null : "default");
+  }
+  const row = getMemberFamilyRow(normalizedUserId);
+  const memberFamily = row?.family_id || null;
+  if (normalizedExplicit) {
+    if (memberFamily && memberFamily !== normalizedExplicit) {
+      return MULTITENANT_ENFORCE ? null : memberFamily;
+    }
+    if (!memberFamily && MULTITENANT_ENFORCE) {
+      return null;
+    }
+    return normalizedExplicit;
+  }
+  if (memberFamily) {
+    return memberFamily;
+  }
+  return MULTITENANT_ENFORCE ? null : "default";
+}
 
 function mapLedgerRow(row) {
   if (!row) return null;
@@ -1302,7 +1757,8 @@ function mapLedgerRow(row) {
     tags: parsedTags,
     campaign_id: row.campaign_id || null,
     updated_at: row.updated_at,
-    metadata: row.metadata || null
+    metadata: row.metadata || null,
+    family_id: row.family_id || null
   };
 }
 
@@ -1374,7 +1830,8 @@ function mapRewardRow(row) {
     campaign_id: row.campaign_id || null,
     source: row.source || null,
     created_at: Number(row.created_at ?? 0) || null,
-    updated_at: Number(row.updated_at ?? 0) || null
+    updated_at: Number(row.updated_at ?? 0) || null,
+    family_id: row.family_id || null
   };
 }
 
@@ -1445,26 +1902,35 @@ function summarizeTelemetry() {
   };
 }
 
-function getStateHints(userId) {
+function buildDefaultHints() {
+  return {
+    balance: 0,
+    can_redeem: false,
+    max_redeem: 0,
+    max_redeem_for_reward: 0,
+    can_refund: false,
+    max_refund: 0,
+    refundable_redeems: [],
+    refund_window_ms: REFUND_WINDOW_MS,
+    hold_status: "unknown",
+    active_hold_id: null,
+    pending_hold_count: 0,
+    features: FEATURE_FLAGS
+  };
+}
+
+function getStateHints(userId, familyId = null) {
   const normalized = normId(userId);
   if (!normalized) {
-    return {
-      balance: 0,
-      can_redeem: false,
-      max_redeem: 0,
-      max_redeem_for_reward: 0,
-      can_refund: false,
-      max_refund: 0,
-      refundable_redeems: [],
-      refund_window_ms: REFUND_WINDOW_MS,
-      hold_status: "unknown",
-      active_hold_id: null,
-      pending_hold_count: 0,
-      features: FEATURE_FLAGS
-    };
+    return buildDefaultHints();
   }
 
-  const balance = getBalance(normalized);
+  const resolvedFamilyId = resolveMemberFamilyId(normalized, familyId);
+  if (MULTITENANT_ENFORCE && !resolvedFamilyId) {
+    return buildDefaultHints();
+  }
+
+  const balance = getBalance(normalized, resolvedFamilyId);
   const holds = findRecentHoldsStmt.all(normalized).map(row => ({
     id: row.id,
     status: row.status || 'pending',
@@ -1484,7 +1950,7 @@ function getStateHints(userId) {
   let maxRefund = 0;
   const refundableRedeems = [];
   if (FEATURE_FLAGS.refunds) {
-    const redeemRows = listRecentRedeemsStmt.all(normalized);
+    const redeemRows = listRecentRedeemsForUser(normalized, resolvedFamilyId);
     for (const row of redeemRows) {
       const redeemAmount = Math.abs(Number(row.amount) || 0);
       if (!redeemAmount) continue;
@@ -1527,8 +1993,8 @@ function getStateHints(userId) {
   return hints;
 }
 
-function buildActionResponse({ userId, txRow = null, extras = {} }) {
-  const hints = getStateHints(userId);
+function buildActionResponse({ userId, familyId = null, txRow = null, extras = {} }) {
+  const hints = getStateHints(userId, familyId ?? txRow?.family_id ?? null);
   return {
     ok: extras.ok !== undefined ? extras.ok : true,
     txId: txRow?.id ? String(txRow.id) : null,
@@ -1597,7 +2063,8 @@ function applyLedger({
   refundNotes = null,
   notes = null,
   idempotencyKey = null,
-  returnRow = false
+  returnRow = false,
+  familyId = null
 }) {
   const ip = req?.ip || null;
   const ua = req?.headers?.['user-agent'] || null;
@@ -1629,8 +2096,11 @@ function applyLedger({
       ? { token: tokenInfo.jti, type: tokenInfo.typ || null, raw: tokenInfo.token || null }
       : null;
 
+    const effectiveFamilyId = familyId ?? req?.scope?.family_id ?? null;
+
     const ledgerResult = recordLedgerEntry({
       userId,
+      familyId: effectiveFamilyId,
       amount: normalizedDelta,
       verb: resolvedVerb,
       description: action,
@@ -1724,7 +2194,7 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin = false }) {
+function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin = false, familyId = null }) {
   if (!token) {
     throw createHttpError(400, "missing_token");
   }
@@ -1771,7 +2241,8 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       actor: resolvedActor || null,
       req,
       tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: tokenSourceLabel },
-      returnRow: true
+      returnRow: true,
+      familyId
     });
     return {
       ok: true,
@@ -1801,7 +2272,8 @@ function redeemToken({ token, req, actor, isAdmin = false, allowEarnWithoutAdmin
       actor: resolvedActor || null,
       req,
       tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: tokenSourceLabel },
-      returnRow: true
+      returnRow: true,
+      familyId
     });
     return {
       ok: true,
@@ -1827,7 +2299,8 @@ function createRefundTransaction({
   notes,
   actorId,
   idempotencyKey,
-  req
+  req,
+  familyId = null
 }) {
   const normalizedUser = normId(userId);
   if (!normalizedUser) {
@@ -1859,6 +2332,14 @@ function createRefundTransaction({
       throw createHttpError(400, "REDEEM_NOT_FOUND");
     }
     const parent = mapLedgerRow(parentRaw);
+    if (
+      MULTITENANT_ENFORCE &&
+      familyId &&
+      parent?.family_id &&
+      parent.family_id !== familyId
+    ) {
+      throw createHttpError(403, "FAMILY_MISMATCH");
+    }
     if (normId(parent.userId) !== normalizedUser) {
       throw createHttpError(400, "USER_MISMATCH");
     }
@@ -1895,7 +2376,7 @@ function createRefundTransaction({
         const remaining = Math.max(0, Math.abs(Number(parent.delta)) - totalRefunded);
         const conflict = createHttpError(409, "REFUND_EXISTS");
         conflict.existing = mappedExisting;
-        conflict.balance = getBalance(normalizedUser);
+        conflict.balance = getBalance(normalizedUser, familyId);
         conflict.remaining = remaining;
         throw conflict;
       }
@@ -1928,7 +2409,8 @@ function createRefundTransaction({
       refundNotes: trimmedNotes,
       idempotencyKey: ledgerKey,
       req,
-      returnRow: true
+      returnRow: true,
+      familyId
     });
 
     const afterTotals = sumRefundsByParentStmt.get(String(parent.id));
@@ -1945,10 +2427,14 @@ function createRefundTransaction({
   return run();
 }
 
-function getLedgerViewForUser(userId) {
+function getLedgerViewForUser(userId, familyId = null) {
   const normalized = normId(userId);
   if (!normalized) return [];
-  const rows = listLedgerByUserStmt.all(normalized).map(mapLedgerRow);
+  const resolvedFamilyId = resolveMemberFamilyId(normalized, familyId);
+  if (MULTITENANT_ENFORCE && !resolvedFamilyId) {
+    return [];
+  }
+  const rows = listLedgerRowsForUser(normalized, resolvedFamilyId).map(mapLedgerRow);
   const refundsByParent = new Map();
   for (const row of rows) {
     if (row.verb === "refund" && row.parent_tx_id) {
@@ -2000,7 +2486,7 @@ function getLedgerViewForUser(userId) {
 
   return {
     userId,
-    balance: getBalance(userId),
+    balance: getBalance(userId, resolvedFamilyId),
     rows,
     redeems,
     summary
@@ -2446,20 +2932,41 @@ app.get("/version", (_req, res) => {
 app.get("/balance/:userId", (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
-  res.json({ balance: getBalance(userId) });
+  const familyId = resolveMemberFamilyId(userId);
+  if (MULTITENANT_ENFORCE && !familyId) {
+    return res.status(404).json({ error: "member_family_missing" });
+  }
+  res.json({ balance: getBalance(userId, familyId) });
 });
 
 app.get("/summary/:userId", (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
-  const balance = getBalance(userId);
-  const sums = db.prepare(`
+  const familyId = resolveMemberFamilyId(userId);
+  if (MULTITENANT_ENFORCE && !familyId) {
+    return res.status(404).json({ error: "member_family_missing" });
+  }
+  const balance = getBalance(userId, familyId);
+  const summarySql = LEDGER_HAS_FAMILY_COLUMN
+    ? `
     SELECT
       SUM(CASE WHEN description LIKE 'earn_%' THEN amount ELSE 0 END) AS earned,
       SUM(CASE WHEN description LIKE 'spend_%' THEN ABS(amount) ELSE 0 END) AS spent
     FROM ledger
-    WHERE user_id = ?
-  `).get(userId);
+    WHERE user_id = @user_id
+      AND (@family_id IS NULL OR family_id = @family_id)
+  `
+    : `
+    SELECT
+      SUM(CASE WHEN description LIKE 'earn_%' THEN amount ELSE 0 END) AS earned,
+      SUM(CASE WHEN description LIKE 'spend_%' THEN ABS(amount) ELSE 0 END) AS spent
+    FROM ledger
+    WHERE user_id = @user_id
+  `;
+  const summaryParams = LEDGER_HAS_FAMILY_COLUMN
+    ? { user_id: userId, family_id: familyId }
+    : { user_id: userId };
+  const sums = db.prepare(summarySql).get(summaryParams);
   res.json({
     userId,
     balance,
@@ -2468,17 +2975,38 @@ app.get("/summary/:userId", (req, res) => {
   });
 });
 
-app.get("/api/members", requireAdminKey, (req, res) => {
+app.get("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const search = (req.query?.search || "").toString().trim().toLowerCase();
+
+  if (!MULTITENANT_ENFORCE) {
+    try {
+      res.json(listMembers(search));
+    } catch (err) {
+      console.error("listMembers failed", err);
+      res.status(500).json({ error: "FAILED" });
+    }
+    return;
+  }
+
+  const familyId = req.scope?.family_id;
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
   try {
-    res.json(listMembers(search));
+    const like = `%${search}%`;
+    const rows = search
+      ? searchMembersByFamilyStmt.all({ family_id: familyId, like }).map(mapMember)
+      : listMembersByFamilyStmt.all({ family_id: familyId }).map(mapMember);
+    res.json(rows);
   } catch (err) {
-    console.error("listMembers failed", err);
+    console.error("listMembers scoped failed", err);
     res.status(500).json({ error: "FAILED" });
   }
 });
 
-app.post("/api/members", requireAdminKey, (req, res) => {
+app.post("/api/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const body = req.body || {};
   const userId = normId(body.userId);
   const name = (body.name || "").toString().trim();
@@ -2487,9 +3015,40 @@ app.post("/api/members", requireAdminKey, (req, res) => {
   if (!userId) return res.status(400).json({ error: "userId required" });
   if (!name) return res.status(400).json({ error: "name required" });
   const now = Date.now();
+
+  if (!MULTITENANT_ENFORCE) {
+    try {
+      insertMemberStmt.run({
+        id: userId,
+        family_id: "default",
+        name,
+        date_of_birth: dob || null,
+        sex: sex || null,
+        status: "active",
+        created_at: now,
+        updated_at: now
+      });
+    } catch (err) {
+      if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+        return res.status(409).json({ error: "USER_EXISTS" });
+      }
+      console.error("insertMember failed", err);
+      return res.status(500).json({ error: "FAILED" });
+    }
+    res.status(201).json({ ok: true, member: getMember(userId) });
+    return;
+  }
+
+  const familyId = req.scope?.family_id;
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
   try {
-    insertMemberStmt.run({
+    insertMemberForFamilyStmt.run({
       id: userId,
+      family_id: familyId,
       name,
       date_of_birth: dob || null,
       sex: sex || null,
@@ -2501,7 +3060,7 @@ app.post("/api/members", requireAdminKey, (req, res) => {
     if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
       return res.status(409).json({ error: "USER_EXISTS" });
     }
-    console.error("insertMember failed", err);
+    console.error("insertMember scoped failed", err);
     return res.status(500).json({ error: "FAILED" });
   }
   res.status(201).json({ ok: true, member: getMember(userId) });
@@ -2515,55 +3074,156 @@ app.get("/api/members/:userId", requireAdminKey, (req, res) => {
   res.json(member);
 });
 
-app.patch("/api/members/:userId", requireAdminKey, (req, res) => {
+app.patch("/api/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
-  const existing = getMember(userId);
-  if (!existing) return res.status(404).json({ error: "NOT_FOUND" });
+  const existingRow = selectMemberWithFamilyStmt.get(userId);
+  if (!existingRow) return res.status(404).json({ error: "NOT_FOUND" });
+
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  const existingFamilyId = existingRow.family_id ?? null;
+  if (MEMBER_HAS_FAMILY_COLUMN) {
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      if (existingFamilyId && scopedFamilyId !== existingFamilyId) {
+        return res.status(404).json({ error: "NOT_FOUND" });
+      }
+    } else if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+  }
+
   const body = req.body || {};
-  const name = body.name !== undefined ? (body.name || "").toString().trim() : existing.name;
-  const dob = body.dob !== undefined ? (body.dob || "").toString().trim() : (existing.dob || "");
-  const sex = body.sex !== undefined ? (body.sex || "").toString().trim() : (existing.sex || "");
+  const name =
+    body.name !== undefined
+      ? (body.name || "").toString().trim()
+      : (existingRow.name || "").toString().trim();
+  const dob =
+    body.dob !== undefined
+      ? (body.dob || "").toString().trim()
+      : (existingRow.date_of_birth || "").toString().trim();
+  const sex =
+    body.sex !== undefined
+      ? (body.sex || "").toString().trim()
+      : (existingRow.sex || "").toString().trim();
   if (!name) return res.status(400).json({ error: "name required" });
+
+  const now = Date.now();
+  const params = [
+    name,
+    dob ? dob : null,
+    sex ? sex : null,
+    (existingRow.status || "active").toString(),
+    now,
+    userId
+  ];
+  let sql =
+    "UPDATE member SET name = ?, date_of_birth = ?, sex = ?, status = ?, updated_at = ? WHERE id = ?";
+
+  if (MEMBER_HAS_FAMILY_COLUMN) {
+    const guardFamilyId = MULTITENANT_ENFORCE
+      ? scopedFamilyId
+      : scopedFamilyId || existingFamilyId || null;
+    if (MULTITENANT_ENFORCE && !guardFamilyId) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    if (guardFamilyId) {
+      sql += " AND family_id = ?";
+      params.push(guardFamilyId);
+    }
+  }
+
   try {
-    updateMemberStmt.run({
-      id: userId,
-      name,
-      date_of_birth: dob || null,
-      sex: sex || null,
-      status: existing.status || "active",
-      updated_at: Date.now()
-    });
+    const info = db.prepare(sql).run(...params);
+    if (!info.changes) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
   } catch (err) {
     console.error("updateMember failed", err);
     return res.status(500).json({ error: "FAILED" });
   }
+
   res.json({ ok: true, member: getMember(userId) });
 });
 
-app.delete("/api/members/:userId", requireAdminKey, (req, res) => {
+app.delete("/api/members/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
-  const existing = getMember(userId);
-  if (!existing) return res.status(404).json({ error: "NOT_FOUND" });
+
+  const existingRow = selectMemberWithFamilyStmt.get(userId);
+  if (!existingRow) return res.status(404).json({ error: "NOT_FOUND" });
+
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  const existingFamilyId = existingRow.family_id ?? null;
+  if (MEMBER_HAS_FAMILY_COLUMN) {
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      if (existingFamilyId && scopedFamilyId !== existingFamilyId) {
+        return res.status(404).json({ error: "NOT_FOUND" });
+      }
+    } else if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+  }
+
+  let sql = "DELETE FROM member WHERE id = ?";
+  const params = [userId];
+
+  if (MEMBER_HAS_FAMILY_COLUMN) {
+    const guardFamilyId = MULTITENANT_ENFORCE
+      ? scopedFamilyId
+      : scopedFamilyId || existingFamilyId || null;
+    if (MULTITENANT_ENFORCE && !guardFamilyId) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    if (guardFamilyId) {
+      sql += " AND family_id = ?";
+      params.push(guardFamilyId);
+    }
+  }
+
   try {
-    deleteMemberStmt.run(userId);
+    const info = db.prepare(sql).run(...params);
+    if (!info.changes) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
   } catch (err) {
     console.error("deleteMember failed", err);
     return res.status(500).json({ error: "FAILED" });
   }
+
   res.json({ ok: true });
 });
 
-app.get("/api/earn-templates", (req, res) => {
-  const { active, sort } = req.query;
+app.get("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  const { active, sort } = req.query || {};
   const filters = [];
   const params = [];
+
+  const scopedFamilyId = req.scope?.family_id ?? null;
+
+  if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
+    if (!scopedFamilyId) {
+      res.status(400).json({ error: "family_id required" });
+      return;
+    }
+    filters.push("family_id = ?");
+    params.push(scopedFamilyId);
+  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && scopedFamilyId) {
+    filters.push("family_id = ?");
+    params.push(scopedFamilyId);
+  }
+
   if (active === "true") {
     filters.push("active = 1");
   } else if (active === "false") {
     filters.push("active = 0");
   }
+
   let sql = "SELECT * FROM earn_templates";
   if (filters.length) sql += ` WHERE ${filters.join(" AND ")}`;
   if (sort === "sort_order") {
@@ -2571,26 +3231,63 @@ app.get("/api/earn-templates", (req, res) => {
   } else {
     sql += " ORDER BY created_at DESC";
   }
-  const rows = db.prepare(sql).all(...params);
+
+  const stmt = db.prepare(sql);
+  const rows = params.length ? stmt.all(...params) : stmt.all();
   res.json(rows.map(mapEarnTemplate));
 });
 
-app.post("/api/earn-templates", requireAdminKey, (req, res) => {
+app.post("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const { title, points, description = "", youtube_url = null, active = true, sort_order = 0 } = req.body || {};
   if (!title || !Number.isFinite(Number(points))) {
     return res.status(400).json({ error: "invalid_template" });
   }
-  const stmt = db.prepare(`
-    INSERT INTO earn_templates (title, points, description, youtube_url, active, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  if (MULTITENANT_ENFORCE && EARN_TEMPLATES_HAS_FAMILY_COLUMN && !req.scope?.family_id) {
+    return res.status(400).json({ error: "family_id required" });
+  }
+
+  const columns = [
+    "title",
+    "points",
+    "description",
+    "youtube_url",
+    "active",
+    "sort_order",
+    "created_at",
+    "updated_at"
+  ];
+  const values = [
+    String(title),
+    Math.floor(Number(points)),
+    String(description || ""),
+    youtube_url ? String(youtube_url) : null,
+    active ? 1 : 0,
+    Number(sort_order) || 0
+  ];
   const ts = nowSec();
-  const info = stmt.run(String(title), Math.floor(Number(points)), String(description || ""), youtube_url ? String(youtube_url) : null, active ? 1 : 0, Number(sort_order) || 0, ts, ts);
+  values.push(ts, ts);
+
+  if (EARN_TEMPLATES_HAS_FAMILY_COLUMN) {
+    const familyId = req.scope?.family_id || (!MULTITENANT_ENFORCE ? "default" : null);
+    if (MULTITENANT_ENFORCE && !familyId) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    columns.push("family_id");
+    values.push(familyId);
+  } else if (MULTITENANT_ENFORCE) {
+    return res.status(500).json({ error: "earn_templates_missing_family_scope" });
+  }
+
+  const placeholders = columns.map(() => "?");
+  const stmt = db.prepare(
+    `INSERT INTO earn_templates (${columns.join(", ")}) VALUES (${placeholders.join(", ")})`
+  );
+  const info = stmt.run(...values);
   const row = db.prepare("SELECT * FROM earn_templates WHERE id = ?").get(info.lastInsertRowid);
   res.status(201).json(mapEarnTemplate(row));
 });
 
-app.patch("/api/earn-templates/:id", requireAdminKey, (req, res) => {
+app.patch("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const fields = [];
@@ -2607,27 +3304,58 @@ app.patch("/api/earn-templates/:id", requireAdminKey, (req, res) => {
   if (sort_order !== undefined) { fields.push("sort_order = ?"); params.push(Number(sort_order) || 0); }
   if (!fields.length) return res.status(400).json({ error: "no_fields" });
   fields.push("updated_at = ?"); params.push(nowSec());
-  const sql = `UPDATE earn_templates SET ${fields.join(", ")} WHERE id = ?`;
-  params.push(id);
-  const info = db.prepare(sql).run(...params);
+
+  let sql = `UPDATE earn_templates SET ${fields.join(", ")} WHERE id = ?`;
+  const whereParams = [id];
+
+  if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
+    if (!req.scope?.family_id) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    sql += " AND family_id = ?";
+    whereParams.push(req.scope.family_id);
+  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.scope?.family_id) {
+    sql += " AND family_id = ?";
+    whereParams.push(req.scope.family_id);
+  }
+
+  const info = db.prepare(sql).run(...params, ...whereParams);
   if (!info.changes) return res.status(404).json({ error: "not_found" });
   const row = db.prepare("SELECT * FROM earn_templates WHERE id = ?").get(id);
   res.json(mapEarnTemplate(row));
 });
 
-app.delete("/api/earn-templates/:id", requireAdminKey, (req, res) => {
+app.delete("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: "invalid_id" });
-  const info = db.prepare("DELETE FROM earn_templates WHERE id = ?").run(id);
+  let sql = "DELETE FROM earn_templates WHERE id = ?";
+  const params = [id];
+
+  if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
+    if (!req.scope?.family_id) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    sql += " AND family_id = ?";
+    params.push(req.scope.family_id);
+  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.scope?.family_id) {
+    sql += " AND family_id = ?";
+    params.push(req.scope.family_id);
+  }
+
+  const info = db.prepare(sql).run(...params);
   if (!info.changes) return res.status(404).json({ error: "not_found" });
   res.json({ ok: true });
 });
 
-app.post("/ck/refund", requireAdminKey, (req, res) => {
+app.post("/ck/refund", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const body = req.body || {};
   const actorId = (req.headers["x-admin-actor"] || "").toString().trim() || "admin";
   const idempotencyKey = body.idempotency_key ? String(body.idempotency_key).trim() : null;
   const normalizedUser = normId(body.user_id);
+  const familyId = req.scope?.family_id ?? null;
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId: normalizedUser }));
+  }
   if (!FEATURE_FLAGS.refunds) {
     return res.status(403).json(buildErrorResponse({ err: { message: "FEATURE_DISABLED" }, userId: normalizedUser }));
   }
@@ -2650,7 +3378,8 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
       notes: body.notes,
       actorId,
       idempotencyKey: resolveIdempotencyKey(req, idempotencyKey),
-      req
+      req,
+      familyId
     });
     recordTelemetry("refund", { ok: true, durationMs: Date.now() - started });
     console.info("[refund] success", {
@@ -2663,6 +3392,7 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
     });
     const response = buildActionResponse({
       userId: normalizedUser,
+      familyId,
       txRow: result.refund,
       extras: {
         ok: true,
@@ -2698,22 +3428,30 @@ app.post("/ck/refund", requireAdminKey, (req, res) => {
   }
 });
 
-app.get("/ck/ledger/:userId", requireAdminKey, (req, res) => {
+app.get("/ck/ledger/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
-  const data = getLedgerViewForUser(userId);
-  const hints = getStateHints(userId);
+  const familyId = req.scope?.family_id ?? null;
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json({ error: "family_id required" });
+  }
+  const data = getLedgerViewForUser(userId, familyId);
+  const hints = getStateHints(userId, familyId);
   res.json({ ...data, hints });
 });
 
-app.post("/ck/earn", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+app.post("/ck/earn", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const amount = Math.floor(Number(req.body?.amount ?? 0));
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_manual";
   const action = req.body?.action ? String(req.body.action) : "earn_manual";
+  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+  }
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
   }
   const started = Date.now();
   try {
@@ -2726,11 +3464,13 @@ app.post("/ck/earn", requireAdminKey, requireRole("admin"), express.json(), (req
       req,
       idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
       returnRow: true,
-      verb: "earn"
+      verb: "earn",
+      familyId
     });
     recordTelemetry("earn", { ok: true, durationMs: Date.now() - started });
     const response = buildActionResponse({
       userId,
+      familyId,
       txRow: result.row,
       extras: { ok: true, amount, verb: "earn", action }
     });
@@ -2742,14 +3482,18 @@ app.post("/ck/earn", requireAdminKey, requireRole("admin"), express.json(), (req
   }
 });
 
-app.post("/ck/redeem", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+app.post("/ck/redeem", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const amount = Math.floor(Number(req.body?.amount ?? 0));
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_redeem_manual";
   const action = req.body?.action ? String(req.body.action) : "spend_manual";
+  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+  }
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
   }
   const started = Date.now();
   try {
@@ -2762,11 +3506,13 @@ app.post("/ck/redeem", requireAdminKey, requireRole("admin"), express.json(), (r
       req,
       idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
       returnRow: true,
-      verb: "redeem"
+      verb: "redeem",
+      familyId
     });
     recordTelemetry("redeem", { ok: true, durationMs: Date.now() - started });
     const response = buildActionResponse({
       userId,
+      familyId,
       txRow: result.row,
       extras: { ok: true, amount, verb: "redeem", action }
     });
@@ -2778,14 +3524,18 @@ app.post("/ck/redeem", requireAdminKey, requireRole("admin"), express.json(), (r
   }
 });
 
-app.post("/ck/adjust", requireAdminKey, requireRole("admin"), express.json(), (req, res) => {
+app.post("/ck/adjust", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const deltaRaw = Number(req.body?.delta ?? 0);
   const delta = Math.trunc(deltaRaw);
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_adjust";
+  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(delta) || delta === 0) {
     return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_DELTA" }, userId }));
+  }
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
   }
   const started = Date.now();
   try {
@@ -2799,11 +3549,13 @@ app.post("/ck/adjust", requireAdminKey, requireRole("admin"), express.json(), (r
       req,
       idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
       returnRow: true,
-      verb: "adjust"
+      verb: "adjust",
+      familyId
     });
     recordTelemetry("adjust", { ok: true, durationMs: Date.now() - started });
     const response = buildActionResponse({
       userId,
+      familyId,
       txRow: result.row,
       extras: { ok: true, delta, verb: "adjust", action }
     });
@@ -2815,10 +3567,29 @@ app.post("/ck/adjust", requireAdminKey, requireRole("admin"), express.json(), (r
   }
 });
 
-app.get("/api/rewards", (req, res) => {
+app.get("/api/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const filters = [];
   const params = [];
   const query = req.query || {};
+  const scopedFamilyId = req.scope?.family_id ?? null;
+
+  if (REWARD_HAS_FAMILY_COLUMN) {
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        res.status(400).json({ error: "family_id required" });
+        return;
+      }
+      filters.push("family_id = ?");
+      params.push(scopedFamilyId);
+    } else if (scopedFamilyId) {
+      filters.push("family_id = ?");
+      params.push(scopedFamilyId);
+    }
+  } else if (MULTITENANT_ENFORCE) {
+    res.status(500).json({ error: "reward_missing_family_scope" });
+    return;
+  }
+
   if (query.status !== undefined && query.status !== null && query.status !== "") {
     filters.push("status = ?");
     params.push(String(query.status).trim().toLowerCase());
@@ -2828,8 +3599,11 @@ app.get("/api/rewards", (req, res) => {
     filters.push("status = ?");
     params.push(isActive ? "active" : "disabled");
   }
+
   let sql = `
-    SELECT id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at
+    SELECT id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at${
+      REWARD_HAS_FAMILY_COLUMN ? ", family_id" : ""
+    }
     FROM reward
   `;
   if (filters.length) {
@@ -2844,7 +3618,7 @@ app.get("/api/features", (_req, res) => {
   res.json({ ...FEATURE_FLAGS });
 });
 
-app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
+app.post("/api/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
   try {
     const body = req.body || {};
     const name = (body.name || "").toString().trim();
@@ -2862,6 +3636,17 @@ app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
     const cost = Math.trunc(numericCost);
     const rewardId = (body.id ? String(body.id).trim() : "") || crypto.randomUUID();
     const now = Date.now();
+
+    let familyId = null;
+    if (REWARD_HAS_FAMILY_COLUMN) {
+      familyId = req.scope?.family_id || (!MULTITENANT_ENFORCE ? "default" : null);
+      if (MULTITENANT_ENFORCE && !familyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+    } else if (MULTITENANT_ENFORCE) {
+      return res.status(500).json({ error: "reward_missing_family_scope" });
+    }
+
     let encodedTags = null;
     if (tagsValue !== undefined && tagsValue !== null) {
       if (typeof tagsValue === "string") {
@@ -2874,12 +3659,19 @@ app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
         }
       }
     }
-    const insert = db.prepare(`
-      INSERT INTO reward (
-        id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    `);
-    insert.run(
+    const columns = [
+      "id",
+      "name",
+      "cost",
+      "description",
+      "image_url",
+      "youtube_url",
+      "status",
+      "tags",
+      "campaign_id",
+      "source"
+    ];
+    const values = [
       rewardId,
       name,
       cost,
@@ -2889,10 +3681,22 @@ app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
       String(statusRaw || "active").trim().toLowerCase() || "active",
       encodedTags,
       campaignId ? String(campaignId).trim() || null : null,
-      source ? String(source).trim() || null : null,
-      now,
-      now
+      source ? String(source).trim() || null : null
+    ];
+
+    if (REWARD_HAS_FAMILY_COLUMN) {
+      columns.push("family_id");
+      values.push(familyId);
+    }
+
+    columns.push("created_at", "updated_at");
+    values.push(now, now);
+
+    const placeholders = columns.map(() => "?");
+    const insert = db.prepare(
+      `INSERT INTO reward (${columns.join(", ")}) VALUES (${placeholders.join(", ")})`
     );
+    insert.run(...values);
     const row = db.prepare("SELECT * FROM reward WHERE id = ?").get(rewardId);
     res.status(201).json(mapRewardRow(row));
   } catch (e) {
@@ -2902,7 +3706,7 @@ app.post("/api/rewards", requireAdminKey, express.json(), (req, res) => {
   }
 });
 
-app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
+app.patch("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const body = req.body || {};
@@ -2970,20 +3774,56 @@ app.patch("/api/rewards/:id", requireAdminKey, (req, res) => {
   }
   if (!fields.length) return res.status(400).json({ error: "no_fields" });
   fields.push("updated_at = ?");
-  params.push(Date.now());
-  const sql = `UPDATE reward SET ${fields.join(", ")} WHERE id = ?`;
-  params.push(id);
-  const info = db.prepare(sql).run(...params);
+  const now = Date.now();
+  params.push(now);
+
+  let sql = `UPDATE reward SET ${fields.join(", ")} WHERE id = ?`;
+  const whereParams = [id];
+
+  if (REWARD_HAS_FAMILY_COLUMN) {
+    if (MULTITENANT_ENFORCE) {
+      if (!req.scope?.family_id) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      sql += " AND family_id = ?";
+      whereParams.push(req.scope.family_id);
+    } else if (req.scope?.family_id) {
+      sql += " AND family_id = ?";
+      whereParams.push(req.scope.family_id);
+    }
+  } else if (MULTITENANT_ENFORCE) {
+    return res.status(500).json({ error: "reward_missing_family_scope" });
+  }
+
+  const info = db.prepare(sql).run(...params, ...whereParams);
   if (!info.changes) return res.status(404).json({ error: "not_found" });
   const updated = db.prepare("SELECT * FROM reward WHERE id = ?").get(id);
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
-app.delete("/api/rewards/:id", requireAdminKey, (req, res) => {
+app.delete("/api/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   try {
-    const info = db.prepare("DELETE FROM reward WHERE id = ?").run(id);
+    let sql = "DELETE FROM reward WHERE id = ?";
+    const params = [id];
+
+    if (REWARD_HAS_FAMILY_COLUMN) {
+      if (MULTITENANT_ENFORCE) {
+        if (!req.scope?.family_id) {
+          return res.status(400).json({ error: "family_id required" });
+        }
+        sql += " AND family_id = ?";
+        params.push(req.scope.family_id);
+      } else if (req.scope?.family_id) {
+        sql += " AND family_id = ?";
+        params.push(req.scope.family_id);
+      }
+    } else if (MULTITENANT_ENFORCE) {
+      return res.status(500).json({ error: "reward_missing_family_scope" });
+    }
+
+    const info = db.prepare(sql).run(...params);
     if (!info.changes) return res.status(404).json({ error: "not_found" });
     res.json({ ok: true });
   } catch (err) {
@@ -3069,11 +3909,15 @@ app.post("/api/earn/scan", (req, res) => {
   }
 });
 
-app.post("/api/earn/quick", requireAdminKey, (req, res) => {
+app.post("/api/earn/quick", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const userId = normId(req.body?.userId);
   const templateId = Number(req.body?.templateId);
+  const familyId = req.scope?.family_id ?? null;
   if (!userId || !templateId) {
     return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" }, userId }));
+  }
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
   }
   const tpl = db.prepare("SELECT * FROM earn_templates WHERE id = ?").get(templateId);
   if (!tpl) {
@@ -3090,10 +3934,12 @@ app.post("/api/earn/quick", requireAdminKey, (req, res) => {
       actor: "admin_quick",
       req,
       idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
-      returnRow: true
+      returnRow: true,
+      familyId
     });
     const response = buildActionResponse({
       userId,
+      familyId,
       txRow: result.row,
       extras: {
         ok: true,
@@ -3226,13 +4072,17 @@ app.get('/api/holds', requireAdminKey, (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/holds/:id/approve', requireAdminKey, (req, res) => {
+app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, res) => {
   const started = Date.now();
   let hold = null;
   try {
     const id = String(req.params.id || '');
     const token = String(req.body?.token || '');
     const override = req.body?.finalCost ?? req.body?.final_cost;
+    const familyId = req.scope?.family_id ?? null;
+    if (!familyId && MULTITENANT_ENFORCE) {
+      return res.status(400).json(buildErrorResponse({ err: { message: 'family_id required' } }));
+    }
     if (!id || !token) {
       return res.status(400).json(buildErrorResponse({ err: { message: 'invalid_payload' } }));
     }
@@ -3264,7 +4114,8 @@ app.post('/api/holds/:id/approve', requireAdminKey, (req, res) => {
       actor: 'admin_redeem',
       req,
       tokenInfo: { jti: payload.jti, typ: payload.typ, token, source: 'hold.approve' },
-      returnRow: true
+      returnRow: true,
+      familyId
     });
     const now = Date.now();
     db.prepare(`
@@ -3280,6 +4131,7 @@ app.post('/api/holds/:id/approve', requireAdminKey, (req, res) => {
     hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
     const response = buildActionResponse({
       userId: hold.userId,
+      familyId,
       txRow: result.row,
       extras: { ok: true, holdId: id, finalCost: cost, verb: 'hold.redeem' }
     });
@@ -3292,10 +4144,14 @@ app.post('/api/holds/:id/approve', requireAdminKey, (req, res) => {
   }
 });
 
-app.post('/api/holds/:id/cancel', requireAdminKey, (req, res) => {
+app.post('/api/holds/:id/cancel', authenticateAdmin, resolveFamilyScope, (req, res) => {
   const started = Date.now();
   const id = String(req.params.id || '');
   let hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+  const familyId = req.scope?.family_id ?? null;
+  if (!familyId && MULTITENANT_ENFORCE) {
+    return res.status(400).json(buildErrorResponse({ err: { message: 'family_id required' }, userId: hold?.userId }));
+  }
   if (!hold || hold.status !== 'pending') {
     return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
   }
@@ -3319,11 +4175,13 @@ app.post('/api/holds/:id/cancel', requireAdminKey, (req, res) => {
     actor: 'admin_cancel',
     req,
     returnRow: true,
-    idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key)
+    idempotencyKey: resolveIdempotencyKey(req, req.body?.idempotency_key),
+    familyId
   });
   recordTelemetry('hold.release', { ok: true, durationMs: Date.now() - started });
   const response = buildActionResponse({
     userId: hold.userId,
+    familyId,
     txRow: result.row,
     extras: { ok: true, holdId: id, verb: 'hold.release' }
   });
@@ -3433,21 +4291,25 @@ app.get("/api/admin/telemetry/core-health", requireAdminKey, (_req, res) => {
 app.get("/api/history/user/:userId", (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).json({ error: "userId required" });
+  const familyId = resolveMemberFamilyId(userId);
+  if (MULTITENANT_ENFORCE && !familyId) {
+    return res.status(404).json({ error: "member_family_missing" });
+  }
   const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
-  const rows = db.prepare(`
-    SELECT created_at AS at, description AS action, amount AS delta, balance_after, note
-    FROM ledger
-    WHERE user_id = ?
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?
-  `).all(userId, limit);
+  const rows = LEDGER_HAS_FAMILY_COLUMN
+    ? historyPreviewByUserStmt.all({ user_id: userId, family_id: familyId, limit })
+    : historyPreviewByUserStmt.all({ user_id: userId, limit });
   res.json({ rows });
 });
 
 app.get("/api/history.csv/:userId", (req, res) => {
   const userId = normId(req.params.userId);
   if (!userId) return res.status(400).send("userId required");
-  const rows = listLedgerByUserStmt.all(userId).map(mapLedgerRow);
+  const familyId = resolveMemberFamilyId(userId);
+  if (MULTITENANT_ENFORCE && !familyId) {
+    return res.status(404).send("member_family_missing");
+  }
+  const rows = listLedgerRowsForUser(userId, familyId).map(mapLedgerRow);
   const header = "at,userId,verb,action,delta,balance_after,itemId,holdId,parent_tx_id,finalCost,note,notes,templates,refund_reason,refund_notes,actor,idempotency_key\n";
   const escape = value => {
     if (value === null || value === undefined) return "";
