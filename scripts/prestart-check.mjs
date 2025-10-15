@@ -6,14 +6,12 @@ const JANG_FAMILY_NAME = "Jang";
 const JANG_ADMIN_KEY = "Mamapapa";
 const MASTER_ADMIN_KEY_RAW = process.env.MASTER_ADMIN_KEY;
 const MASTER_ADMIN_KEY = (MASTER_ADMIN_KEY_RAW || "").trim();
+const DEFAULT_FAMILY_ADMIN_KEY_RAW = process.env.ADMIN_KEY;
+const DEFAULT_FAMILY_ADMIN_KEY = (DEFAULT_FAMILY_ADMIN_KEY_RAW || "").trim();
 
 console.log("[prestart] starting DB checks...");
 const { default: db } = await import("../server/db.js");
 console.log("[prestart] DB checks done.");
-
-function sha256(input) {
-  return crypto.createHash("sha256").update(String(input)).digest("hex");
-}
 
 function quoteIdentifier(id) {
   return `"${String(id).replaceAll('"', '""')}"`;
@@ -70,98 +68,31 @@ function ensureDefaultFamily() {
   }
 }
 
-function ensureMasterAdminKey() {
-  if (!MASTER_ADMIN_KEY_RAW || !MASTER_ADMIN_KEY) {
-    console.warn("[prestart] MASTER_ADMIN_KEY is not set; master admin will be unavailable.");
-    return { ok: false, changed: false };
-  }
-  const hash = sha256(MASTER_ADMIN_KEY);
-  const now = Date.now();
-  const rows = db
-    .prepare(
-      "SELECT id, key_hash, status FROM admin_key WHERE role = 'master' ORDER BY created_at ASC, rowid ASC"
-    )
-    .all();
-  if (!rows.length) {
-    const id = crypto.randomUUID();
-    db.prepare(
-      `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
-       VALUES (@id, @hash, 'master', NULL, NULL, 'active', @now, @now)`
-    ).run({ id, hash, now });
-    return { ok: true, changed: true };
-  }
-  const [primary, ...extras] = rows;
-  let changed = false;
-  if (primary.key_hash !== hash || primary.status !== "active") {
-    db.prepare(
-      `UPDATE admin_key
-         SET key_hash = @hash, status = 'active', updated_at = @now
-       WHERE id = @id`
-    ).run({ hash, now, id: primary.id });
-    changed = true;
-  } else {
-    db.prepare(`UPDATE admin_key SET status = 'active', updated_at = @now WHERE id = @id`).run({
-      now,
-      id: primary.id
-    });
-  }
-  if (extras.length) {
-    const extraIds = extras.map((row) => row.id).filter(Boolean);
-    if (extraIds.length) {
-      const placeholders = extraIds.map(() => "?").join(",");
-      db.prepare(
-        `DELETE FROM admin_key WHERE role = 'master' AND id IN (${placeholders})`
-      ).run(extraIds);
-    }
-  }
-  return { ok: true, changed };
-}
-
-function ensureDefaultFamilyAdminKey() {
-  const existing = db
-    .prepare(
-      "SELECT id FROM admin_key WHERE role = 'family_admin' AND family_id = ? LIMIT 1"
-    )
-    .get(DEFAULT_FAMILY_ID);
-  if (existing) {
+function ensureFamilyAdminKey(familyId, { preset = null, allowGenerate = true } = {}) {
+  const family = db.prepare("SELECT admin_key FROM family WHERE id = ? LIMIT 1").get(familyId);
+  if (!family) {
     return null;
   }
-  const plainKey = crypto.randomBytes(24).toString("hex");
-  const now = Date.now();
-  const id = crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
-     VALUES (@id, @hash, 'family_admin', @family_id, 'Default Family Admin', 'active', @now, @now)`
-  ).run({ id, hash: sha256(plainKey), family_id: DEFAULT_FAMILY_ID, now });
-  return plainKey;
-}
-
-function ensureSpecificFamilyAdminKey(familyId, plainKey, { label = null } = {}) {
-  const existing = db
-    .prepare(
-      "SELECT id, status FROM admin_key WHERE role = 'family_admin' AND family_id = ? LIMIT 1"
-    )
-    .get(familyId);
-  const now = Date.now();
-  if (existing) {
-    if (existing.status !== "active") {
-      db.prepare(
-        `UPDATE admin_key SET status = 'active', updated_at = @now WHERE id = @id`
-      ).run({ id: existing.id, now });
-    }
-    return false;
+  if (family.admin_key) {
+    return null;
   }
-  db.prepare(
-    `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
-     VALUES (@id, @hash, 'family_admin', @family_id, @label, 'active', @now, @now)`
-  ).run({
-    id: crypto.randomUUID(),
-    hash: sha256(plainKey),
-    family_id: familyId,
-    label,
-    now
-  });
-  return true;
+  const candidate = (preset || "").trim() || (allowGenerate ? crypto.randomBytes(24).toString("base64url") : "");
+  if (!candidate) {
+    return null;
+  }
+  try {
+    db.prepare(
+      "UPDATE family SET admin_key = @key, updated_at = @now WHERE id = @id"
+    ).run({ key: candidate, now: Date.now(), id: familyId });
+    return candidate;
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (message.includes("UNIQUE") && message.includes("admin_key")) {
+      console.warn(`[prestart] admin key collision for family ${familyId}`, message);
+      return null;
+    }
+    throw error;
+  }
 }
 
 function normalizeIdColumn(columns, preferred, table) {
@@ -324,11 +255,14 @@ function duplicateFamilyData(fromFamily, toFamily) {
 }
 
 ensureDefaultFamily();
-const masterKeyStatus = ensureMasterAdminKey();
-const defaultFamilyAdminKey = ensureDefaultFamilyAdminKey();
+const defaultFamilyAdminKey = ensureFamilyAdminKey(DEFAULT_FAMILY_ID, {
+  preset: DEFAULT_FAMILY_ADMIN_KEY,
+  allowGenerate: true
+});
 upsertFamily({ id: JANG_FAMILY_ID, name: JANG_FAMILY_NAME, status: "active" });
-const seededJangKey = ensureSpecificFamilyAdminKey(JANG_FAMILY_ID, JANG_ADMIN_KEY, {
-  label: "Jang Family Admin"
+const seededJangKey = ensureFamilyAdminKey(JANG_FAMILY_ID, {
+  preset: JANG_ADMIN_KEY,
+  allowGenerate: true
 });
 const duplicationSummary = duplicateFamilyData(DEFAULT_FAMILY_ID, JANG_FAMILY_ID);
 
@@ -342,24 +276,20 @@ for (const table of ["member", "task", "reward", "ledger"]) {
     jangCounts[table] = row?.count ?? 0;
   }
 }
-const masterActive = !!db
-  .prepare("SELECT 1 FROM admin_key WHERE role = 'master' AND status = 'active' LIMIT 1")
-  .get();
-const jangAdminActive = !!db
-  .prepare(
-    "SELECT 1 FROM admin_key WHERE role = 'family_admin' AND family_id = ? AND status = 'active' LIMIT 1"
-  )
+const defaultAdminPresent = !!db
+  .prepare("SELECT 1 FROM family WHERE id = ? AND admin_key IS NOT NULL LIMIT 1")
+  .get(DEFAULT_FAMILY_ID);
+const jangAdminPresent = !!db
+  .prepare("SELECT 1 FROM family WHERE id = ? AND admin_key IS NOT NULL LIMIT 1")
   .get(JANG_FAMILY_ID);
 
 console.log(
-  `[prestart] families: ${familyCount} | master present: ${masterActive ? "yes" : "no"} | Jang admin present: ${
-    jangAdminActive ? "yes" : "no"
-  }`
+  `[prestart] families: ${familyCount} | master key configured: ${MASTER_ADMIN_KEY ? "yes" : "no"} | default admin present: ${
+    defaultAdminPresent ? "yes" : "no"
+  } | Jang admin present: ${jangAdminPresent ? "yes" : "no"}`
 );
-if (!masterKeyStatus.ok) {
-  console.warn("MASTER_ADMIN_KEY env var missing or blank; master admin key not created");
-} else if (masterKeyStatus.changed) {
-  console.log("[prestart] Master admin key hash refreshed.");
+if (!MASTER_ADMIN_KEY) {
+  console.warn("MASTER_ADMIN_KEY env var missing or blank; master admin access disabled");
 }
 if (defaultFamilyAdminKey) {
   console.log("[DEV ONLY] Default family admin key:", defaultFamilyAdminKey);

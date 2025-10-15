@@ -402,7 +402,7 @@ function initAdmin() {
     }
     if (hasCurrentFamilyId) {
       adminState.currentFamilyId = partial.currentFamilyId || null;
-    } else if (adminState.role === 'family_admin') {
+    } else if (adminState.role === 'family') {
       adminState.currentFamilyId = adminState.familyId || null;
     } else if (adminState.role === 'master' && !adminState.currentFamilyId && adminState.families.length) {
       adminState.currentFamilyId = adminState.families[0]?.id || null;
@@ -523,7 +523,7 @@ function initAdmin() {
         if (role === 'master') {
           chip.classList.add('role-chip--master');
           chip.textContent = 'Master';
-        } else if (role === 'family_admin') {
+        } else if (role === 'family') {
           chip.classList.add('role-chip--family');
           const familyLabel = adminState.familyId || familyId || '';
           chip.textContent = familyLabel
@@ -1130,6 +1130,48 @@ details.member-fold .summary-value {
     }
   });
 
+  const quickFamilyButton = document.querySelector('#btn-list-families');
+  const quickFamilyTable = document.querySelector('#families-table');
+
+  async function renderQuickFamilyTable() {
+    if (!quickFamilyTable) return;
+    quickFamilyTable.innerHTML = '<div class="muted">Loading families…</div>';
+    try {
+      const rows = await apiFetch('/api/families', { skipScope: true });
+      if (!Array.isArray(rows) || rows.length === 0) {
+        quickFamilyTable.innerHTML = '<div class="muted">No families yet.</div>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'quick-family-table';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>ID</th><th>Name</th><th>Status</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      for (const family of rows) {
+        if (!family) continue;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${family.id || ''}</td>
+          <td>${family.name || ''}</td>
+          <td>${family.status || 'active'}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      quickFamilyTable.innerHTML = '';
+      quickFamilyTable.appendChild(table);
+    } catch (error) {
+      quickFamilyTable.innerHTML = `<div class="muted">${error?.message || 'Unable to load families.'}</div>`;
+    }
+  }
+
+  if (quickFamilyButton) {
+    quickFamilyButton.addEventListener('click', async () => {
+      await renderQuickFamilyTable();
+    });
+  }
+
   familySearchForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (adminState.role !== 'master') return;
@@ -1292,6 +1334,18 @@ details.member-fold .summary-value {
     return { res, body };
   }
 
+  async function apiFetch(url, opts = {}) {
+    const { res, body } = await adminFetch(url, opts);
+    if (!res.ok) {
+      const message = body && typeof body === 'object' ? body.error || res.statusText : res.statusText;
+      const error = new Error(message || 'Request failed');
+      error.status = res.status;
+      error.body = body;
+      throw error;
+    }
+    return body;
+  }
+
   async function fetchFamilyDetail(familyId) {
     if (!familyId) return null;
     try {
@@ -1331,21 +1385,53 @@ details.member-fold .summary-value {
 
   async function refreshAdminContext({ showToastOnError = false, silent = false } = {}) {
     const key = ensureAdminKey();
+    const scopeBadge = document.querySelector('#admin-scope-badge');
+    const masterCard = document.querySelector('#family-management-card');
+    const quickFamilyTable = document.querySelector('#families-table');
+    const clearBadge = () => {
+      if (scopeBadge) {
+        scopeBadge.textContent = 'No admin';
+        scopeBadge.classList.remove('bg-green-200', 'bg-sky-200');
+        scopeBadge.style.backgroundColor = '';
+        scopeBadge.style.color = '';
+      }
+    };
     if (!key) {
       clearAdminContext();
+      clearBadge();
+      if (masterCard) masterCard.style.display = 'none';
+      if (quickFamilyTable) quickFamilyTable.innerHTML = '';
       return false;
     }
     try {
-      const { res, body } = await adminFetch('/api/whoami', { skipScope: true });
-      if (!res.ok) {
-        const message = body && typeof body === 'object' ? body.error || res.statusText : res.statusText;
-        throw new Error(message || 'Unable to verify admin key');
-      }
-      const payload = body && typeof body === 'object' ? body : {};
+      const payload = await apiFetch('/api/whoami', { skipScope: true });
       const nextState = {
         role: payload.role ?? null,
-        family_id: payload.family_id ?? null
+        family_id: payload.family_id ?? payload.familyId ?? null
       };
+      if (scopeBadge) {
+        scopeBadge.classList.remove('bg-green-200', 'bg-sky-200');
+        if (nextState.role === 'master') {
+          scopeBadge.textContent = 'Family Admin (Master)';
+          scopeBadge.classList.add('bg-green-200');
+          scopeBadge.style.backgroundColor = '#bbf7d0';
+          scopeBadge.style.color = '#14532d';
+        } else if (nextState.role === 'family') {
+          const familyLabel = nextState.family_id ? String(nextState.family_id) : 'scoped';
+          scopeBadge.textContent = `Family Admin (${familyLabel})`;
+          scopeBadge.classList.add('bg-sky-200');
+          scopeBadge.style.backgroundColor = '#bae6fd';
+          scopeBadge.style.color = '#0c4a6e';
+        } else {
+          clearBadge();
+        }
+      }
+      if (masterCard) {
+        masterCard.style.display = nextState.role === 'master' ? '' : 'none';
+        if (nextState.role !== 'master' && quickFamilyTable) {
+          quickFamilyTable.innerHTML = '';
+        }
+      }
       if (nextState.role === 'master') {
         try {
           const families = await fetchFamiliesStrict();
@@ -1367,7 +1453,7 @@ details.member-fold .summary-value {
           nextState.families = Array.isArray(adminState.families) ? adminState.families.slice() : [];
           nextState.currentFamilyId = adminState.currentFamilyId || null;
         }
-      } else if (nextState.role === 'family_admin') {
+      } else if (nextState.role === 'family') {
         nextState.currentFamilyId = nextState.family_id || null;
         if (nextState.family_id) {
           const detail = await fetchFamilyDetail(nextState.family_id);
@@ -1392,6 +1478,9 @@ details.member-fold .summary-value {
       if (showToastOnError) {
         toast(error?.message || 'Admin key validation failed', 'error');
       }
+      clearBadge();
+      if (masterCard) masterCard.style.display = 'none';
+      if (quickFamilyTable) quickFamilyTable.innerHTML = '';
       clearAdminContext();
       return false;
     }

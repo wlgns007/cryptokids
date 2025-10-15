@@ -966,6 +966,12 @@
       <div class="header-intro">
         <h1 data-i18n="app.title">CryptoKids Admin</h1>
         <p>Issue points, approve holds, and curate the earn menu.</p>
+        <span
+          id="admin-scope-badge"
+          style="display:inline-block; border-radius:999px; padding:4px 10px; font-size:0.875rem; background:#e5e7eb; color:#111827;"
+        >
+          No admin
+        </span>
       </div>
       <div class="header-actions">
         <div class="admin-key">
@@ -982,7 +988,14 @@
           </div>
         </div>
       </div>
-    </header>
+  </header>
+
+    <section id="family-management-card" class="card" style="display:none; margin-top:1rem;">
+      <h2>Family Management</h2>
+      <p class="muted">Master admins can review all families from here.</p>
+      <button id="btn-list-families" type="button">List Families</button>
+      <div id="families-table" class="muted" style="margin-top:0.75rem;"></div>
+    </section>
 
     <section id="masterToolbar" class="master-toolbar" data-admin-role="master" hidden>
       <div class="master-toolbar-row">

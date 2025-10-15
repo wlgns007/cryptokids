@@ -12,7 +12,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "cryptokids.db");
 
-const db = new Database(DB_PATH);
+export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
@@ -21,22 +21,10 @@ const schemaStatements = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
+    admin_key TEXT UNIQUE,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS admin_key (
-    id TEXT PRIMARY KEY,
-    key_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('master','family_admin')),
-    family_id TEXT,
-    label TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (family_id) REFERENCES family(id)
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_admin_key_role ON admin_key(role)",
-  "CREATE INDEX IF NOT EXISTS idx_admin_key_family ON admin_key(family_id)"
+  )`
 ];
 
 for (const statement of schemaStatements) {
@@ -44,31 +32,48 @@ for (const statement of schemaStatements) {
 }
 
 try {
-  const masterRows = db
-    .prepare(
-      "SELECT rowid, id FROM admin_key WHERE role = 'master' ORDER BY created_at ASC, rowid ASC"
-    )
-    .all();
-  if (masterRows.length > 1) {
-    const [, ...extras] = masterRows;
-    const extraIds = extras.map((row) => row.id).filter(Boolean);
-    if (extraIds.length) {
-      const placeholders = extraIds.map(() => "?").join(",");
-      db.prepare(
-        `DELETE FROM admin_key WHERE role = 'master' AND id IN (${placeholders})`
-      ).run(extraIds);
-    }
-  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key)');
 } catch (err) {
-  console.warn("[db] master admin key dedupe skipped", err?.message || err);
+  console.warn('[db] unable to ensure idx_family_admin_key', err?.message || err);
 }
 
-try {
-  db.exec(
-    "CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_key_master ON admin_key(role) WHERE role = 'master'"
-  );
-} catch (err) {
-  console.warn("[db] master admin key unique index skipped", err?.message || err);
+const familyColumns = db.prepare('PRAGMA table_info("family")').all().map((c) => c.name);
+if (!familyColumns.includes('admin_key')) {
+  db.exec('PRAGMA foreign_keys = OFF; BEGIN;');
+  try {
+    db.exec(`
+      CREATE TABLE "family__new" (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        admin_key TEXT UNIQUE,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO "family__new"(id, name, status, admin_key, created_at, updated_at)
+      SELECT id, name, COALESCE(status, 'active'), NULL, created_at, updated_at FROM "family";
+      DROP TABLE "family";
+      ALTER TABLE "family__new" RENAME TO "family";
+      CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key);
+    `);
+    db.exec('COMMIT; PRAGMA foreign_keys = ON;');
+  } catch (e) {
+    db.exec('ROLLBACK; PRAGMA foreign_keys = ON;');
+    throw e;
+  }
+}
+
+const ADMIN_KEY_ENV = process.env.ADMIN_KEY?.trim();
+if (ADMIN_KEY_ENV) {
+  try {
+    db.prepare(`
+      UPDATE "family"
+         SET admin_key = COALESCE(admin_key, ?)
+       WHERE id = 'default' AND admin_key IS NULL
+    `).run(ADMIN_KEY_ENV);
+  } catch (err) {
+    console.warn('[db] unable to backfill default admin key', err?.message || err);
+  }
 }
 
 function columnInfo(table) {
@@ -114,13 +119,15 @@ function enforceFamilyNotNull(db) {
     CREATE TABLE IF NOT EXISTS ${q("family")} (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      admin_key TEXT UNIQUE,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   db.prepare(`
-    INSERT INTO ${q("family")} (id, name, created_at, updated_at)
-    SELECT 'default', 'Default Family', datetime('now'), datetime('now')
+    INSERT INTO ${q("family")} (id, name, status, admin_key, created_at, updated_at)
+    SELECT 'default', 'Default Family', 'active', NULL, datetime('now'), datetime('now')
     WHERE NOT EXISTS (SELECT 1 FROM ${q("family")} WHERE id = 'default')
   `).run();
 
@@ -266,6 +273,28 @@ if (typeof db.all !== "function") {
     }
     return stmt.all(params);
   };
+}
+
+export function resolveAdminContext(database, adminKey) {
+  const key = typeof adminKey === "string" ? adminKey.trim() : "";
+  if (!key) {
+    return { role: "none", familyId: null };
+  }
+
+  const master = process.env.MASTER_ADMIN_KEY?.trim();
+  if (master && key === master) {
+    return { role: "master", familyId: null };
+  }
+
+  try {
+    const row = database.prepare('SELECT id FROM "family" WHERE admin_key = ? LIMIT 1').get(key);
+    if (row?.id) {
+      return { role: "family", familyId: row.id };
+    }
+  } catch (error) {
+    console.warn("[auth] resolveAdminContext failed", error?.message || error);
+  }
+  return { role: "none", familyId: null };
 }
 
 export default db;

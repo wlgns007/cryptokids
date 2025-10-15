@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -20,24 +20,20 @@ const {
 } = await import('../index.js');
 import db from '../db.js';
 
-function ensureDefaultFamily() {
+function ensureDefaultFamily(key = 'Mamapapa') {
   const now = Date.now();
   db.prepare(
-    "INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)"
-  ).run(DEFAULT_FAMILY_ID, 'Default Family', now, now);
-}
-
-function ensureFamilyAdminKey(key = 'Mamapapa', familyId = DEFAULT_FAMILY_ID) {
-  const now = Date.now();
-  const hash = createHash('sha256').update(key).digest('hex');
-  db.prepare(
-    `INSERT OR IGNORE INTO admin_key (id, key_hash, role, family_id, status, created_at, updated_at)
-     VALUES (?, ?, 'family_admin', ?, 'active', ?, ?)`
-  ).run(`test-admin-${familyId}`, hash, familyId, now, now);
+    `INSERT INTO family (id, name, status, admin_key, created_at, updated_at)
+     VALUES (?, ?, 'active', ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       status = excluded.status,
+       admin_key = excluded.admin_key,
+       updated_at = excluded.updated_at`
+  ).run(DEFAULT_FAMILY_ID, 'Default Family', key, now, now);
 }
 
 ensureDefaultFamily();
-ensureFamilyAdminKey();
 
 test.after(() => {
   fs.rmSync(TEST_DB, { force: true });
@@ -56,7 +52,6 @@ function resetDatabase() {
   db.exec('PRAGMA foreign_keys = ON;');
   __resetRefundRateLimiter();
   ensureDefaultFamily();
-  ensureFamilyAdminKey();
 }
 
 function insertMember(id, name = id, familyId = DEFAULT_FAMILY_ID) {

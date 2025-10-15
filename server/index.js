@@ -6,11 +6,12 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import QRCode from "qrcode";
-import db, { DATA_DIR } from "./db.js";
+import db, { DATA_DIR, resolveAdminContext } from "./db.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
+import { readAdminKey } from "./auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,62 +22,27 @@ const rootPackage = JSON.parse(
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
-const ADMIN_KEY = (process.env.ADMIN_KEY || "Mamapapa").trim();
 
-const selectAdminKeyStmt = db.prepare(
-  "SELECT role, family_id, status FROM admin_key WHERE key_hash = ? LIMIT 1"
-);
-
-function sha256(value) {
-  return crypto.createHash("sha256").update(String(value)).digest("hex");
-}
-
-function getAdminFromKey(plainKey) {
-  const normalized = (plainKey ?? "").toString().trim();
-  if (!normalized) {
-    return null;
-  }
-  const hash = sha256(normalized);
-  const row = selectAdminKeyStmt.get(hash);
-  if (!row) {
-    return null;
-  }
-  const admin = {
-    role: row.role,
-    family_id: row.family_id ?? null,
-    status: row.status
+function applyAdminContext(req, ctx) {
+  req.auth = {
+    role: ctx.role,
+    familyId: ctx.familyId,
+    family_id: ctx.familyId ?? null
   };
-  if (admin.status !== "active") {
-    return admin;
-  }
-  if (admin.role === "family_admin") {
-    return { ...admin, role: "family_admin" };
-  }
-  if (admin.role === "master") {
-    return { ...admin, family_id: null };
-  }
-  return admin;
 }
 
 function authenticateAdmin(req, res, next) {
-  const key = (req.header("X-ADMIN-KEY") || "").toString().trim();
+  const key = readAdminKey(req);
   if (!key) {
     res.status(401).json({ error: "missing admin key" });
     return;
   }
-  const admin = getAdminFromKey(key);
-  if (!admin) {
+  const ctx = resolveAdminContext(db, key);
+  if (!ctx || ctx.role === "none") {
     res.status(403).json({ error: "invalid key" });
     return;
   }
-  if ((admin.status || "").toString().toLowerCase() !== "active") {
-    res.status(403).json({ error: "key inactive" });
-    return;
-  }
-  req.auth = {
-    family_id: admin.family_id ?? null,
-    role: admin.role
-  };
+  applyAdminContext(req, ctx);
   next();
 }
 
@@ -94,12 +60,13 @@ function createFamilyScopeResolver(options = {}) {
       return;
     }
 
-    if (req.auth.role === "family_admin") {
-      if (!req.auth.family_id) {
+    if (req.auth.role === "family") {
+      const familyId = req.auth.familyId ?? req.auth.family_id;
+      if (!familyId) {
         res.status(403).json({ error: "family scope missing" });
         return;
       }
-      req.scope = { family_id: req.auth.family_id };
+      req.scope = { family_id: familyId };
       next();
       return;
     }
@@ -227,31 +194,20 @@ const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
   : null;
 
 const insertFamilyStmt = db.prepare(
-  `INSERT INTO family (id, name, status, created_at, updated_at)
-   VALUES (@id, @name, @status, @now, @now)`
+  `INSERT INTO family (id, name, status, admin_key, created_at, updated_at)
+   VALUES (@id, @name, @status, @admin_key, @now, @now)`
 );
 const selectFamilyByIdStmt = db.prepare(
-  "SELECT id, name, status FROM family WHERE id = ? LIMIT 1"
+  "SELECT id, name, status, admin_key FROM family WHERE id = ? LIMIT 1"
 );
 const listFamiliesStmt = db.prepare(
-  "SELECT id, name, status FROM family ORDER BY created_at DESC, id DESC"
+  "SELECT id, name, status, admin_key, created_at, updated_at FROM family ORDER BY created_at DESC, id DESC"
 );
 const updateFamilyStmt = db.prepare(
   `UPDATE family SET name = @name, status = @status, updated_at = @now WHERE id = @id`
 );
-
-const insertAdminKeyStmt = db.prepare(
-  `INSERT INTO admin_key (id, key_hash, role, family_id, label, status, created_at, updated_at)
-   VALUES (@id, @hash, 'family_admin', @family_id, @label, 'active', @now, @now)`
-);
-const listAdminKeysByFamilyStmt = db.prepare(
-  `SELECT id, label, status, created_at, updated_at
-   FROM admin_key
-   WHERE family_id = @family_id AND role = 'family_admin'
-   ORDER BY created_at DESC`
-);
-const getAdminKeyByIdStmt = db.prepare(
-  `SELECT id, role, family_id, label, status FROM admin_key WHERE id = ? LIMIT 1`
+const updateFamilyAdminKeyStmt = db.prepare(
+  `UPDATE family SET admin_key = @admin_key, updated_at = @now WHERE id = @id`
 );
 
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
@@ -313,48 +269,79 @@ function sendVersioned(res, file, type = "text/html", cacheControl = "no-store")
   res.send(loadVersioned(file));
 }
 
+function makeKey(len = 24) {
+  return Buffer.from(crypto.randomBytes(len)).toString("base64url");
+}
+
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
 
 app.get("/api/whoami", authenticateAdmin, (req, res) => {
-  if (req.auth?.role === "master") {
-    res.json({ role: "master" });
+  const role = req.auth?.role ?? null;
+  const familyId = req.auth?.familyId ?? req.auth?.family_id ?? null;
+  if (role === "master") {
+    res.json({ role: "master", familyId: null, family_id: null });
     return;
   }
-  if (req.auth?.role === "family_admin") {
-    res.json({ role: "family_admin", family_id: req.auth.family_id ?? null });
+  if (role === "family") {
+    res.json({ role: "family", familyId, family_id: familyId });
     return;
   }
-  res.json({ role: req.auth?.role ?? null });
+  res.json({ role, familyId, family_id: familyId });
 });
 
 app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
   const name = (body.name ?? "").toString().trim();
-  let id = (body.id ?? "").toString().trim();
-  const requestedStatus = (body.status ?? "active").toString().trim().toLowerCase();
   if (!name) {
     res.status(400).json({ error: "name required" });
     return;
   }
-  if (!id) {
-    id = crypto.randomUUID();
-  }
-  if (selectFamilyByIdStmt.get(id)) {
-    res.status(409).json({ error: "family id exists" });
-    return;
-  }
-  const status = requestedStatus === "inactive" ? "inactive" : "active";
+
+  const providedKey = body.adminKey === undefined || body.adminKey === null ? "" : String(body.adminKey);
+  const trimmedKey = providedKey.trim();
+  const adminKey = trimmedKey || makeKey();
+  const id = crypto.randomUUID();
   const now = Date.now();
-  insertFamilyStmt.run({ id, name, status, now });
-  res.json({ id, name, status });
+
+  try {
+    insertFamilyStmt.run({ id, name, status: "active", admin_key: adminKey, now });
+  } catch (err) {
+    const message = String(err?.message || "");
+    if (message.includes("UNIQUE") && message.includes("admin_key")) {
+      res.status(409).json({ error: "adminKey already in use" });
+      return;
+    }
+    throw err;
+  }
+
+  res.status(201).json({ id, name, adminKey });
 });
 
 app.get("/api/families", authenticateAdmin, requireMaster, (_req, res) => {
-  const families = listFamiliesStmt.all();
+  const families = listFamiliesStmt.all().map(({ admin_key, ...rest }) => rest);
   res.json(families);
+});
+
+app.post("/api/families/:id/rotate-key", authenticateAdmin, requireMaster, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const existing = selectFamilyByIdStmt.get(id);
+  if (!existing) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const adminKey = makeKey();
+  const now = Date.now();
+  updateFamilyAdminKeyStmt.run({ id, admin_key: adminKey, now });
+  res.json({ id, adminKey });
 });
 
 app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
@@ -395,110 +382,12 @@ app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
   const now = Date.now();
   updateFamilyStmt.run({ id, name, status, now });
   const updated = selectFamilyByIdStmt.get(id);
-  res.json(updated);
-});
-
-app.post("/api/admin-keys", authenticateAdmin, requireMaster, (req, res) => {
-  const body = req.body ?? {};
-  const familyId = (body.family_id ?? "").toString().trim();
-  const hasLabel = Object.prototype.hasOwnProperty.call(body, "label");
-  let label =
-    !hasLabel || body.label === null || body.label === undefined
-      ? null
-      : String(body.label).trim();
-  if (label !== null && label.length === 0) {
-    label = null;
-  }
-  if (!familyId) {
-    res.status(400).json({ error: "family_id required" });
+  if (updated) {
+    const { admin_key, ...rest } = updated;
+    res.json(rest);
     return;
   }
-  const family = selectFamilyByIdStmt.get(familyId);
-  if (!family) {
-    res.status(404).json({ error: "family not found" });
-    return;
-  }
-  const plainKey = crypto.randomBytes(24).toString("hex");
-  const now = Date.now();
-  const id = crypto.randomUUID();
-  insertAdminKeyStmt.run({
-    id,
-    hash: sha256(plainKey),
-    family_id: family.id,
-    label,
-    now
-  });
-  res.json({ id, plain_key: plainKey });
-});
-
-app.get("/api/admin-keys", authenticateAdmin, requireMaster, (req, res) => {
-  const familyId = (req.query?.family_id ?? "").toString().trim();
-  if (!familyId) {
-    res.status(400).json({ error: "family_id required" });
-    return;
-  }
-  const keys = listAdminKeysByFamilyStmt.all({ family_id: familyId });
-  res.json(keys);
-});
-
-app.patch("/api/admin-keys/:id", authenticateAdmin, requireMaster, (req, res) => {
-  const keyId = req.params?.id;
-  if (!keyId) {
-    res.status(404).json({ error: "admin key not found" });
-    return;
-  }
-  const existing = getAdminKeyByIdStmt.get(keyId);
-  if (!existing) {
-    res.status(404).json({ error: "admin key not found" });
-    return;
-  }
-  if (existing.role !== "family_admin") {
-    res.status(400).json({ error: "cannot modify this admin key" });
-    return;
-  }
-
-  const updates = [];
-  const params = { id: keyId, now: Date.now() };
-  const body = req.body ?? {};
-  if (Object.prototype.hasOwnProperty.call(body, "label")) {
-    const rawLabel = body.label;
-    if (rawLabel === null || rawLabel === undefined) {
-      params.label = null;
-    } else {
-      const trimmed = String(rawLabel).trim();
-      params.label = trimmed.length === 0 ? null : trimmed;
-    }
-    updates.push("label = @label");
-  }
-  if (Object.prototype.hasOwnProperty.call(body, "status")) {
-    const statusValue = (body.status ?? "").toString().trim().toLowerCase();
-    const allowedStatuses = new Set(["active", "disabled"]);
-    if (!allowedStatuses.has(statusValue)) {
-      res.status(400).json({ error: "invalid status" });
-      return;
-    }
-    params.status = statusValue;
-    updates.push("status = @status");
-  }
-
-  if (updates.length === 0) {
-    res.status(400).json({ error: "no changes requested" });
-    return;
-  }
-  updates.push("updated_at = @now");
-
-  const updateStatement = db.prepare(
-    `UPDATE admin_key SET ${updates.join(", ")} WHERE id = @id`
-  );
-  updateStatement.run(params);
-
-  const refreshed = getAdminKeyByIdStmt.get(keyId);
-  res.json({
-    id: refreshed.id,
-    label: refreshed.label,
-    status: refreshed.status,
-    updated_at: refreshed.updated_at
-  });
+  res.json({ id, name, status });
 });
 
 app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
@@ -1528,7 +1417,11 @@ function ensureMemberFamilyColumn() {
 
 ensureMemberFamilyColumn();
 function getHoldRow(holdId) {
-  return db.prepare("SELECT * FROM hold WHERE id = ?").get(holdId);
+  return db
+    .prepare(
+      `SELECT h.*, m.family_id AS member_family_id FROM hold h LEFT JOIN member m ON m.id = h.user_id WHERE h.id = ?`
+    )
+    .get(holdId);
 }
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -1881,6 +1774,7 @@ function mapHoldRow(row) {
   return {
     id: row.id,
     userId: row.user_id || null,
+    familyId: row.family_id ?? row.member_family_id ?? null,
     status: row.status || 'pending',
     quotedCost: Number(row.quoted_amount ?? row.quotedCost ?? 0) || 0,
     finalCost:
@@ -2267,10 +2161,15 @@ function applyLedger({
 }
 
 function requireAdminKey(req, res, next) {
-  const key = (req.headers["x-admin-key"] || "").toString().trim();
-  if (!key || key !== ADMIN_KEY) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
+  const key = readAdminKey(req);
+  if (!key) {
+    return res.status(401).json({ error: "missing admin key" });
   }
+  const ctx = resolveAdminContext(db, key);
+  if (!ctx || ctx.role === "none") {
+    return res.status(403).json({ error: "invalid key" });
+  }
+  applyAdminContext(req, ctx);
   next();
 }
 
@@ -4091,6 +3990,13 @@ app.post("/api/tokens/give", requireAdminKey, (req, res) => {
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ error: "invalid_payload" });
   }
+  const ctx = req.auth ?? {};
+  if (ctx.role === 'family') {
+    const memberFamily = resolveMemberFamilyId(userId);
+    if (memberFamily && memberFamily !== (ctx.familyId ?? ctx.family_id ?? null)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+  }
   const { token, payload } = createToken("give", { userId, amount: Math.floor(amount), note });
   res.json({ token, qrText: buildQrUrl(req, token), expiresAt: payload.exp, amount: Math.floor(amount) });
 });
@@ -4098,7 +4004,9 @@ app.post("/api/tokens/give", requireAdminKey, (req, res) => {
 app.post("/api/earn/scan", (req, res) => {
   const started = Date.now();
   try {
-    const isAdmin = (req.headers["x-admin-key"] || "").toString().trim() === ADMIN_KEY;
+    const rawKey = readAdminKey(req);
+    const ctx = rawKey ? resolveAdminContext(db, rawKey) : { role: "none", familyId: null };
+    const isAdmin = ctx.role === "master" || ctx.role === "family";
     const result = redeemToken({
       token: (req.body?.token || "").toString(),
       req,
@@ -4228,7 +4136,7 @@ app.post("/api/holds", express.json(), (req, res) => {
       now,
       now
     );
-    const insertedHold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+    const insertedHold = mapHoldRow(getHoldRow(id));
     const ledgerResult = applyLedger({
       userId,
       delta: 0,
@@ -4273,21 +4181,31 @@ app.get('/api/holds', requireAdminKey, (req, res) => {
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: 'invalid_status' });
   }
-  let sql = 'SELECT * FROM hold';
+  const ctx = req.auth ?? {};
+  const familyId = ctx.role === 'family' ? ctx.familyId ?? ctx.family_id ?? null : null;
+  let sql = `
+    SELECT h.*, m.family_id AS member_family_id
+    FROM hold h
+    LEFT JOIN member m ON m.id = h.user_id
+  `;
   const filters = [];
   const params = [];
   if (status !== 'all') {
-    filters.push('status = ?');
+    filters.push('h.status = ?');
     params.push(status);
   }
   if (userId) {
-    filters.push('LOWER(user_id) = ?');
+    filters.push('LOWER(h.user_id) = ?');
     params.push(userId);
+  }
+  if (familyId) {
+    filters.push('m.family_id = ?');
+    params.push(familyId);
   }
   if (filters.length) {
     sql += ' WHERE ' + filters.join(' AND ');
   }
-  sql += ' ORDER BY created_at DESC';
+  sql += ' ORDER BY h.created_at DESC';
   const rows = db.prepare(sql).all(...params).map(mapHoldRow);
   res.json(rows);
 });
@@ -4316,9 +4234,12 @@ app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, 
     if (checkTokenStmt.get(payload.jti)) {
       return res.status(409).json(buildErrorResponse({ err: { message: 'TOKEN_USED' } }));
     }
-    hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+    hold = mapHoldRow(getHoldRow(id));
     if (!hold || hold.status !== 'pending') {
       return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
+    }
+    if (familyId && hold.familyId && hold.familyId !== familyId) {
+      return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden' }, userId: hold?.userId }));
     }
     const cost = override !== undefined && override !== null
       ? Math.max(0, Math.floor(Number(override)))
@@ -4348,7 +4269,7 @@ app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, 
           source = COALESCE(source, 'admin')
       WHERE id = ?
     `).run(cost, hold.note || null, now, now, id);
-    hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+    hold = mapHoldRow(getHoldRow(id));
     const response = buildActionResponse({
       userId: hold.userId,
       familyId,
@@ -4367,13 +4288,16 @@ app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, 
 app.post('/api/holds/:id/cancel', authenticateAdmin, resolveFamilyScope, (req, res) => {
   const started = Date.now();
   const id = String(req.params.id || '');
-  let hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+  let hold = mapHoldRow(getHoldRow(id));
   const familyId = req.scope?.family_id ?? null;
   if (!familyId && MULTITENANT_ENFORCE) {
     return res.status(400).json(buildErrorResponse({ err: { message: 'family_id required' }, userId: hold?.userId }));
   }
   if (!hold || hold.status !== 'pending') {
     return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
+  }
+  if (familyId && hold.familyId && hold.familyId !== familyId) {
+    return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden' }, userId: hold?.userId }));
   }
   const now = Date.now();
   db.prepare(`
@@ -4385,7 +4309,7 @@ app.post('/api/holds/:id/cancel', authenticateAdmin, resolveFamilyScope, (req, r
         note = COALESCE(note, ?)
     WHERE id = ?
   `).run(now, now, hold.note || null, id);
-  hold = mapHoldRow(db.prepare('SELECT * FROM hold WHERE id = ?').get(id));
+  hold = mapHoldRow(getHoldRow(id));
   const result = applyLedger({
     userId: hold.userId,
     delta: 0,
@@ -4411,6 +4335,10 @@ app.post('/api/holds/:id/cancel', authenticateAdmin, resolveFamilyScope, (req, r
 function buildHistoryQuery(params) {
   const where = [];
   const sqlParams = [];
+  if (params.familyId && LEDGER_HAS_FAMILY_COLUMN) {
+    where.push("family_id = ?");
+    sqlParams.push(params.familyId);
+  }
   if (params.userId) {
     where.push("user_id = ?");
     sqlParams.push(normId(params.userId));
@@ -4456,6 +4384,15 @@ function buildHistoryQuery(params) {
 app.get("/api/history", requireAdminKey, (req, res) => {
   const from = req.query.from ? Number(new Date(req.query.from).getTime()) : undefined;
   const to = req.query.to ? Number(new Date(req.query.to).getTime()) : undefined;
+  const ctx = req.auth ?? {};
+  const familyId = ctx.role === 'family' ? ctx.familyId ?? ctx.family_id ?? null : null;
+  const userIdParam = req.query.userId ? normId(req.query.userId) : null;
+  if (familyId && userIdParam) {
+    const memberFamily = resolveMemberFamilyId(userIdParam);
+    if (memberFamily && memberFamily !== familyId) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+  }
   const query = buildHistoryQuery({
     userId: req.query.userId,
     type: req.query.type,
@@ -4465,9 +4402,16 @@ app.get("/api/history", requireAdminKey, (req, res) => {
     from,
     to,
     limit: req.query.limit,
-    offset: req.query.offset
+    offset: req.query.offset,
+    familyId
   });
-  const rows = db.prepare(query.sql).all(...query.params).map(mapLedgerRow);
+  let rows = db.prepare(query.sql).all(...query.params).map(mapLedgerRow);
+  if (familyId && !LEDGER_HAS_FAMILY_COLUMN) {
+    rows = rows.filter((row) => {
+      const memberFamily = resolveMemberFamilyId(row.userId ?? null);
+      return !memberFamily || memberFamily === familyId;
+    });
+  }
   if (req.query.format === "csv") {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", "attachment; filename=history.csv");
@@ -4504,7 +4448,10 @@ app.get("/api/history", requireAdminKey, (req, res) => {
   res.json({ rows, limit: query.limit, offset: query.offset });
 });
 
-app.get("/api/admin/telemetry/core-health", requireAdminKey, (_req, res) => {
+app.get("/api/admin/telemetry/core-health", requireAdminKey, (req, res) => {
+  if (req.auth?.role !== 'master') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
   res.json(summarizeTelemetry());
 });
 
