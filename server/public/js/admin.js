@@ -1,157 +1,193 @@
-import { renderHeader } from './js/header.js';
+import { renderHeader } from './header.js';
 
-function getYouTubeId(url) {
-  if (!url) return "";
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
-    if (u.searchParams.has("v")) return u.searchParams.get("v");
-    const parts = u.pathname.split("/").filter(Boolean);
-    const idx = parts.findIndex((p) => p === "embed" || p === "shorts");
-    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
-    return "";
-  } catch {
-    const m = String(url).match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
-    return m ? m[1] : "";
-  }
-}
+(() => {
+  'use strict';
 
-function getYouTubeThumbnail(url) {
-  const id = getYouTubeId(url);
-  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";
-}
+  // ---- constants FIRST (avoid TDZ) ----
+  const ADMIN_KEY_STORAGE = 'ck.adminKey';
+  const ADMIN_KEY_INPUT_SELECTOR = '#adminKey';
+  const ADMIN_KEY_SAVE_SELECTOR = '#saveAdminKey';
+  const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
+  const ADMIN_INVALID_MSG = 'Admin key invalid.';
+  const ADMIN_KEY_REQUIRED_MSG = 'Please enter the adminkey first';
+  const SUPPORTED_LANGS = ['en', 'ko'];
 
-function getYouTubeEmbed(url, { host = "www.youtube.com", autoplay = true } = {}) {
-  const id = getYouTubeId(url);
-  if (!id) return "";
-  const params = new URLSearchParams({
-    modestbranding: "1",
-    rel: "0",
-    playsinline: "1",
-  });
-  if (autoplay) params.set("autoplay", "1");
-  return `https://${host}/embed/${id}?${params.toString()}`;
-}
+  // ---- safe helpers (defined before use) ----
+  let adminKeyMemory = '';
 
-function isLikelyVerticalYouTube(url) {
-  if (!url) return false;
-  const base = typeof window !== "undefined" ? window.location.origin : "https://youtube.com";
-  try {
-    const parsed = new URL(url, base);
-    if (parsed.pathname?.toLowerCase().includes("/shorts/")) return true;
-    for (const value of parsed.searchParams.values()) {
-      if (String(value).toLowerCase().includes("shorts")) return true;
+  function getAdminKey() {
+    try {
+      const stored = window.localStorage?.getItem(ADMIN_KEY_STORAGE);
+      if (stored != null) {
+        adminKeyMemory = stored;
+        return stored;
+      }
+    } catch {
+      // ignore storage errors
     }
-    return false;
-  } catch {
-    return String(url).toLowerCase().includes("shorts");
+    return adminKeyMemory || '';
   }
-}
 
-window.getYouTubeId = getYouTubeId;
-window.getYouTubeThumbnail = getYouTubeThumbnail;
-window.getYouTubeEmbed = getYouTubeEmbed;
-window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
-
-const SUPPORTED_LANGS = ['en', 'ko'];
-let ckI18nApi = {};
-
-function readStoredLang(getLangFn) {
-  if (typeof getLangFn === 'function') {
-    const current = getLangFn();
-    if (SUPPORTED_LANGS.includes(current)) return current;
+  function setAdminKey(val) {
+    const value = val || '';
+    let persisted = true;
+    try {
+      if (value) {
+        window.localStorage?.setItem(ADMIN_KEY_STORAGE, value);
+      } else {
+        window.localStorage?.removeItem(ADMIN_KEY_STORAGE);
+      }
+    } catch {
+      persisted = false;
+    }
+    adminKeyMemory = value;
+    return persisted;
   }
-  try {
-    const stored = window.localStorage?.getItem('ck.lang');
-    if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
-  } catch (error) {
-    console.warn('Unable to read stored language', error);
+
+  function loadAdminKey() {
+    const el = document.querySelector(ADMIN_KEY_INPUT_SELECTOR);
+    if (el) el.value = getAdminKey();
   }
-  return SUPPORTED_LANGS[0];
-}
 
-function translate(key, fallback = key) {
-  const translator = ckI18nApi.t || (window.ckI18n && window.ckI18n.t);
-  return typeof translator === 'function' ? translator(key) : fallback;
-}
+  let ckI18nApi = {};
 
-function syncHeaderLangButtons(active) {
-  document
-    .querySelectorAll('#lang-controls button[data-lang]')
-    .forEach((btn) => {
-      const isActive = btn.dataset.lang === active;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
+  function readStoredLang(getLangFn) {
+    if (typeof getLangFn === 'function') {
+      const current = getLangFn();
+      if (SUPPORTED_LANGS.includes(current)) return current;
+    }
+    try {
+      const stored = window.localStorage?.getItem('ck.lang');
+      if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
+    } catch (error) {
+      console.warn('Unable to read stored language', error);
+    }
+    return SUPPORTED_LANGS[0];
+  }
+
+  function translate(key, fallback = key) {
+    const translator = ckI18nApi.t || (window.ckI18n && window.ckI18n.t);
+    return typeof translator === 'function' ? translator(key) : fallback;
+  }
+
+  function syncHeaderLangButtons(active) {
+    document
+      .querySelectorAll('#lang-controls button[data-lang]')
+      .forEach((btn) => {
+        const isActive = btn.dataset.lang === active;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
+      });
+  }
+
+  function initI18n() {
+    const api = window.ckI18n;
+    if (!api) return;
+
+    const { applyAdminTranslations, setLang, getLang, t } = api;
+    ckI18nApi = { applyAdminTranslations, setLang, getLang, t };
+
+    if (typeof applyAdminTranslations === 'function') {
+      applyAdminTranslations(document);
+    }
+
+    const titleEl = document.querySelector('[data-i18n="app.title"]');
+    if (titleEl && typeof t === 'function') {
+      titleEl.textContent = t('app.title');
+    }
+
+    function handleSetLang(lang) {
+      const normalized = SUPPORTED_LANGS.includes(lang) ? lang : SUPPORTED_LANGS[0];
+      if (typeof setLang === 'function') setLang(normalized);
+      syncHeaderLangButtons(normalized);
+      return normalized;
+    }
+
+    const bindLangButton = (lang) => {
+      const btn = document.querySelector(`[data-lang="${lang}"]`);
+      if (!btn || btn.dataset.i18nBound) return;
+      btn.dataset.i18nBound = 'true';
+      btn.addEventListener('click', () => handleSetLang(lang));
+    };
+
+    renderHeader({
+      mountId: 'app-header',
+      langs: SUPPORTED_LANGS,
+      onLangChange: handleSetLang,
+      variant: 'band',
+      showInstall: true
     });
-}
 
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('admin.js loaded ok');
+    bindLangButton('en');
+    bindLangButton('ko');
 
-  const { setLang: setLangGlobal, applyAdminTranslations, getLang, t } = window.ckI18n || {};
-  if (typeof setLangGlobal !== 'function' || typeof applyAdminTranslations !== 'function') {
-    console.error('i18n not loaded before admin.js');
-    return;
+    const initialLang = readStoredLang(getLang);
+    handleSetLang(initialLang);
+
+    window.setLang = handleSetLang;
   }
 
-  ckI18nApi = { setLang: setLangGlobal, applyAdminTranslations, getLang, t };
-
-  applyAdminTranslations(document);
-
-  const titleEl = document.querySelector('[data-i18n="app.title"]');
-  if (titleEl && typeof t === 'function') {
-    titleEl.textContent = t('app.title');
+  function getYouTubeId(url) {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes('youtu.be')) return u.pathname.slice(1);
+      if (u.searchParams.has('v')) return u.searchParams.get('v');
+      const parts = u.pathname.split('/').filter(Boolean);
+      const idx = parts.findIndex((p) => p === 'embed' || p === 'shorts');
+      if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
+      return '';
+    } catch {
+      const m = String(url).match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/);
+      return m ? m[1] : '';
+    }
   }
 
-  function handleSetLang(lang) {
-    const normalized = SUPPORTED_LANGS.includes(lang) ? lang : SUPPORTED_LANGS[0];
-    setLangGlobal(normalized);
-    syncHeaderLangButtons(normalized);
-    return normalized;
+  function getYouTubeThumbnail(url) {
+    const id = getYouTubeId(url);
+    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : '';
   }
 
-  const bindLangButton = (lang) => {
-    const btn = document.querySelector(`[data-lang="${lang}"]`);
-    if (!btn || btn.dataset.i18nBound) return;
-    btn.dataset.i18nBound = 'true';
-    btn.addEventListener('click', () => handleSetLang(lang));
-  };
+  function getYouTubeEmbed(url, { host = 'www.youtube.com', autoplay = true } = {}) {
+    const id = getYouTubeId(url);
+    if (!id) return '';
+    const params = new URLSearchParams({
+      modestbranding: '1',
+      rel: '0',
+      playsinline: '1'
+    });
+    if (autoplay) params.set('autoplay', '1');
+    return `https://${host}/embed/${id}?${params.toString()}`;
+  }
 
-  bindLangButton('en');
-  bindLangButton('ko');
+  function isLikelyVerticalYouTube(url) {
+    if (!url) return false;
+    const base = typeof window !== 'undefined' ? window.location.origin : 'https://youtube.com';
+    try {
+      const parsed = new URL(url, base);
+      if (parsed.pathname?.toLowerCase().includes('/shorts/')) return true;
+      for (const value of parsed.searchParams.values()) {
+        if (String(value).toLowerCase().includes('shorts')) return true;
+      }
+      return false;
+    } catch {
+      return String(url).toLowerCase().includes('shorts');
+    }
+  }
 
-  renderHeader({
-    mountId: 'app-header',
-    langs: SUPPORTED_LANGS,
-    onLangChange: handleSetLang,
-    variant: 'band',
-    showInstall: true
-  });
-
-  bindLangButton('en');
-  bindLangButton('ko');
-
-  const initialLang = readStoredLang(getLang);
-  handleSetLang(initialLang);
-
-  window.setLang = handleSetLang;
-
-  initAdmin();
-});
+  window.getYouTubeId = getYouTubeId;
+  window.getYouTubeThumbnail = getYouTubeThumbnail;
+  window.getYouTubeEmbed = getYouTubeEmbed;
+  window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
 function initAdmin() {
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
 
-  const ADMIN_KEY_DEFAULT = 'Mamapapa';
-  const ADMIN_INVALID_MSG = 'Admin key invalid.';
-  const ADMIN_KEY_REQUIRED_MSG = 'Please enter the adminkey first';
   const $k = (id) => document.getElementById(id);
   const $ = $k;
   const keyInput = $k('adminKey'); // use current ID
   const memoryStore = {};
-
-  const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const adminState = {
     role: null,
     familyId: null,
@@ -521,8 +557,8 @@ details.member-fold .summary-value {
 
   if (keyInput) {
     keyInput.placeholder = 'enter admin key';
-    const saved = loadAdminKey();
-    if (saved) keyInput.value = saved;
+    const saved = getAdminKey();
+    if (saved && !keyInput.value) keyInput.value = saved;
   }
 
   const toastHost = $('toastHost');
@@ -644,36 +680,29 @@ details.member-fold .summary-value {
     });
   })();
 
-  const ADMIN_KEY_STORAGE = 'CK_ADMIN_KEY';
-  function saveAdminKey(value) {
-    if (!value) {
-      return storageRemove(ADMIN_KEY_STORAGE);
-    }
-    return storageSet(ADMIN_KEY_STORAGE, value);
-  }
-
-  function loadAdminKey() {
-    return storageGet(ADMIN_KEY_STORAGE);
-  }
-
-  $('saveAdminKey')?.addEventListener('click', async () => {
-    const value = (keyInput?.value || '').trim();
-    const persisted = saveAdminKey(value);
-    toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
-    if (value) {
-      const ok = await refreshAdminContext({ showToastOnError: true });
-      if (ok) {
-        await loadFeatureFlagsFromServer();
-        await reloadScopedData();
+  const saveAdminButton = document.querySelector(ADMIN_KEY_SAVE_SELECTOR);
+  if (saveAdminButton) {
+    saveAdminButton.addEventListener('click', async () => {
+      const value = (keyInput?.value || '').trim();
+      const persisted = setAdminKey(value);
+      toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
+      if (value) {
+        const ok = await refreshAdminContext({ showToastOnError: true });
+        if (ok) {
+          await loadFeatureFlagsFromServer();
+          await reloadScopedData();
+        }
+      } else {
+        clearAdminContext();
       }
-    } else {
-      clearAdminContext();
-    }
-  });
+    });
+  }
 
-  document.addEventListener('DOMContentLoaded', async () => {
-    const saved = loadAdminKey();
-    if (saved && keyInput) keyInput.value = saved;
+  async function hydrateAdminContext() {
+    const saved = getAdminKey();
+    if (saved && keyInput && !keyInput.value) {
+      keyInput.value = saved;
+    }
     const storedContext = loadAdminContext();
     if (storedContext) {
       setAdminState(storedContext, { persist: false });
@@ -687,7 +716,9 @@ details.member-fold .summary-value {
         await reloadScopedData();
       }
     }
-  });
+  }
+
+  hydrateAdminContext().catch((error) => console.warn('hydrateAdminContext failed', error));
 
   familyScopeSelect?.addEventListener('change', async () => {
     const selected = familyScopeSelect.value || null;
@@ -708,12 +739,19 @@ details.member-fold .summary-value {
     }
   }
 
-  function getAdminKey(){
+  function getAdminKeyInput() {
     const el = document.getElementById('adminKey');
     return (el?.value || '').trim();
   }
   function ensureAdminKey() {
-    return getAdminKey();
+    const value = getAdminKeyInput();
+    if (value) return value;
+    const stored = getAdminKey();
+    if (stored && keyInput) {
+      keyInput.value = stored;
+      return stored;
+    }
+    return stored;
   }
   async function adminFetch(url, opts = {}) {
     const { idempotencyKey, headers: extraHeaders, skipScope = false, ...fetchOpts } = opts;
@@ -1393,8 +1431,7 @@ details.member-fold .summary-value {
     });
   }
 
-  // ensure DOM is ready, then call once
-  document.addEventListener('DOMContentLoaded', initCollapsibles);
+  initCollapsibles();
 
   function renderMemberInfo(member) {
     if (!memberInfoDetails) return;
@@ -1916,7 +1953,6 @@ details.member-fold .summary-value {
   }
   $('btnReloadHolds')?.addEventListener('click', loadHolds);
   $('holdFilter')?.addEventListener('change', loadHolds);
-  document.addEventListener('DOMContentLoaded', loadHolds);
 
   memberEditModal?.addEventListener('click', (event) => {
     const target = event.target;
@@ -2757,7 +2793,6 @@ setupScanner({
     }
   }
   $('btnReloadTemplates')?.addEventListener('click', loadTemplates);
-  document.addEventListener('DOMContentLoaded', loadTemplates);
 
   function renderTemplates() {
     if (!earnTableBody) return;
@@ -3120,4 +3155,10 @@ setupScanner({
   loadFeatureFlagsFromServer();
 }
 
-console.info('admin.js loaded ok');
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('admin.js loaded ok');
+    initI18n();
+    loadAdminKey();
+    initAdmin();
+  });
+})();
