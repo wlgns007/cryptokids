@@ -13,7 +13,6 @@
     http-equiv="Content-Security-Policy"
     content="frame-src 'self' https://www.youtube.com; child-src 'self' https://www.youtube.com;"
   >
-  <script src="/assets/i18n.js" defer></script>
   <style>
     :root {
       color-scheme: light;
@@ -910,11 +909,12 @@
 <body>
   <div id="app-header"></div>
   <link rel="stylesheet" href="/styles.css?v=18">
+  <script src="/js/i18n.js?v=1"></script>
   <script type="module" src="/admin.js?v=18"></script>
   <div class="page container">
     <header class="page-header">
       <div class="header-intro">
-        <h1>CryptoKids Admin</h1>
+        <h1 data-i18n="app.title">CryptoKids Admin</h1>
         <p>Issue points, approve holds, and curate the earn menu.</p>
       </div>
       <div class="header-actions">
@@ -1067,7 +1067,13 @@
             <div class="row compact" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
               <label style="flex:1 1 180px;">
                 <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em;">Search</span>
-                <input id="memberSearch" type="text" placeholder="search id or name" data-i18n-placeholder="search_placeholder">
+                <input
+                  id="memberSearch"
+                  type="text"
+                  placeholder="search id or name"
+                  data-i18n="search_placeholder"
+                  data-i18n-attr="placeholder"
+                >
               </label>
               <button id="btnMemberReload">Reload</button>
             </div>

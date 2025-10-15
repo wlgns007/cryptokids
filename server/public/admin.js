@@ -54,19 +54,25 @@ window.getYouTubeEmbed = getYouTubeEmbed;
 window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
 const SUPPORTED_LANGS = ['en', 'ko'];
+let ckI18nApi = {};
 
-function readStoredLang() {
+function readStoredLang(getLangFn) {
+  if (typeof getLangFn === 'function') {
+    const current = getLangFn();
+    if (SUPPORTED_LANGS.includes(current)) return current;
+  }
   try {
     const stored = window.localStorage?.getItem('ck.lang');
     if (stored && SUPPORTED_LANGS.includes(stored)) return stored;
   } catch (error) {
     console.warn('Unable to read stored language', error);
   }
-  if (window.I18N && typeof window.I18N.getLang === 'function') {
-    const current = window.I18N.getLang();
-    if (SUPPORTED_LANGS.includes(current)) return current;
-  }
   return SUPPORTED_LANGS[0];
+}
+
+function translate(key, fallback = key) {
+  const translator = ckI18nApi.t || (window.ckI18n && window.ckI18n.t);
+  return typeof translator === 'function' ? translator(key) : fallback;
 }
 
 function syncHeaderLangButtons(active) {
@@ -79,33 +85,56 @@ function syncHeaderLangButtons(active) {
     });
 }
 
-function setLang(lang) {
-  const normalized = SUPPORTED_LANGS.includes(lang) ? lang : SUPPORTED_LANGS[0];
-  syncHeaderLangButtons(normalized);
-  try {
-    window.localStorage?.setItem('ck.lang', normalized);
-  } catch (error) {
-    console.warn('Unable to store language preference', error);
-  }
-  applyAdminTranslations?.(normalized);
-  if (window.I18N && typeof window.I18N.setLang === 'function') {
-    window.I18N.setLang(normalized);
-  }
-  return normalized;
-}
-
-window.setLang = setLang;
-
 document.addEventListener('DOMContentLoaded', () => {
+  console.log('admin.js loaded ok');
+
+  const { setLang: setLangGlobal, applyAdminTranslations, getLang, t } = window.ckI18n || {};
+  if (typeof setLangGlobal !== 'function' || typeof applyAdminTranslations !== 'function') {
+    console.error('i18n not loaded before admin.js');
+    return;
+  }
+
+  ckI18nApi = { setLang: setLangGlobal, applyAdminTranslations, getLang, t };
+
+  applyAdminTranslations(document);
+
+  const titleEl = document.querySelector('[data-i18n="app.title"]');
+  if (titleEl && typeof t === 'function') {
+    titleEl.textContent = t('app.title');
+  }
+
+  function handleSetLang(lang) {
+    const normalized = SUPPORTED_LANGS.includes(lang) ? lang : SUPPORTED_LANGS[0];
+    setLangGlobal(normalized);
+    syncHeaderLangButtons(normalized);
+    return normalized;
+  }
+
+  const bindLangButton = (lang) => {
+    const btn = document.querySelector(`[data-lang="${lang}"]`);
+    if (!btn || btn.dataset.i18nBound) return;
+    btn.dataset.i18nBound = 'true';
+    btn.addEventListener('click', () => handleSetLang(lang));
+  };
+
+  bindLangButton('en');
+  bindLangButton('ko');
+
   renderHeader({
     mountId: 'app-header',
     langs: SUPPORTED_LANGS,
-    onLangChange: setLang,
+    onLangChange: handleSetLang,
     variant: 'band',
     showInstall: true
   });
 
-  setLang(readStoredLang());
+  bindLangButton('en');
+  bindLangButton('ko');
+
+  const initialLang = readStoredLang(getLang);
+  handleSetLang(initialLang);
+
+  window.setLang = handleSetLang;
 
   initAdmin();
 });
@@ -564,7 +593,7 @@ details.member-fold .summary-value {
     window.openVideoModal = function openVideoModal(url) {
       const id = window.getYouTubeId ? getYouTubeId(url) : "";
       if (!id) {
-        if (typeof toast === "function") toast(I18N.t("invalid_youtube"), "error");
+        if (typeof toast === "function") toast(translate('invalid_youtube'), 'error');
         console.warn("openVideoModal: no video id for url:", url);
         return;
       }
