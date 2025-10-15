@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
+// Quote SQLite identifiers safely (double-quote the whole thing)
+function q(id) {
+  return `"${String(id).replaceAll('"', '""')}"`;
+}
+
 export const DATA_DIR = path.resolve(process.cwd(), "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -58,101 +63,86 @@ function ensureFamilyColumn(table) {
   db.prepare(`UPDATE ${table} SET family_id = @family WHERE family_id IS NULL`).run({ family: "default" });
 }
 
-function enforceFamilyNotNull(table) {
-  const columns = columnInfo(table);
-  if (columns.length === 0) {
-    return;
-  }
-  const familyColumn = columns.find((row) => row.name === "family_id");
-  if (!familyColumn) {
-    return;
-  }
-  if (familyColumn.notnull === 1) {
-    return;
-  }
-
-  const hasNulls = db
-    .prepare(`SELECT 1 AS found FROM ${table} WHERE family_id IS NULL LIMIT 1`)
-    .get();
-  if (hasNulls) {
-    throw new Error(
-      `Cannot enforce NOT NULL on ${table}.family_id; NULL rows remain. ` +
-        `Backfill a family_id (expected 'default') and retry.`
+function enforceFamilyNotNull(db) {
+  // Ensure family table + default family exists
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${q("family")} (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+  `);
+
+  // One-time default family (id = 'default') if missing
+  const ensureDefaultFamily = db.prepare(`
+    INSERT INTO ${q("family")} (id, name, created_at, updated_at)
+    SELECT 'default', 'Default Family', datetime('now'), datetime('now')
+    WHERE NOT EXISTS (SELECT 1 FROM ${q("family")} WHERE id = 'default')
+  `);
+  ensureDefaultFamily.run();
+
+  // Read current member schema to decide if migration needed
+  const pragma = db.prepare(`PRAGMA table_info(${q("member")})`).all();
+  const hasFamilyId = pragma.some((c) => c.name === "family_id");
+  const isFamilyNotNull = pragma.some((c) => c.name === "family_id" && c.notnull === 1);
+
+  if (hasFamilyId && isFamilyNotNull) {
+    return; // already enforced
   }
 
-  const tableSqlRow = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
-    .get(table);
-  if (!tableSqlRow?.sql) {
-    return;
-  }
-
-  const patterns = [
-    /"family_id"\s+TEXT(?![^,]*NOT\s+NULL)/i,
-    /`family_id`\s+TEXT(?![^,]*NOT\s+NULL)/i,
-    /\[family_id\]\s+TEXT(?![^,]*NOT\s+NULL)/i,
-    /\bfamily_id\s+TEXT(?![^,]*NOT\s+NULL)/i
-  ];
-
-  let createSql = tableSqlRow.sql;
-  let replaced = false;
-  for (const pattern of patterns) {
-    if (pattern.test(createSql)) {
-      createSql = createSql.replace(pattern, (match) => `${match} NOT NULL`);
-      replaced = true;
-      break;
-    }
-  }
-
-  if (!replaced) {
-    throw new Error(`Unable to locate family_id column definition for table ${table}.`);
-  }
-
-  if (table === "ledger") {
-    const tokenPattern = /(\"token\"|`token`|\[token\]|token)\s+TEXT\s+UNIQUE\s+NOT\s+NULL/gi;
-    createSql = createSql.replace(tokenPattern, "$1 TEXT UNIQUE");
-  }
-
-  const existingObjects = db
-    .prepare(
-      "SELECT type, sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index','trigger') AND sql IS NOT NULL"
-    )
-    .all(table);
-
-  const quote = (name) => `"${String(name).replace(/"/g, '""')}"`;
-  const tempName = `${table}_new_${Date.now()}`;
-
-  const createTablePattern = new RegExp(
-    `CREATE TABLE\\s+(?:IF NOT EXISTS\\s+)?(?:"${table}"|\`${table}\`|\[${table}\]|${table})`,
-    "i"
-  );
-  if (!createTablePattern.test(createSql)) {
-    throw new Error(`Unable to rewrite CREATE TABLE statement for ${table}.`);
-  }
-  const tempCreateSql = createSql.replace(createTablePattern, `CREATE TABLE ${quote(tempName)}`);
-
-  const columnList = columns.map((col) => quote(col.name)).join(", ");
-
-  db.exec("PRAGMA foreign_keys = OFF");
+  // Build new schema for member (recreate-table pattern)
+  // Adjust the columns to match your current schema; keep all existing cols.
   db.exec("BEGIN");
   try {
-    db.exec(tempCreateSql);
-    db.exec(
-      `INSERT INTO ${quote(tempName)} (${columnList}) SELECT ${columnList} FROM ${quote(table)}`
-    );
-    db.exec(`DROP TABLE ${quote(table)}`);
-    db.exec(`ALTER TABLE ${quote(tempName)} RENAME TO ${quote(table)}`);
-    for (const { sql } of existingObjects) {
-      db.exec(sql);
-    }
+    db.exec(`
+      CREATE TABLE ${q("member__new")} (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        date_of_birth TEXT,
+        sex TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        family_id TEXT NOT NULL DEFAULT 'default',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (family_id) REFERENCES ${q("family")}(id) ON DELETE RESTRICT
+      );
+    `);
+
+    // Copy data, backfilling family_id to 'default' if null/absent
+    const cols = pragma.map((c) => c.name);
+    // Columns present in old table
+    const hasCol = (c) => cols.includes(c);
+
+    const selectCols = [
+      "id",
+      hasCol("name") ? "name" : "NULL AS name",
+      hasCol("date_of_birth") ? "date_of_birth" : "NULL AS date_of_birth",
+      hasCol("sex") ? "sex" : "NULL AS sex",
+      hasCol("status") ? "status" : "'active' AS status",
+      hasCol("family_id") ? "COALESCE(family_id, 'default') AS family_id" : "'default' AS family_id",
+      hasCol("created_at") ? "created_at" : "datetime('now') AS created_at",
+      hasCol("updated_at") ? "updated_at" : "datetime('now') AS updated_at"
+    ].join(", ");
+
+    db.exec(`
+      INSERT INTO ${q("member__new")} (id, name, date_of_birth, sex, status, family_id, created_at, updated_at)
+      SELECT ${selectCols}
+      FROM ${q("member")};
+    `);
+
+    // Swap tables
+    db.exec(`DROP TABLE ${q("member")};`);
+    db.exec(`ALTER TABLE ${q("member__new")} RENAME TO ${q("member")};`);
+
+    // Recreate indexes as needed
+    db.exec(`CREATE INDEX IF NOT EXISTS ${q("idx_member_family")} ON ${q("member")}(family_id);`);
+
     db.exec("COMMIT");
-  } catch (err) {
+  } catch (e) {
     db.exec("ROLLBACK");
-    db.exec("PRAGMA foreign_keys = ON");
-    throw err;
+    throw e;
   }
-  db.exec("PRAGMA foreign_keys = ON");
 }
 
 const scopedTables = ["member", "task", "reward", "ledger", "earn_templates"];
@@ -160,9 +150,7 @@ for (const table of scopedTables) {
   ensureFamilyColumn(table);
 }
 
-for (const table of scopedTables) {
-  enforceFamilyNotNull(table);
-}
+enforceFamilyNotNull(db);
 
 const scopedIndexes = [
   { table: "member", statement: "CREATE INDEX IF NOT EXISTS idx_member_family ON member(family_id)" },
