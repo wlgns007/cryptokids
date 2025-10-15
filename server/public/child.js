@@ -147,6 +147,45 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   let recentRedeemsVisible = false;
   let fullRedeemsVisible = false;
 
+  const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
+  const DEFAULT_FAMILY_ID = 'default';
+
+  function readStoredAdminContext() {
+    try {
+      const raw = window.localStorage?.getItem(ADMIN_CONTEXT_STORAGE);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (error) {
+      console.warn('Unable to read stored admin context', error);
+      return null;
+    }
+  }
+
+  function resolveFamilyId() {
+    try {
+      const search = new URLSearchParams(window.location?.search || '');
+      const queryFamily = search.get('family_id') || search.get('familyId') || search.get('family');
+      if (queryFamily && queryFamily.trim()) {
+        return queryFamily.trim();
+      }
+    } catch (error) {
+      console.warn('family query parse failed', error);
+    }
+    const globalFamily = typeof window !== 'undefined' ? window.currentFamilyId : null;
+    if (typeof globalFamily === 'string' && globalFamily.trim()) {
+      return globalFamily.trim();
+    }
+    const stored = readStoredAdminContext();
+    if (stored) {
+      const fromContext = stored.currentFamilyId || stored.family_id || stored.familyId;
+      if (fromContext && String(fromContext).trim()) {
+        return String(fromContext).trim();
+      }
+    }
+    return DEFAULT_FAMILY_ID;
+  }
+
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
     installButtonSelector: '#installBtn',
@@ -658,10 +697,32 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   let templates = [];
   async function loadEarnTemplates() {
     try {
-      const res = await fetch('/api/earn-templates?active=true&sort=sort_order');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'failed');
-      templates = data;
+      const familyId = resolveFamilyId();
+      const params = new URLSearchParams();
+      params.set('family_id', familyId || DEFAULT_FAMILY_ID);
+      const res = await fetch(`/api/public/tasks?${params.toString()}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load tasks');
+        throw new Error(message);
+      }
+      templates = Array.isArray(data)
+        ? data
+            .map((tpl) => ({
+              id: tpl.id,
+              title: tpl.title || '',
+              points: Number(tpl.points ?? 0) || 0,
+              description: tpl.description || '',
+              youtube_url: tpl.youtube_url || '',
+              sort_order: Number(tpl.sort_order ?? 0) || 0
+            }))
+            .sort((a, b) => {
+              if (a.sort_order !== b.sort_order) {
+                return a.sort_order - b.sort_order;
+              }
+              return a.title.localeCompare(b.title);
+            })
+        : [];
       renderEarnList();
     } catch (err) {
       $('earnList').innerHTML = `<div class="muted">${err.message || 'Failed to load tasks'}</div>`;
@@ -1140,10 +1201,16 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const empty = $('shopEmpty');
     if (empty) empty.style.display = 'none';
     try{
-      const res = await fetch('/api/rewards?active=1');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Failed to load rewards');
-      renderRewards(data || []);
+      const familyId = resolveFamilyId();
+      const params = new URLSearchParams();
+      params.set('family_id', familyId || DEFAULT_FAMILY_ID);
+      const res = await fetch(`/api/public/rewards?${params.toString()}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load rewards');
+        throw new Error(message);
+      }
+      renderRewards(Array.isArray(data) ? data : []);
     }catch(err){
       renderError(err.message || String(err));
     }

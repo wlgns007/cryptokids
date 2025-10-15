@@ -43,6 +43,34 @@ for (const statement of schemaStatements) {
   db.exec(statement);
 }
 
+try {
+  const masterRows = db
+    .prepare(
+      "SELECT rowid, id FROM admin_key WHERE role = 'master' ORDER BY created_at ASC, rowid ASC"
+    )
+    .all();
+  if (masterRows.length > 1) {
+    const [, ...extras] = masterRows;
+    const extraIds = extras.map((row) => row.id).filter(Boolean);
+    if (extraIds.length) {
+      const placeholders = extraIds.map(() => "?").join(",");
+      db.prepare(
+        `DELETE FROM admin_key WHERE role = 'master' AND id IN (${placeholders})`
+      ).run(extraIds);
+    }
+  }
+} catch (err) {
+  console.warn("[db] master admin key dedupe skipped", err?.message || err);
+}
+
+try {
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_key_master ON admin_key(role) WHERE role = 'master'"
+  );
+} catch (err) {
+  console.warn("[db] master admin key unique index skipped", err?.message || err);
+}
+
 function columnInfo(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all();
 }
@@ -98,6 +126,7 @@ function enforceFamilyNotNull(db) {
 
   // 1) Detect if we even need to migrate
   const pragma = db.prepare(`PRAGMA table_info(${q("member")})`).all();
+  if (pragma.length === 0) return;
   const hasFamilyId = pragma.some((c) => c.name === "family_id");
   const isFamilyNotNull = pragma.some((c) => c.name === "family_id" && c.notnull === 1);
   if (hasFamilyId && isFamilyNotNull) return;
