@@ -172,14 +172,6 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function getStoredChildId() {
-    return storageGet(CHILD_ID_STORAGE) || '';
-  }
-
-  function setStoredChildId(value) {
-    storageSet(CHILD_ID_STORAGE, value || '');
-  }
-
   function readConfiguredFamilyId() {
     if (typeof document === 'undefined') return null;
     const bodyFamily = document.body?.dataset?.familyId;
@@ -406,15 +398,20 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     return $('childUserId').value.trim();
   }
 
-  const childIdInput = $('childUserId');
-  const childIdSaveButton = $('child-save-id');
+  const childIdInput = document.querySelector('#childUserId, #child-user-id');
+  const childIdSaveButton = document.querySelector('#child-save-id');
   if (childIdInput && !childIdInput.value) {
-    childIdInput.value = getStoredChildId();
+    try {
+      childIdInput.value = window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
+    } catch {
+      childIdInput.value = childIdInput.value || '';
+    }
   }
   childIdSaveButton?.addEventListener('click', () => {
-    const value = childIdInput?.value?.trim() || '';
-    setStoredChildId(value);
-    console.log('[CK] Child ID saved:', value);
+    const value = (childIdInput?.value || '').trim();
+    try {
+      window.localStorage?.setItem(CHILD_ID_STORAGE, value);
+    } catch {}
   });
 
   function saveFilters(filters) {

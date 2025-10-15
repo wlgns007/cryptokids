@@ -465,7 +465,7 @@ export async function testF1() {
     await fs.mkdir(DATA_DIR, { recursive: true });
     const seedDb = new Database(dbPath);
     try {
-      const now = Date.now();
+      const now = new Date().toISOString();
       seedDb.exec(`
         CREATE TABLE IF NOT EXISTS family (
           id TEXT PRIMARY KEY,
@@ -517,10 +517,10 @@ export async function testF1() {
         );
       `);
       seedDb.prepare(
-        `INSERT INTO family (id, name, status, created_at, updated_at)
-         VALUES (@id, @name, 'active', @now, @now)
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, status=excluded.status, updated_at=excluded.updated_at`
-      ).run({ id: DEFAULT_FAMILY_ID, name: "Default Family", now });
+        `INSERT INTO family (id, name, email, status, created_at, updated_at)
+         VALUES (@id, @name, @email, 'active', @now, @now)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=COALESCE(excluded.email, family.email), status=excluded.status, updated_at=excluded.updated_at`
+      ).run({ id: DEFAULT_FAMILY_ID, name: "Default Family", email: "default@example.com", now });
       const memberId = crypto.randomUUID();
       const taskId = crypto.randomUUID();
       const rewardId = crypto.randomUUID();

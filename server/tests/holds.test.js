@@ -21,16 +21,17 @@ const {
 import db from '../db.js';
 
 function ensureDefaultFamily(key = 'Mamapapa') {
-  const now = Date.now();
+  const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO family (id, name, status, admin_key, created_at, updated_at)
-     VALUES (?, ?, 'active', ?, ?, ?)
+    `INSERT INTO family (id, name, email, status, admin_key, created_at, updated_at)
+     VALUES (?, ?, ?, 'active', ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
+       email = excluded.email,
        status = excluded.status,
        admin_key = excluded.admin_key,
        updated_at = excluded.updated_at`
-  ).run(DEFAULT_FAMILY_ID, 'Default Family', key, now, now);
+  ).run(DEFAULT_FAMILY_ID, 'Default Family', 'default@example.com', key, now, now);
 }
 
 ensureDefaultFamily();

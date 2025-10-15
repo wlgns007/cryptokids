@@ -180,6 +180,23 @@ import { renderHeader } from './header.js';
   window.getYouTubeEmbed = getYouTubeEmbed;
   window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
+  function show(selector) {
+    const el = document.querySelector(selector);
+    if (el) el.classList.remove('hidden');
+  }
+
+  function hide(selector) {
+    const el = document.querySelector(selector);
+    if (el) el.classList.add('hidden');
+  }
+
+  document.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-close]');
+    if (!target) return;
+    const selector = target.getAttribute('data-close');
+    if (selector) hide(selector);
+  });
+
 function initAdmin() {
   if (window.__CK_ADMIN_READY__) return;
   window.__CK_ADMIN_READY__ = true;
@@ -217,20 +234,11 @@ function initAdmin() {
   const familyCreatePhoneInput = $k('familyCreatePhone');
   const familyCreateIdPreview = $k('familyCreateIdPreview');
   const familyCreateSubmitButton = $k('btnCreateFamily');
-  const adminKeysSection = $k('secAdminKeys');
-  const adminKeysTableBody = $k('adminKeysTableBody');
-  const adminKeysStatus = $k('adminKeysStatus');
-  const adminKeyLabelInput = $k('adminKeyLabel');
-  const adminKeyCreateButton = $k('btnAdminKeyCreate');
-  const adminKeysRefreshButton = $k('btnAdminKeysRefresh');
-  const adminKeyPlainModal = $k('adminKeyPlainModal');
-  const adminKeyPlainValue = $k('adminKeyPlainValue');
-  const adminKeyPlainCopyButton = $k('btnAdminKeyPlainCopy');
-  const adminKeyPlainCloseButton = $k('btnAdminKeyPlainClose');
-  const adminKeyPlainDismissButton = $k('btnAdminKeyPlainDismiss');
+  const newFamilyButton = $k('btn-new-family');
+  const forgotKeyButton = $k('btn-forgot-key');
+  const newFamilyCreateButton = $k('nf-create');
+  const forgotKeySendButton = $k('fk-send');
   const roleVisibilityNodes = Array.from(document.querySelectorAll('[data-admin-role]'));
-  const ADMIN_KEYS_COLSPAN = 4;
-  let adminKeysCache = [];
 
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
@@ -301,23 +309,6 @@ function initAdmin() {
     }
   }
 
-  function renderAdminKeysPlaceholder(text) {
-    if (!adminKeysTableBody) return;
-    adminKeysTableBody.innerHTML = '';
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = ADMIN_KEYS_COLSPAN;
-    cell.className = 'muted';
-    cell.textContent = text;
-    row.appendChild(cell);
-    adminKeysTableBody.appendChild(row);
-  }
-
-  function resetAdminKeysTable(message = 'Select a family to view admin keys.') {
-    renderAdminKeysPlaceholder(message);
-    adminKeysCache = [];
-  }
-
   function applyRoleVisibility() {
     const activeRole = adminState.role || '';
     const hasScope = Boolean(adminState.currentFamilyId);
@@ -326,9 +317,6 @@ function initAdmin() {
     if (searchSubmit) searchSubmit.disabled = activeRole !== 'master';
     if (familyManagementButton) familyManagementButton.disabled = activeRole !== 'master';
     if (familiesRefreshButton) familiesRefreshButton.disabled = activeRole !== 'master';
-    if (adminKeyLabelInput) adminKeyLabelInput.disabled = activeRole !== 'master';
-    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = activeRole !== 'master' || !hasScope;
-    if (adminKeyCreateButton) adminKeyCreateButton.disabled = activeRole !== 'master' || !hasScope;
     for (const node of roleVisibilityNodes) {
       if (!node) continue;
       const roles = (node.dataset.adminRole || '')
@@ -340,20 +328,11 @@ function initAdmin() {
     }
 
     if (!activeRole) {
-      resetAdminKeysTable('Provide an admin key to manage admin access.');
-      if (adminKeysStatus) adminKeysStatus.textContent = '';
       return;
     }
 
     if (activeRole !== 'master') {
-      resetAdminKeysTable('Master admin role required.');
-      if (adminKeysStatus) adminKeysStatus.textContent = '';
       return;
-    }
-
-    if (!adminState.currentFamilyId) {
-      resetAdminKeysTable('Select a family to view admin keys.');
-      if (adminKeysStatus) adminKeysStatus.textContent = 'Choose a family to manage admin keys.';
     }
 
     updateFamilyCreateButtonState();
@@ -370,9 +349,6 @@ function initAdmin() {
     saveAdminContext(null);
     updateWhoamiBanner();
     applyRoleVisibility();
-    resetAdminKeysTable('Provide an admin key to manage admin access.');
-    if (adminKeysStatus) adminKeysStatus.textContent = '';
-    if (adminKeyLabelInput) adminKeyLabelInput.value = '';
     if (familySearchInput) familySearchInput.value = '';
     if (familyCreateForm) familyCreateForm.reset();
     if (familyCreateIdPreview) {
@@ -623,7 +599,7 @@ function initAdmin() {
     }
   }
 
-  async function handleFamilyRowSave({ id, nameInput, statusSelect, button }) {
+  async function handleFamilyRowSave({ id, nameInput, emailInput, statusSelect, button }) {
     if (!id || !nameInput || !statusSelect || !button) return;
     const trimmedName = nameInput.value.trim();
     const originalName = (nameInput.dataset.originalValue || '').trim();
@@ -639,6 +615,21 @@ function initAdmin() {
     }
     if (currentStatus !== originalStatus) {
       payload.status = currentStatus;
+    }
+    if (emailInput) {
+      const trimmedEmail = (emailInput.value || '').trim().toLowerCase();
+      const originalEmail = (emailInput.dataset.originalValue || '').trim().toLowerCase();
+      if (trimmedEmail !== originalEmail) {
+        if (!trimmedEmail) {
+          toast('Email is required.', 'error');
+          return;
+        }
+        if (!trimmedEmail.includes('@')) {
+          toast('Enter a valid email address.', 'error');
+          return;
+        }
+        payload.email = trimmedEmail;
+      }
     }
     if (!Object.keys(payload).length) {
       button.disabled = true;
@@ -694,6 +685,16 @@ function initAdmin() {
     nameCell.appendChild(nameInput);
     row.appendChild(nameCell);
 
+    const emailCell = document.createElement('td');
+    const emailInput = document.createElement('input');
+    emailInput.type = 'email';
+    const originalEmail = family.email ? String(family.email) : '';
+    emailInput.value = originalEmail;
+    emailInput.dataset.originalValue = originalEmail;
+    emailInput.placeholder = 'Email';
+    emailCell.appendChild(emailInput);
+    row.appendChild(emailCell);
+
     const statusCell = document.createElement('td');
     const statusSelect = document.createElement('select');
     statusSelect.className = 'family-status-select';
@@ -725,14 +726,20 @@ function initAdmin() {
       const originalNameNormalized = (nameInput.dataset.originalValue || '').trim();
       const currentStatus = statusSelect.value;
       const originalStatus = statusSelect.dataset.originalValue || '';
-      const changed = currentName !== originalNameNormalized || currentStatus !== originalStatus;
+      const currentEmail = emailInput.value.trim().toLowerCase();
+      const originalEmailNormalized = (emailInput.dataset.originalValue || '').trim().toLowerCase();
+      const changed =
+        currentName !== originalNameNormalized ||
+        currentStatus !== originalStatus ||
+        currentEmail !== originalEmailNormalized;
       saveButton.disabled = !changed;
     };
 
     nameInput.addEventListener('input', evaluateDirtyState);
+    emailInput.addEventListener('input', evaluateDirtyState);
     statusSelect.addEventListener('change', evaluateDirtyState);
     saveButton.addEventListener('click', () =>
-      handleFamilyRowSave({ id: family.id, nameInput, statusSelect, button: saveButton })
+      handleFamilyRowSave({ id: family.id, nameInput, emailInput, statusSelect, button: saveButton })
     );
 
     familyListTableBody.appendChild(row);
@@ -746,7 +753,10 @@ function initAdmin() {
         familyListTableBody.innerHTML = '';
         if (familyListEmptyRow) {
           const cell = familyListEmptyRow.querySelector('td');
-          if (cell) cell.textContent = 'Master access required.';
+          if (cell) {
+            cell.colSpan = 5;
+            cell.textContent = 'Master access required.';
+          }
           familyListTableBody.appendChild(familyListEmptyRow);
         }
       }
@@ -764,7 +774,7 @@ function initAdmin() {
       if (!families.length) {
         const row = document.createElement('tr');
         const cell = document.createElement('td');
-        cell.colSpan = 4;
+        cell.colSpan = 5;
         cell.className = 'muted';
         cell.textContent = 'No families yet.';
         row.appendChild(cell);
@@ -1145,7 +1155,7 @@ details.member-fold .summary-value {
       const table = document.createElement('table');
       table.className = 'quick-family-table';
       const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>ID</th><th>Name</th><th>Status</th></tr>';
+      thead.innerHTML = '<tr><th>ID</th><th>Name</th><th>Email</th><th>Status</th></tr>';
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
       for (const family of rows) {
@@ -1154,6 +1164,7 @@ details.member-fold .summary-value {
         tr.innerHTML = `
           <td>${family.id || ''}</td>
           <td>${family.name || ''}</td>
+          <td>${family.email || ''}</td>
           <td>${family.status || 'active'}</td>
         `;
         tbody.appendChild(tr);
@@ -1370,8 +1381,7 @@ details.member-fold .summary-value {
       loadRewards,
       loadTemplates,
       loadHolds,
-      loadActivity,
-      loadAdminKeys
+      loadActivity
     ];
     for (const loader of loaders) {
       if (typeof loader !== 'function') continue;
@@ -1485,6 +1495,53 @@ details.member-fold .summary-value {
       return false;
     }
   }
+
+  newFamilyButton?.addEventListener('click', () => show('#modal-new-family'));
+  forgotKeyButton?.addEventListener('click', () => show('#modal-forgot-key'));
+
+  newFamilyCreateButton?.addEventListener('click', async () => {
+    const familyName = document.querySelector('#nf-family')?.value?.trim();
+    const adminName = document.querySelector('#nf-admin-name')?.value?.trim();
+    const email = document.querySelector('#nf-email')?.value?.trim();
+    const adminKey = document.querySelector('#nf-admin-key')?.value?.trim();
+    const msg = document.querySelector('#nf-msg');
+    if (msg) msg.textContent = 'Creating...';
+    try {
+      const res = await fetch('/api/families/self-register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ familyName, adminName, email, adminKey })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const error = data && typeof data === 'object' ? data.error : null;
+        throw new Error(error || 'Failed');
+      }
+      if (msg) msg.textContent = 'Family created. Check your email for confirmation.';
+      await refreshAdminContext();
+      window.setTimeout(() => hide('#modal-new-family'), 1200);
+    } catch (error) {
+      if (msg) msg.textContent = error.message || 'Failed to create family';
+    }
+  });
+
+  forgotKeySendButton?.addEventListener('click', async () => {
+    const email = document.querySelector('#fk-email')?.value?.trim();
+    const msg = document.querySelector('#fk-msg');
+    if (msg) msg.textContent = 'Sending...';
+    try {
+      const res = await fetch('/api/families/forgot-admin-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      if (!res.ok) throw new Error('Failed');
+      if (msg) msg.textContent = 'If that email exists, we sent the key.';
+      window.setTimeout(() => hide('#modal-forgot-key'), 1200);
+    } catch (error) {
+      if (msg) msg.textContent = 'Unable to send right now.';
+    }
+  });
 
   const ERROR_MESSAGES = {
     INVALID_AMOUNT: 'Enter a positive amount to continue.',
@@ -3406,280 +3463,6 @@ setupScanner({
       reader.readAsDataURL(file);
     });
   }
-
-  function showAdminKeyPlain(plainKey) {
-    if (!adminKeyPlainModal || !adminKeyPlainValue) return;
-    adminKeyPlainValue.value = plainKey || '';
-    adminKeyPlainModal.classList.remove('hidden');
-    window.setTimeout(() => {
-      try {
-        adminKeyPlainValue.focus();
-        adminKeyPlainValue.select();
-        adminKeyPlainValue.setSelectionRange(0, adminKeyPlainValue.value.length);
-      } catch {}
-    }, 0);
-  }
-
-  function hideAdminKeyPlain() {
-    if (!adminKeyPlainModal) return;
-    adminKeyPlainModal.classList.add('hidden');
-    if (adminKeyPlainValue) adminKeyPlainValue.value = '';
-  }
-
-  function renderAdminKeysTable(keys) {
-    if (!adminKeysTableBody) return;
-    adminKeysCache = Array.isArray(keys) ? keys.slice() : [];
-    if (!adminKeysCache.length) {
-      renderAdminKeysPlaceholder('No admin keys yet. Create one to invite another adult.');
-      return;
-    }
-    adminKeysTableBody.innerHTML = '';
-    for (const key of adminKeysCache) {
-      const tr = document.createElement('tr');
-
-      const labelCell = document.createElement('td');
-      labelCell.textContent = key.label ? String(key.label) : '—';
-      tr.appendChild(labelCell);
-
-      const statusCell = document.createElement('td');
-      const status = (key.status || '').toString().toLowerCase() === 'disabled' ? 'Disabled' : 'Active';
-      statusCell.textContent = status;
-      tr.appendChild(statusCell);
-
-      const createdCell = document.createElement('td');
-      const createdAt = Number(key.created_at ?? key.updated_at ?? 0);
-      createdCell.textContent = createdAt ? formatTime(createdAt) : '—';
-      tr.appendChild(createdCell);
-
-      const actionsCell = document.createElement('td');
-      actionsCell.style.display = 'flex';
-      actionsCell.style.flexWrap = 'wrap';
-      actionsCell.style.gap = '6px';
-      actionsCell.style.alignItems = 'center';
-
-      const renameBtn = document.createElement('button');
-      renameBtn.type = 'button';
-      renameBtn.textContent = 'Rename';
-      renameBtn.addEventListener('click', () => handleRenameAdminKey(key, renameBtn));
-      actionsCell.appendChild(renameBtn);
-
-      const toggleBtn = document.createElement('button');
-      toggleBtn.type = 'button';
-      toggleBtn.textContent = status === 'Disabled' ? 'Enable' : 'Disable';
-      toggleBtn.addEventListener('click', () => handleToggleAdminKey(key, toggleBtn));
-      actionsCell.appendChild(toggleBtn);
-
-      tr.appendChild(actionsCell);
-      adminKeysTableBody.appendChild(tr);
-    }
-  }
-
-  async function patchAdminKey(keyId, payload, successMessage) {
-    try {
-      const { res, body } = await adminFetch(`/api/admin-keys/${encodeURIComponent(keyId)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        skipScope: true
-      });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return false;
-      }
-      if (!res.ok) {
-        const message = presentError(body?.error, 'Failed to update admin key');
-        throw new Error(message);
-      }
-      if (successMessage) {
-        toast(successMessage);
-      }
-      await loadAdminKeys();
-      return true;
-    } catch (err) {
-      toast(err.message || 'Failed to update admin key', 'error');
-      return false;
-    }
-  }
-
-  async function handleRenameAdminKey(key, button) {
-    if (!key?.id) return;
-    const currentLabel = key.label ? String(key.label) : '';
-    const input = window.prompt('Update admin key label', currentLabel);
-    if (input === null) return;
-    const trimmed = input.trim();
-    const normalizedCurrent = currentLabel.trim();
-    if (trimmed === normalizedCurrent) {
-      toast('Label unchanged.');
-      return;
-    }
-    const payload = { label: trimmed.length ? trimmed : null };
-    button.disabled = true;
-    try {
-      await patchAdminKey(
-        key.id,
-        payload,
-        trimmed.length ? 'Admin key renamed.' : 'Admin key label cleared.'
-      );
-    } finally {
-      button.disabled = false;
-    }
-  }
-
-  async function handleToggleAdminKey(key, button) {
-    if (!key?.id) return;
-    const nextStatus = (key.status || '').toString().toLowerCase() === 'disabled' ? 'active' : 'disabled';
-    button.disabled = true;
-    try {
-      const successMessage = nextStatus === 'disabled' ? 'Admin key disabled.' : 'Admin key enabled.';
-      await patchAdminKey(key.id, { status: nextStatus }, successMessage);
-    } finally {
-      button.disabled = false;
-    }
-  }
-
-  async function loadAdminKeys() {
-    if (!adminKeysTableBody) return;
-    if (adminState.role !== 'master') {
-      if (adminKeysStatus) adminKeysStatus.textContent = '';
-      return;
-    }
-
-    const familyId = adminState.currentFamilyId;
-    const hasScope = Boolean(familyId);
-    if (adminKeyCreateButton) adminKeyCreateButton.disabled = !hasScope;
-    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = !hasScope;
-
-    if (!hasScope) {
-      resetAdminKeysTable('Select a family to view admin keys.');
-      if (adminKeysStatus) adminKeysStatus.textContent = 'Choose a family to manage admin keys.';
-      return;
-    }
-
-    renderAdminKeysPlaceholder('Loading…');
-    if (adminKeysStatus) adminKeysStatus.textContent = 'Loading admin keys…';
-
-    if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = true;
-    if (adminKeyCreateButton) adminKeyCreateButton.disabled = true;
-
-    try {
-      const params = new URLSearchParams({ family_id: familyId }).toString();
-      const { res, body } = await adminFetch(`/api/admin-keys?${params}`, { skipScope: true });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        renderAdminKeysPlaceholder('Admin key invalid.');
-        if (adminKeysStatus) adminKeysStatus.textContent = 'Admin key invalid.';
-        return;
-      }
-      if (!res.ok) {
-        const message = presentError(body?.error, 'Failed to load admin keys');
-        throw new Error(message);
-      }
-      const keys = Array.isArray(body) ? body : [];
-      renderAdminKeysTable(keys);
-      if (adminKeysStatus) {
-        adminKeysStatus.textContent = keys.length
-          ? `Showing ${keys.length} admin key${keys.length === 1 ? '' : 's'}.`
-          : 'No admin keys yet.';
-      }
-    } catch (err) {
-      console.warn('loadAdminKeys failed', err);
-      renderAdminKeysPlaceholder('Unable to load admin keys.');
-      if (adminKeysStatus) adminKeysStatus.textContent = err.message || 'Unable to load admin keys.';
-    } finally {
-      if (adminKeysRefreshButton) adminKeysRefreshButton.disabled = false;
-      if (adminKeyCreateButton) adminKeyCreateButton.disabled = false;
-    }
-  }
-
-  adminKeysRefreshButton?.addEventListener('click', () => loadAdminKeys());
-
-  adminKeyCreateButton?.addEventListener('click', async () => {
-    if (adminState.role !== 'master') {
-      toast('Master admin role required.', 'error');
-      return;
-    }
-    const familyId = adminState.currentFamilyId;
-    if (!familyId) {
-      toast('Select a family scope first.', 'error');
-      return;
-    }
-    const label = (adminKeyLabelInput?.value || '').trim();
-    const payload = { family_id: familyId };
-    if (label) payload.label = label;
-
-    adminKeyCreateButton.disabled = true;
-    try {
-      const { res, body } = await adminFetch('/api/admin-keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        skipScope: true
-      });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return;
-      }
-      if (!res.ok) {
-        const message = presentError(body?.error, 'Failed to create admin key');
-        throw new Error(message);
-      }
-      const plainKey = body && typeof body === 'object' ? body.plain_key : null;
-      if (!plainKey) {
-        throw new Error('Server did not return the new admin key');
-      }
-      toast('Admin key created');
-      if (adminKeyLabelInput) adminKeyLabelInput.value = '';
-      showAdminKeyPlain(plainKey);
-      await loadAdminKeys();
-    } catch (err) {
-      toast(err.message || 'Failed to create admin key', 'error');
-    } finally {
-      adminKeyCreateButton.disabled = false;
-    }
-  });
-
-  adminKeyPlainCopyButton?.addEventListener('click', async () => {
-    const value = adminKeyPlainValue?.value || '';
-    if (!value) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-        toast('Admin key copied to clipboard');
-        return;
-      }
-      throw new Error('Clipboard unavailable');
-    } catch {
-      try {
-        adminKeyPlainValue?.select?.();
-        adminKeyPlainValue?.setSelectionRange?.(0, value.length);
-        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
-        if (ok) {
-          toast('Admin key copied to clipboard');
-          return;
-        }
-      } catch {}
-      toast('Copy failed. Select the key and copy manually.', 'error');
-    }
-  });
-
-  const closeAdminKeyModal = () => hideAdminKeyPlain();
-  adminKeyPlainCloseButton?.addEventListener('click', closeAdminKeyModal);
-  adminKeyPlainDismissButton?.addEventListener('click', closeAdminKeyModal);
-  adminKeyPlainModal?.addEventListener('click', (event) => {
-    if (
-      event.target === adminKeyPlainModal ||
-      event.target?.classList?.contains('modal-backdrop') ||
-      (event.target instanceof HTMLElement && event.target.matches('[data-close]'))
-    ) {
-      event.preventDefault();
-      closeAdminKeyModal();
-    }
-  });
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && adminKeyPlainModal && !adminKeyPlainModal.classList.contains('hidden')) {
-      closeAdminKeyModal();
-    }
-  });
 
   // ===== Earn templates =====
   const earnTableBody = $('earnTable')?.querySelector('tbody');

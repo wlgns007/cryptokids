@@ -44,16 +44,18 @@ function hasFamilyColumn(table) {
   return columnInfo(table).some((col) => col.name === "family_id");
 }
 
-function upsertFamily({ id, name, status = "active" }) {
-  const now = Date.now();
+function upsertFamily({ id, name, email = null, status = "active" }) {
+  const now = new Date().toISOString();
+  const normalizedEmail = email ? String(email).trim().toLowerCase() || null : null;
   db.prepare(
-    `INSERT INTO family (id, name, status, created_at, updated_at)
-     VALUES (@id, @name, @status, @now, @now)
+    `INSERT INTO family (id, name, email, status, created_at, updated_at)
+     VALUES (@id, @name, @email, @status, @now, @now)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
+       email = COALESCE(excluded.email, family.email),
        status = excluded.status,
-       updated_at = excluded.updated_at`
-  ).run({ id, name, status, now });
+        updated_at = excluded.updated_at`
+  ).run({ id, name, email: normalizedEmail, status, now });
 }
 
 function ensureDefaultFamily() {
@@ -82,8 +84,8 @@ function ensureFamilyAdminKey(familyId, { preset = null, allowGenerate = true } 
   }
   try {
     db.prepare(
-      "UPDATE family SET admin_key = @key, updated_at = @now WHERE id = @id"
-    ).run({ key: candidate, now: Date.now(), id: familyId });
+      "UPDATE family SET admin_key = @key, updated_at = @updated_at WHERE id = @id"
+    ).run({ key: candidate, updated_at: new Date().toISOString(), id: familyId });
     return candidate;
   } catch (error) {
     const message = String(error?.message || "");

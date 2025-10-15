@@ -20,10 +20,11 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS family (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
+    email TEXT UNIQUE,
     admin_key TEXT UNIQUE,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`
 ];
 
@@ -33,35 +34,62 @@ for (const statement of schemaStatements) {
 
 try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key)');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_email" ON "family"(email)');
 } catch (err) {
-  console.warn('[db] unable to ensure idx_family_admin_key', err?.message || err);
+  console.warn('[db] unable to ensure family indexes', err?.message || err);
 }
 
-const familyColumns = db.prepare('PRAGMA table_info("family")').all().map((c) => c.name);
-if (!familyColumns.includes('admin_key')) {
-  db.exec('PRAGMA foreign_keys = OFF; BEGIN;');
-  try {
-    db.exec(`
-      CREATE TABLE "family__new" (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        admin_key TEXT UNIQUE,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      INSERT INTO "family__new"(id, name, status, admin_key, created_at, updated_at)
-      SELECT id, name, COALESCE(status, 'active'), NULL, created_at, updated_at FROM "family";
-      DROP TABLE "family";
-      ALTER TABLE "family__new" RENAME TO "family";
-      CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key);
-    `);
-    db.exec('COMMIT; PRAGMA foreign_keys = ON;');
-  } catch (e) {
-    db.exec('ROLLBACK; PRAGMA foreign_keys = ON;');
-    throw e;
+// Ensure family has email, admin_key; remove phone if present
+(function migrateFamilyTable() {
+  const cols = db.prepare(`PRAGMA table_info("family")`).all();
+  const names = new Set(cols.map(c => c.name));
+  const needsEmail = !names.has('email');
+  const hasPhone = names.has('phone');
+  const needsAdminKey = !names.has('admin_key');
+
+  if (needsEmail || hasPhone || needsAdminKey) {
+    db.exec('PRAGMA foreign_keys=OFF; BEGIN;');
+    try {
+      db.exec(`
+        CREATE TABLE "family__new" (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE,
+          admin_key TEXT UNIQUE,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+
+      db.exec(`
+        INSERT INTO "family__new"(id, name, email, admin_key, status, created_at, updated_at)
+        SELECT
+          id,
+          name,
+          CASE
+            WHEN instr(lower(coalesce(email, '')), '@') > 0 THEN email
+            ELSE NULL
+          END AS email,
+          admin_key,
+          COALESCE(status, 'active'),
+          COALESCE(created_at, datetime('now')),
+          COALESCE(updated_at, datetime('now'))
+        FROM "family";
+      `);
+
+      db.exec(`DROP TABLE "family";`);
+      db.exec(`ALTER TABLE "family__new" RENAME TO "family";`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_email" ON "family"(email);`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_key" ON "family"(admin_key);`);
+
+      db.exec('COMMIT; PRAGMA foreign_keys=ON;');
+    } catch (e) {
+      db.exec('ROLLBACK; PRAGMA foreign_keys=ON;');
+      throw e;
+    }
   }
-}
+})();
 
 const ADMIN_KEY_ENV = process.env.ADMIN_KEY?.trim();
 if (ADMIN_KEY_ENV) {
@@ -119,15 +147,16 @@ function enforceFamilyNotNull(db) {
     CREATE TABLE IF NOT EXISTS ${q("family")} (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
+      email TEXT UNIQUE,
       admin_key TEXT UNIQUE,
+      status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   db.prepare(`
-    INSERT INTO ${q("family")} (id, name, status, admin_key, created_at, updated_at)
-    SELECT 'default', 'Default Family', 'active', NULL, datetime('now'), datetime('now')
+    INSERT INTO ${q("family")} (id, name, email, status, admin_key, created_at, updated_at)
+    SELECT 'default', 'Default Family', NULL, 'active', NULL, datetime('now'), datetime('now')
     WHERE NOT EXISTS (SELECT 1 FROM ${q("family")} WHERE id = 'default')
   `).run();
 
@@ -277,24 +306,15 @@ if (typeof db.all !== "function") {
 
 export function resolveAdminContext(database, adminKey) {
   const key = typeof adminKey === "string" ? adminKey.trim() : "";
-  if (!key) {
-    return { role: "none", familyId: null };
-  }
+  if (!key) return { role: "none", familyId: null, family_id: null };
 
-  const master = process.env.MASTER_ADMIN_KEY?.trim();
-  if (master && key === master) {
-    return { role: "master", familyId: null };
-  }
+  const MASTER = process.env.MASTER_ADMIN_KEY?.trim();
+  if (MASTER && key === MASTER) return { role: "master", familyId: null, family_id: null };
 
-  try {
-    const row = database.prepare('SELECT id FROM "family" WHERE admin_key = ? LIMIT 1').get(key);
-    if (row?.id) {
-      return { role: "family", familyId: row.id };
-    }
-  } catch (error) {
-    console.warn("[auth] resolveAdminContext failed", error?.message || error);
-  }
-  return { role: "none", familyId: null };
+  const row = database.prepare(`SELECT id FROM "family" WHERE admin_key = ?`).get(key);
+  if (row?.id) return { role: "family", familyId: row.id, family_id: row.id };
+
+  return { role: "none", familyId: null, family_id: null };
 }
 
 export default db;
