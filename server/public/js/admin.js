@@ -3851,60 +3851,65 @@ setupScanner({
 }
 
   function setupCollapsibles() {
-    const mainCards = document.querySelectorAll(
-      '#card-family-scope, #card-family-management, #card-member-management'
-    );
-    mainCards.forEach((card) => {
+    document.querySelectorAll('[data-collapsible].card').forEach((card) => {
       const btn = card.querySelector('.card-toggle');
-      if (!btn || btn.dataset.collapsibleBound === 'true') return;
+      if (!btn) return;
+      card.classList.toggle('collapsed', btn.getAttribute('aria-expanded') !== 'true');
+      if (btn.dataset.collapsibleBound === 'true') return;
       btn.dataset.collapsibleBound = 'true';
-      const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-      card.classList.toggle('collapsed', !isExpanded);
       btn.addEventListener('click', () => {
-        const expanded = btn.getAttribute('aria-expanded') === 'true';
-        btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-        card.classList.toggle('collapsed', expanded);
+        const open = btn.getAttribute('aria-expanded') === 'true';
+        btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+        card.classList.toggle('collapsed', open);
       });
     });
 
-    document.querySelectorAll('#card-member-management .subcard').forEach((sub) => {
-      const btn = sub.querySelector('.subcard-toggle');
-      if (!btn || btn.dataset.collapsibleBound === 'true') return;
-      btn.dataset.collapsibleBound = 'true';
-      const expanded = btn.getAttribute('aria-expanded') === 'true';
-      sub.classList.toggle('collapsed', !expanded);
-      btn.addEventListener('click', () => {
-        const isOpen = btn.getAttribute('aria-expanded') === 'true';
-        btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-        sub.classList.toggle('collapsed', isOpen);
+    document
+      .querySelectorAll('#card-member-management .subcard[data-collapsible]')
+      .forEach((sub) => {
+        const btn = sub.querySelector('.subcard-toggle');
+        if (!btn) return;
+        sub.classList.toggle('collapsed', btn.getAttribute('aria-expanded') !== 'true');
+        if (btn.dataset.collapsibleBound === 'true') return;
+        btn.dataset.collapsibleBound = 'true';
+        btn.addEventListener('click', () => {
+          const open = btn.getAttribute('aria-expanded') === 'true';
+          btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+          sub.classList.toggle('collapsed', open);
+        });
       });
-    });
   }
 
-  function expandIfCollapsible(el) {
-    if (!el) return;
+  function expandForJump(el) {
     const card = el.closest('.card');
+    const cardBtn = card?.querySelector('.card-toggle');
     if (card && card.classList.contains('collapsed')) {
       card.classList.remove('collapsed');
-      const toggle = card.querySelector('.card-toggle');
-      if (toggle) toggle.setAttribute('aria-expanded', 'true');
+      cardBtn?.setAttribute('aria-expanded', 'true');
     }
-    const sub = el.closest('.subcard');
-    if (sub && sub.classList.contains('collapsed')) {
-      sub.classList.remove('collapsed');
-      const toggle = sub.querySelector('.subcard-toggle');
-      if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    if (el.classList.contains('subcard')) {
+      const subBtn = el.querySelector('.subcard-toggle');
+      el.classList.remove('collapsed');
+      subBtn?.setAttribute('aria-expanded', 'true');
     }
   }
 
   function jumpTo(selector) {
-    if (!selector) return;
     const el = document.querySelector(selector);
     if (!el) return;
-    expandIfCollapsible(el);
-    if (typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    expandForJump(el);
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function setupShortcuts() {
+    document.querySelectorAll('.shortcut[data-jump]').forEach((btn) => {
+      if (btn.dataset.jumpBound === 'true') return;
+      btn.dataset.jumpBound = 'true';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        jumpTo(btn.getAttribute('data-jump'));
+      });
+    });
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -3912,13 +3917,7 @@ setupScanner({
     initI18n();
     loadAdminKey();
     setupCollapsibles();
-    document.querySelectorAll('.shortcut[data-jump]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        event.preventDefault();
-        const target = btn.getAttribute('data-jump');
-        if (target) jumpTo(target);
-      });
-    });
+    setupShortcuts();
     initAdmin();
   });
 })();
