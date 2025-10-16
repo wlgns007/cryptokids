@@ -17,6 +17,120 @@ function quoteIdentifier(id) {
   return `"${String(id).replaceAll('"', '""')}"`;
 }
 
+// ---- helpers ----
+function hasTable(db, name) {
+  return !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+    .get(name);
+}
+function hasColumn(db, table, col) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all();
+    return cols.some((c) => c.name === col);
+  } catch {
+    return false;
+  }
+}
+function listTables(db) {
+  return db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )
+    .all()
+    .map((r) => r.name);
+}
+function fkMap(db, table) {
+  // returns: [{table: childTable, ref: parentTable}]
+  const rows = db.prepare(`PRAGMA foreign_key_list(${quoteIdentifier(table)})`).all();
+  // child is "table" itself; parent is rows[].table
+  return rows.map((r) => ({ child: table, parent: r.table }));
+}
+
+function topoDeleteOrder(db, familyTables) {
+  // Build edges child->parent for *only* tables we will delete by family_id
+  const edges = [];
+  for (const t of familyTables) {
+    for (const { parent } of fkMap(db, t)) {
+      if (familyTables.includes(parent)) {
+        edges.push([t, parent]); // delete child before parent
+      }
+    }
+  }
+  // Kahn's algorithm
+  const nodes = new Set(familyTables);
+  const indeg = new Map([...nodes].map((n) => [n, 0]));
+  for (const [, p] of edges) indeg.set(p, (indeg.get(p) || 0) + 1);
+  const q = [...[...nodes].filter((n) => (indeg.get(n) || 0) === 0)];
+  const order = [];
+  while (q.length) {
+    const n = q.shift();
+    order.push(n);
+    for (const [c, p] of edges.filter((e) => e[0] === n)) {
+      indeg.set(p, indeg.get(p) - 1);
+      if (indeg.get(p) === 0) q.push(p);
+    }
+  }
+  // If we didn’t cover every node (cycle or unknown), fall back to a conservative order: children first by number of FKs
+  if (order.length !== nodes.size) {
+    const fkCounts = Object.fromEntries(familyTables.map((t) => [t, fkMap(db, t).length]));
+    return [...familyTables].sort((a, b) => fkCounts[b] - fkCounts[a]);
+  }
+  return order; // children → parents
+}
+
+// Delete for one family id using dependency-aware order
+function deleteFamilyScopedData(db, familyId) {
+  // collect only tables that have a family_id column
+  const all = listTables(db);
+  const familyTables = all.filter((t) => hasColumn(db, t, "family_id"));
+
+  // Compute deletion order (children first)
+  const order = topoDeleteOrder(db, familyTables);
+
+  // Attempt safe ordered delete with FKs on
+  db.exec("BEGIN");
+  try {
+    for (const t of order) {
+      db.prepare(`DELETE FROM ${quoteIdentifier(t)} WHERE family_id = ?`).run(familyId);
+    }
+    db.exec("COMMIT");
+    return;
+  } catch (e) {
+    db.exec("ROLLBACK");
+    console.warn(
+      "[prestart] ordered family delete failed with FKs ON; falling back to FK=OFF once.",
+      e.message
+    );
+  }
+
+  // Last resort: FK OFF within one transaction, then ON again
+  db.exec("PRAGMA foreign_keys = OFF; BEGIN");
+  try {
+    for (const t of order) {
+      db.prepare(`DELETE FROM ${quoteIdentifier(t)} WHERE family_id = ?`).run(familyId);
+    }
+    db.exec("COMMIT; PRAGMA foreign_keys = ON;");
+  } catch (e) {
+    db.exec("ROLLBACK; PRAGMA foreign_keys = ON;");
+    throw e;
+  }
+}
+
+function sweepOrphans(db) {
+  // Example only; include tables you know may orphan
+  const candidates = ["history", "holds"];
+  for (const t of candidates) {
+    if (!hasTable(db, t)) continue;
+    // if table has member_id and members enforce family_id, remove rows whose member no longer exists
+    if (hasColumn(db, t, "member_id")) {
+      db.exec(`
+        DELETE FROM ${quoteIdentifier(t)}
+        WHERE member_id NOT IN (SELECT id FROM "member")
+      `);
+    }
+  }
+}
+
 function tableExists(name) {
   try {
     const row = db
@@ -93,25 +207,11 @@ function ensureDefaultFamily() {
   }
 }
 
-function clearDefaultFamilyData() {
-  const tables = ["member", "task", "reward", "ledger"];
-  let cleared = 0;
-  const wipe = db.transaction(() => {
-    for (const table of tables) {
-      if (!tableExists(table) || !hasFamilyColumn(table)) continue;
-      const countRow = db
-        .prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} WHERE family_id = ?`)
-        .get(DEFAULT_FAMILY_ID);
-      const count = countRow?.count ?? 0;
-      if (!count) continue;
-      db.prepare(`DELETE FROM ${quoteIdentifier(table)} WHERE family_id = ?`).run(DEFAULT_FAMILY_ID);
-      cleared += count;
-    }
-  });
-  wipe();
-  if (cleared > 0) {
-    console.log("[CLEANUP] default family cleared.");
-  }
+function clearDefaultFamilyData(database = db, familyId = DEFAULT_FAMILY_ID) {
+  if (!hasTable(database, "family")) return;
+  // only purge if you *want* a clean default family
+  deleteFamilyScopedData(database, familyId);
+  sweepOrphans(database);
 }
 
 function ensureFamilyAdminKey(familyId, { preset = null, allowGenerate = true } = {}) {
