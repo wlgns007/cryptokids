@@ -222,7 +222,6 @@ function initAdmin() {
   const familySearchForm = $k('familySearchForm');
   const familySearchInput = $k('familySearchInput');
   const familyManagementButton = $k('btnFamilyManagement');
-  const familyManagementSection = $k('secFamilyManagement');
   const familyManagementPanel = $k('familyManagementPanel');
   const familiesRefreshButton = $k('btnFamiliesRefresh');
   const familyListTableBody = $k('familyListTableBody');
@@ -599,6 +598,17 @@ function initAdmin() {
     }
   }
 
+  async function updateFamily(id, patch) {
+    if (!id) throw new Error('Family ID required');
+    const payload = patch && typeof patch === 'object' ? patch : {};
+    return apiFetch(`/api/families/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      skipScope: true
+    });
+  }
+
   async function handleFamilyRowSave({ id, nameInput, emailInput, statusSelect, button }) {
     if (!id || !nameInput || !statusSelect || !button) return;
     const trimmedName = nameInput.value.trim();
@@ -639,24 +649,16 @@ function initAdmin() {
     button.disabled = true;
     button.textContent = 'Saving...';
     try {
-      const { res, body } = await adminFetch(`/api/families/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        skipScope: true
-      });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return;
-      }
-      if (!res.ok) {
-        const message = presentError(body?.error, 'Failed to update family');
-        throw new Error(message);
-      }
+      await updateFamily(id, payload);
       toast('Family updated.');
       await refreshFamiliesFromServer({ silent: true });
     } catch (error) {
-      toast(error.message || 'Failed to update family', 'error');
+      if (error?.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+      } else {
+        const message = presentError(error?.body?.error || error?.message, 'Failed to update family');
+        toast(message, 'error');
+      }
     } finally {
       button.textContent = originalLabel;
       button.disabled = true;
@@ -1134,10 +1136,7 @@ details.member-fold .summary-value {
 
   familyManagementButton?.addEventListener('click', () => {
     if (adminState.role !== 'master') return;
-    if (!familyManagementSection) return;
-    if (typeof familyManagementSection.scrollIntoView === 'function') {
-      familyManagementSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    jumpToCard('#card-family-management');
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -1396,7 +1395,7 @@ details.member-fold .summary-value {
   async function refreshAdminContext({ showToastOnError = false, silent = false } = {}) {
     const key = ensureAdminKey();
     const scopeBadge = document.querySelector('#admin-scope-badge');
-    const masterCard = document.querySelector('#family-management-card');
+    const masterCard = document.querySelector('#card-family-scope');
     const quickFamilyTable = document.querySelector('#families-table');
     const clearBadge = () => {
       if (scopeBadge) {
@@ -1409,7 +1408,7 @@ details.member-fold .summary-value {
     if (!key) {
       clearAdminContext();
       clearBadge();
-      if (masterCard) masterCard.style.display = 'none';
+      if (masterCard) masterCard.hidden = true;
       if (quickFamilyTable) quickFamilyTable.innerHTML = '';
       return false;
     }
@@ -1437,7 +1436,7 @@ details.member-fold .summary-value {
         }
       }
       if (masterCard) {
-        masterCard.style.display = nextState.role === 'master' ? '' : 'none';
+        masterCard.hidden = nextState.role !== 'master';
         if (nextState.role !== 'master' && quickFamilyTable) {
           quickFamilyTable.innerHTML = '';
         }
@@ -3851,10 +3850,48 @@ setupScanner({
   loadFeatureFlagsFromServer();
 }
 
+  function setupCollapsibles() {
+    document.querySelectorAll('[data-collapsible] .card-toggle').forEach((btn) => {
+      if (btn.dataset.collapsibleBound === 'true') return;
+      btn.dataset.collapsibleBound = 'true';
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.card');
+        if (!card) return;
+        const expanded = btn.getAttribute('aria-expanded') === 'true';
+        btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+        card.classList.toggle('collapsed', expanded);
+      });
+    });
+  }
+
+  function jumpToCard(selector) {
+    if (!selector) return;
+    const el = document.querySelector(selector);
+    if (!el) return;
+    if (el.classList.contains('collapsed')) {
+      const toggle = el.querySelector('.card-toggle');
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', 'true');
+      }
+      el.classList.remove('collapsed');
+    }
+    if (typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     console.log('admin.js loaded ok');
     initI18n();
     loadAdminKey();
+    setupCollapsibles();
+    document.querySelectorAll('.shortcut[data-jump]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        const target = btn.getAttribute('data-jump');
+        if (target) jumpToCard(target);
+      });
+    });
     initAdmin();
   });
 })();

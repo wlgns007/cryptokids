@@ -28,6 +28,50 @@ router.get("/api/families", (req, res) => {
   res.json(rows);
 });
 
+router.patch("/api/families/:id", express.json(), (req, res) => {
+  const ctx = resolveAdminContext(db, readAdminKey(req));
+  if (ctx.role !== "master") return res.status(403).json({ error: "forbidden" });
+
+  const { id } = req.params;
+  const body = req.body || {};
+  const fields = [];
+  const args = [];
+
+  if (typeof body.name === "string" && body.name.trim()) {
+    fields.push("name = ?");
+    args.push(body.name.trim());
+  }
+  if (typeof body.email === "string") {
+    const email = body.email.trim();
+    if (email && !/\S+@\S+\.\S+/.test(email)) return res.status(400).json({ error: "invalid email" });
+    fields.push("email = ?");
+    args.push(email || null);
+  }
+  if (typeof body.status === "string" && /^(active|inactive)$/i.test(body.status)) {
+    fields.push("status = ?");
+    args.push(body.status.toLowerCase());
+  }
+
+  if (!fields.length) return res.status(400).json({ error: "no fields to update" });
+
+  fields.push(`updated_at = datetime('now')`);
+  const sql = `UPDATE "family" SET ${fields.join(", ")} WHERE id = ?`;
+  args.push(id);
+
+  try {
+    const info = db.prepare(sql).run(...args);
+    if (info.changes === 0) return res.status(404).json({ error: "not found" });
+    const row = db
+      .prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`)
+      .get(id);
+    res.json(row);
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (msg.includes("UNIQUE") && msg.includes("email")) return res.status(409).json({ error: "email already registered" });
+    res.status(500).json({ error: "update failed" });
+  }
+});
+
 // PUBLIC: self-register a new family
 router.post("/api/families/self-register", async (req, res) => {
   const { familyName, adminName, email, adminKey } = req.body || {};
