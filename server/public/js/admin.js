@@ -209,7 +209,8 @@ function initAdmin() {
     role: null,
     familyId: null,
     families: [],
-    currentFamilyId: null
+    currentFamilyId: null,
+    masterView: 'templates'
   };
   const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
 
@@ -244,9 +245,21 @@ function initAdmin() {
   const pendingStatus = $k('pendingTemplatesStatus');
   const pendingRefreshButton = $k('pendingTemplatesRefresh');
 
-  const masterTemplatesCard = $k('card-master-templates');
-  const masterTabs = Array.from(document.querySelectorAll('[data-master-tab]'));
-  const masterPanels = Array.from(document.querySelectorAll('[data-master-panel]'));
+  const masterViewTabs = Array.from(document.querySelectorAll('[data-view-tab]'));
+  const masterViewPanels = Array.from(document.querySelectorAll('[data-master-view]'));
+  const scopeNotice = $k('masterScopeNotice');
+  const scopeDependentSections = Array.from(document.querySelectorAll('[data-requires-scope="true"]'));
+  const templateTabs = Array.from(document.querySelectorAll('[data-template-tab]'));
+  const templatePanels = Array.from(document.querySelectorAll('[data-template-panel]'));
+
+  masterViewTabs.forEach((btn) => {
+    if (!btn) return;
+    const view = btn.dataset.viewTab || '';
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      setMasterView(view);
+    });
+  });
 
   const masterTaskForm = $k('masterTaskForm');
   const masterTaskTitle = $k('masterTaskTitle');
@@ -302,19 +315,85 @@ function initAdmin() {
     return normalized === 'inactive' ? 'inactive' : fallback;
   }
 
+  function normalizeScopeId(value) {
+    if (value === undefined || value === null) return null;
+    const text = String(value).trim();
+    if (!text) return null;
+    return text.toLowerCase() === 'default' ? null : text;
+  }
+
+  function applyMasterViewVisibility() {
+    const isMaster = adminState.role === 'master';
+    masterViewTabs.forEach((btn) => {
+      if (!btn) return;
+      const view = btn.dataset.viewTab || '';
+      const isActive = isMaster && view === adminState.masterView;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      btn.hidden = !isMaster;
+      if (!isMaster) {
+        btn.disabled = false;
+      }
+    });
+    masterViewPanels.forEach((panel) => {
+      if (!panel) return;
+      const view = panel.dataset.masterView || '';
+      const hide = isMaster ? view !== adminState.masterView : false;
+      panel.classList.toggle('is-inactive-view', hide);
+    });
+  }
+
+  function setMasterView(view) {
+    const desired = view === 'families' ? 'families' : 'templates';
+    if (adminState.masterView !== desired) {
+      adminState.masterView = desired;
+    }
+    applyMasterViewVisibility();
+    if (adminState.role === 'master') {
+      saveAdminContext({
+        role: adminState.role,
+        family_id: adminState.familyId,
+        currentFamilyId: adminState.currentFamilyId,
+        masterView: adminState.masterView
+      });
+    }
+  }
+
+  function updateMasterScopeVisibility() {
+    const isMaster = adminState.role === 'master';
+    const hasScope = Boolean(adminState.currentFamilyId);
+    if (scopeNotice) {
+      scopeNotice.hidden = !(isMaster && !hasScope);
+    }
+    scopeDependentSections.forEach((section) => {
+      if (!section) return;
+      section.classList.toggle('is-scope-disabled', isMaster && !hasScope);
+    });
+    const familiesTab = masterViewTabs.find((btn) => btn?.dataset.viewTab === 'families');
+    if (familiesTab) {
+      familiesTab.disabled = isMaster && !hasScope;
+    }
+    const resetView = isMaster && !hasScope && adminState.masterView === 'families';
+    if (resetView) {
+      setMasterView('templates');
+    } else {
+      applyMasterViewVisibility();
+    }
+  }
+
   function setMasterTemplatesTab(tab) {
     const desired = tab === 'rewards' ? 'rewards' : 'tasks';
     masterTemplatesState.activeTab = desired;
-    masterTabs.forEach((btn) => {
+    templateTabs.forEach((btn) => {
       if (!btn) return;
-      const tabName = btn.dataset.masterTab || 'tasks';
+      const tabName = btn.dataset.templateTab || 'tasks';
       const isActive = tabName === desired;
       btn.classList.toggle('is-active', isActive);
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
-    masterPanels.forEach((panel) => {
+    templatePanels.forEach((panel) => {
       if (!panel) return;
-      const tabName = panel.dataset.masterPanel || 'tasks';
+      const tabName = panel.dataset.templatePanel || 'tasks';
       panel.hidden = tabName !== desired;
     });
   }
@@ -757,9 +836,9 @@ function initAdmin() {
 
   setMasterTemplatesTab(masterTemplatesState.activeTab);
 
-  masterTabs.forEach((btn) => {
+  templateTabs.forEach((btn) => {
     if (!btn) return;
-    btn.addEventListener('click', () => setMasterTemplatesTab(btn.dataset.masterTab || 'tasks'));
+    btn.addEventListener('click', () => setMasterTemplatesTab(btn.dataset.templateTab || 'tasks'));
   });
 
   masterTaskFilter?.addEventListener('change', () => renderMasterTaskList());
@@ -950,8 +1029,9 @@ function initAdmin() {
       if (!parsed || typeof parsed !== 'object') return null;
       return {
         role: parsed.role ?? null,
-        family_id: parsed.family_id ?? null,
-        currentFamilyId: parsed.currentFamilyId ?? null
+        family_id: normalizeScopeId(parsed.family_id),
+        currentFamilyId: normalizeScopeId(parsed.currentFamilyId),
+        masterView: parsed.masterView === 'families' ? 'families' : 'templates'
       };
     } catch (error) {
       console.warn('Unable to parse stored admin context', error);
@@ -990,27 +1070,33 @@ function initAdmin() {
     }
 
     if (!activeRole) {
+      applyMasterViewVisibility();
       return;
     }
 
     if (activeRole !== 'master') {
+      applyMasterViewVisibility();
       return;
     }
 
     updateFamilyCreateButtonState();
+    applyMasterViewVisibility();
   }
 
   applyRoleVisibility();
+  setMasterView('templates');
 
   function clearAdminContext() {
     adminState.role = null;
     adminState.familyId = null;
     adminState.families = [];
     adminState.currentFamilyId = null;
+    adminState.masterView = 'templates';
     window.currentFamilyId = null;
     saveAdminContext(null);
     updateWhoamiBanner();
     applyRoleVisibility();
+    updateMasterScopeVisibility();
     if (familySearchInput) familySearchInput.value = '';
     if (familyCreateForm) familyCreateForm.reset();
     if (familyCreateIdPreview) {
@@ -1025,38 +1111,56 @@ function initAdmin() {
     const previousRole = adminState.role;
     const previousFamilyScope = adminState.currentFamilyId;
     if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
-      adminState.role = partial.role ?? null;
+      const nextRole = partial.role ?? null;
+      if (nextRole === 'master' && previousRole !== 'master') {
+        adminState.masterView = 'templates';
+      } else if (nextRole !== 'master' && previousRole === 'master') {
+        adminState.masterView = 'families';
+      }
+      adminState.role = nextRole;
+    }
+    if (Object.prototype.hasOwnProperty.call(partial, 'masterView')) {
+      adminState.masterView = partial.masterView === 'families' ? 'families' : 'templates';
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
-      adminState.familyId = partial.family_id ?? null;
+      adminState.familyId = normalizeScopeId(partial.family_id);
     }
     const hasCurrentFamilyId = Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId');
     if (Object.prototype.hasOwnProperty.call(partial, 'families')) {
-      adminState.families = Array.isArray(partial.families) ? partial.families.slice() : [];
+      const incoming = Array.isArray(partial.families) ? partial.families : [];
+      adminState.families = incoming
+        .map((family) => {
+          if (!family) return null;
+          const id = normalizeScopeId(family.id);
+          if (!id) return null;
+          return { ...family, id };
+        })
+        .filter(Boolean);
       if (!hasCurrentFamilyId && adminState.role === 'master') {
-        const available = adminState.families || [];
-        if (!available.some((family) => family && family.id === adminState.currentFamilyId)) {
-          adminState.currentFamilyId = available.length ? available[0]?.id || null : null;
+        if (!adminState.families.some((family) => family && family.id === adminState.currentFamilyId)) {
+          adminState.currentFamilyId = null;
         }
       }
     }
     if (hasCurrentFamilyId) {
-      adminState.currentFamilyId = partial.currentFamilyId || null;
+      adminState.currentFamilyId = normalizeScopeId(partial.currentFamilyId);
     } else if (adminState.role === 'family') {
-      adminState.currentFamilyId = adminState.familyId || null;
-    } else if (adminState.role === 'master' && !adminState.currentFamilyId && adminState.families.length) {
-      adminState.currentFamilyId = adminState.families[0]?.id || null;
+      adminState.currentFamilyId = normalizeScopeId(adminState.familyId);
+    } else {
+      adminState.currentFamilyId = normalizeScopeId(adminState.currentFamilyId);
     }
     window.currentFamilyId = adminState.currentFamilyId || null;
     if (persist) {
       saveAdminContext({
         role: adminState.role,
         family_id: adminState.familyId,
-        currentFamilyId: adminState.currentFamilyId
+        currentFamilyId: adminState.currentFamilyId,
+        masterView: adminState.masterView
       });
     }
     updateWhoamiBanner();
     applyRoleVisibility();
+    updateMasterScopeVisibility();
     renderFamilyManagement();
     if (!adminState.currentFamilyId) {
       pendingTemplatesState.items = [];
@@ -1200,7 +1304,7 @@ function initAdmin() {
         familyScopeSelect.innerHTML = '';
         const placeholder = document.createElement('option');
         placeholder.value = '';
-        placeholder.textContent = families && families.length ? 'Select a family' : 'No families available';
+        placeholder.textContent = families && families.length ? 'Select family…' : 'No families available';
         familyScopeSelect.appendChild(placeholder);
         if (Array.isArray(families)) {
           for (const family of families) {
@@ -1221,7 +1325,7 @@ function initAdmin() {
         familyScopeSummary.hidden = false;
         familyScopeSummary.textContent = currentFamilyId
           ? `Family scope: ${findFamilyLabel(currentFamilyId)}`
-          : 'Choose a family to manage';
+          : 'Select a family to manage data.';
       }
     } else {
       if (familyScopeWrapper) {
@@ -1255,7 +1359,15 @@ function initAdmin() {
       error.code = res.status;
       throw error;
     }
-    return Array.isArray(body) ? body : [];
+    if (!Array.isArray(body)) return [];
+    return body
+      .map((family) => {
+        if (!family) return null;
+        const id = normalizeScopeId(family.id);
+        if (!id) return null;
+        return { ...family, id };
+      })
+      .filter(Boolean);
   }
 
   async function refreshFamiliesFromServer({ silent = false } = {}) {
@@ -1264,7 +1376,7 @@ function initAdmin() {
       const families = await fetchFamiliesStrict();
       const nextState = { families };
       if (!families.some((family) => family && family.id === adminState.currentFamilyId)) {
-        nextState.currentFamilyId = families.length ? families[0]?.id || null : null;
+        nextState.currentFamilyId = null;
       }
       setAdminState(nextState);
       return true;
@@ -1809,7 +1921,7 @@ details.member-fold .summary-value {
   hydrateAdminContext().catch((error) => console.warn('hydrateAdminContext failed', error));
 
   familyScopeSelect?.addEventListener('change', async () => {
-    const selected = familyScopeSelect.value || null;
+    const selected = normalizeScopeId(familyScopeSelect.value);
     setAdminState({ currentFamilyId: selected });
     await reloadScopedData();
   });
@@ -1879,11 +1991,16 @@ details.member-fold .summary-value {
         toast('Family not found.', 'error');
         return;
       }
-      if (adminState.currentFamilyId === match.id) {
-        toast(`Already viewing ${findFamilyLabel(match.id)}.`);
+      const scopeId = normalizeScopeId(match.id);
+      if (!scopeId) {
+        toast('Family not found.', 'error');
         return;
       }
-      setAdminState({ families, currentFamilyId: match.id });
+      if (adminState.currentFamilyId === scopeId) {
+        toast(`Already viewing ${findFamilyLabel(scopeId)}.`);
+        return;
+      }
+      setAdminState({ families, currentFamilyId: scopeId });
       await reloadScopedData();
     } catch (error) {
       toast(error.message || 'Unable to search families.', 'error');
@@ -2126,27 +2243,25 @@ details.member-fold .summary-value {
       }
       if (nextState.role === 'master') {
         try {
-          const families = await fetchFamiliesStrict();
+          const families = (await fetchFamiliesStrict()).filter((family) => family && normalizeScopeId(family.id));
           nextState.families = families;
-          const previous = adminState.currentFamilyId;
-          let scope = previous && families.some((family) => family?.id === previous) ? previous : null;
-          if (!scope && families.length) {
-            scope = families[0]?.id || null;
-          }
-          if (scope) {
-            nextState.currentFamilyId = scope;
+          const previous = normalizeScopeId(adminState.currentFamilyId);
+          if (previous && families.some((family) => family?.id === previous)) {
+            nextState.currentFamilyId = previous;
           } else {
-            nextState.currentFamilyId = families.length ? families[0]?.id || null : null;
+            nextState.currentFamilyId = null;
           }
         } catch (error) {
           if (!silent) {
             console.warn('Unable to fetch family list', error);
           }
-          nextState.families = Array.isArray(adminState.families) ? adminState.families.slice() : [];
-          nextState.currentFamilyId = adminState.currentFamilyId || null;
+          nextState.families = Array.isArray(adminState.families)
+            ? adminState.families.filter((family) => family && normalizeScopeId(family.id))
+            : [];
+          nextState.currentFamilyId = normalizeScopeId(adminState.currentFamilyId);
         }
       } else if (nextState.role === 'family') {
-        nextState.currentFamilyId = nextState.family_id || null;
+        nextState.currentFamilyId = normalizeScopeId(nextState.family_id);
         if (nextState.family_id) {
           const detail = await fetchFamilyDetail(nextState.family_id);
           if (detail) {

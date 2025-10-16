@@ -1169,79 +1169,20 @@
     </header>
 
     <main class="page-container">
-      <section class="card" id="card-family-scope" data-collapsible data-admin-role="master" hidden>
-        <header class="card-header">
-          <button class="card-toggle" aria-expanded="true">
-            Family Scope
-            <span class="chev" aria-hidden="true"></span>
-          </button>
-        </header>
-        <div class="card-body">
-          <h2 class="sr-only">Family Scope</h2>
-          <p class="muted">Master admins can review all families from here.</p>
-          <button id="btn-list-families" type="button">List Families</button>
-          <div id="families-table" class="muted" style="margin-top:0.75rem;"></div>
-          <div id="masterToolbar" class="master-toolbar" data-admin-role="master" hidden>
-            <div class="master-toolbar-row">
-              <label id="familyScopeWrapper" class="admin-whoami-scope-picker master-toolbar-scope" hidden>
-                <span>Family scope</span>
-                <select id="familyScopeSelect">
-                  <option value="">Select a family</option>
-                </select>
-              </label>
-              <div class="master-toolbar-actions">
-                <button type="button" id="btnFamilyManagement">Family Management</button>
-                <form id="familySearchForm" class="master-toolbar-search" autocomplete="off">
-                  <label class="sr-only" for="familySearchInput">Search by Family ID</label>
-                  <input id="familySearchInput" name="familyId" type="text" placeholder="Family ID">
-                  <button type="submit">Go</button>
-                </form>
-              </div>
-            </div>
-          </div>
-          <div class="shortcut-row">
-            <button class="shortcut" data-jump="#card-family-management">Family Management</button>
-            <button class="shortcut" data-jump="#card-member-management">Family Member Management</button>
-            <button class="shortcut" data-jump="#card-issue-points">Issue Points</button>
-            <button class="shortcut" data-jump="#card-holds">Holding Rewards To Be Redeemed</button>
-            <button class="shortcut" data-jump="#card-rewards-menu">Rewards Menu</button>
-            <button class="shortcut" data-jump="#card-edit-earn">Edit Earn Points Menu</button>
-            <button class="shortcut" data-jump="#card-activity">Activity</button>
-          </div>
-        </div>
-      </section>
+      <nav id="masterViewTabs" class="admin-tabs" data-admin-role="master" role="tablist" hidden>
+        <button type="button" class="admin-tab is-active" data-view-tab="templates" role="tab" aria-selected="true">Templates</button>
+        <button type="button" class="admin-tab" data-view-tab="families" role="tab" aria-selected="false">Families</button>
+      </nav>
 
       <section
-        id="pendingTemplatesBanner"
-        class="pending-banner"
-        data-admin-role="family,master"
-        hidden
-      >
-        <div class="pending-banner-head">
-          <div class="pending-banner-title">
-            <span class="pending-banner-label">New from Master</span>
-            <span class="pending-banner-count" id="pendingTemplatesCount">0</span>
-          </div>
-          <div class="pending-banner-actions">
-            <button type="button" class="btn" id="pendingTemplatesRefresh">Refresh</button>
-          </div>
-        </div>
-        <p class="muted" id="pendingTemplatesStatus"></p>
-        <ul id="pendingTemplatesList" class="pending-templates-list"></ul>
-      </section>
-
-      <section
-        class="card collapsed"
-        id="card-master-templates"
-        data-collapsible
+        id="masterTemplatesSection"
+        class="card"
         data-admin-role="master"
+        data-master-view="templates"
         hidden
       >
         <header class="card-header">
-          <button type="button" class="card-toggle" aria-expanded="false">
-            Master Templates
-            <span class="chev" aria-hidden="true"></span>
-          </button>
+          <h2 class="card-title">Master Templates</h2>
         </header>
         <div class="card-body">
           <div class="master-templates">
@@ -1249,7 +1190,7 @@
               <button
                 type="button"
                 class="master-tab is-active"
-                data-master-tab="tasks"
+                data-template-tab="tasks"
                 aria-selected="true"
               >
                 Tasks
@@ -1257,14 +1198,14 @@
               <button
                 type="button"
                 class="master-tab"
-                data-master-tab="rewards"
+                data-template-tab="rewards"
                 aria-selected="false"
               >
                 Rewards
               </button>
             </div>
 
-            <div class="master-templates-panel" data-master-panel="tasks">
+            <div class="master-templates-panel" data-template-panel="tasks">
               <form id="masterTaskForm" class="stack master-template-form" autocomplete="off">
                 <div class="row" style="flex-wrap:wrap; gap:12px;">
                   <label style="flex:1 1 220px;">
@@ -1335,7 +1276,7 @@
               <small class="muted" id="masterTaskStatus"></small>
             </div>
 
-            <div class="master-templates-panel" data-master-panel="rewards" hidden>
+            <div class="master-templates-panel" data-template-panel="rewards" hidden>
               <form id="masterRewardForm" class="stack master-template-form" autocomplete="off">
                 <div class="row" style="flex-wrap:wrap; gap:12px;">
                   <label style="flex:1 1 220px;">
@@ -1409,7 +1350,72 @@
         </div>
       </section>
 
-      <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" hidden>
+      <section class="card" id="card-family-scope" data-collapsible data-admin-role="master" data-master-view="families" hidden>
+        <header class="card-header">
+          <button class="card-toggle" aria-expanded="true">
+            Family Scope
+            <span class="chev" aria-hidden="true"></span>
+          </button>
+        </header>
+        <div class="card-body">
+          <h2 class="sr-only">Family Scope</h2>
+          <p class="muted">Master admins can review all families from here.</p>
+          <button id="btn-list-families" type="button">List Families</button>
+          <div id="families-table" class="muted" style="margin-top:0.75rem;"></div>
+          <div id="masterToolbar" class="master-toolbar" data-admin-role="master" hidden>
+            <div class="master-toolbar-row">
+              <label id="familyScopeWrapper" class="admin-whoami-scope-picker master-toolbar-scope" hidden>
+                <span>Family scope</span>
+                <select id="familyScopeSelect">
+                  <option value="">Select family…</option>
+                </select>
+              </label>
+              <div class="master-toolbar-actions">
+                <button type="button" id="btnFamilyManagement">Family Management</button>
+                <form id="familySearchForm" class="master-toolbar-search" autocomplete="off">
+                  <label class="sr-only" for="familySearchInput">Search by Family ID</label>
+                  <input id="familySearchInput" name="familyId" type="text" placeholder="Family ID">
+                  <button type="submit">Go</button>
+                </form>
+              </div>
+            </div>
+          </div>
+          <p class="muted scope-note" id="masterScopeNotice" hidden>Select a family to manage data.</p>
+          <div class="shortcut-row">
+            <button class="shortcut" data-jump="#card-family-management">Family Management</button>
+            <button class="shortcut" data-jump="#card-member-management">Family Member Management</button>
+            <button class="shortcut" data-jump="#card-issue-points">Issue Points</button>
+            <button class="shortcut" data-jump="#card-holds">Holding Rewards To Be Redeemed</button>
+            <button class="shortcut" data-jump="#card-rewards-menu">Rewards Menu</button>
+            <button class="shortcut" data-jump="#card-edit-earn">Edit Earn Points Menu</button>
+            <button class="shortcut" data-jump="#card-activity">Activity</button>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="pendingTemplatesBanner"
+        class="pending-banner"
+        data-admin-role="family,master"
+        data-master-view="families"
+        data-requires-scope="true"
+        hidden
+      >
+        <div class="pending-banner-head">
+          <div class="pending-banner-title">
+            <span class="pending-banner-label">New from Master</span>
+            <span class="pending-banner-count" id="pendingTemplatesCount">0</span>
+          </div>
+          <div class="pending-banner-actions">
+            <button type="button" class="btn" id="pendingTemplatesRefresh">Refresh</button>
+          </div>
+        </div>
+        <p class="muted" id="pendingTemplatesStatus"></p>
+        <ul id="pendingTemplatesList" class="pending-templates-list"></ul>
+      </section>
+
+
+      <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" data-master-view="families" hidden>
         <header class="card-header">
           <button class="card-toggle" aria-expanded="false">
             Family Management
@@ -1478,7 +1484,7 @@
           </div>
         </div>
       </section>
-      <section class="card collapsed" id="card-member-management" data-collapsible>
+      <section class="card collapsed" id="card-member-management" data-collapsible data-master-view="families" data-requires-scope="true">
         <header class="card-header">
           <button class="card-toggle" aria-expanded="false">
             Family Member Management
@@ -1628,7 +1634,7 @@
           </section>
         </div>
       </section>
-      <section class="card" id="card-issue-points">
+      <section class="card" id="card-issue-points" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="issueSection">
           <button type="button" class="card-toggle" id="toggleIssueSection" aria-controls="issueSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Issue Points</span>
@@ -1656,7 +1662,7 @@
         </div>
       </section>
 
-      <section class="card" id="card-holds">
+      <section class="card" id="card-holds" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="holdSection">
           <button type="button" class="card-toggle" id="toggleHoldSection" aria-controls="holdSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Holding Rewards To Be Redeemed</span>
@@ -1706,7 +1712,7 @@
         </div>
       </section>
 
-      <section class="card" id="card-rewards-menu">
+      <section class="card" id="card-rewards-menu" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="rewardsSection">
           <button type="button" class="card-toggle" id="toggleRewardsSection" aria-controls="rewardsSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Rewards Menu</span>
@@ -1732,7 +1738,7 @@
         </div>
       </section>
 
-      <section class="card" id="secRegisterReward">
+      <section class="card" id="secRegisterReward" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="registerRewardSection">
           <button type="button" class="card-toggle" id="toggleRegisterReward" aria-controls="registerRewardFields" aria-expanded="false">
             <span class="card-toggle-title">Register New Reward</span>
@@ -1769,7 +1775,7 @@
         </div>
       </section>
 
-      <section class="card" id="card-edit-earn">
+      <section class="card" id="card-edit-earn" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="earnMenuSection">
           <button type="button" class="card-toggle" id="toggleEarnMenu" aria-controls="earnMenuFields" aria-expanded="false">
             <span class="card-toggle-title">Edit Earn Points Menu</span>
@@ -1821,7 +1827,7 @@
           </div>
         </div>
       </section>
-      <section class="card" id="card-activity">
+      <section class="card" id="card-activity" data-master-view="families" data-requires-scope="true">
         <div class="collapsible" id="activityPanel">
           <button type="button" class="card-toggle" id="toggleActivity" aria-controls="activityFields" aria-expanded="false">
             <span class="card-toggle-title">Activity</span>

@@ -84,12 +84,33 @@ function upsertFamily({ id, name, email = null, status = "active" }) {
 function ensureDefaultFamily() {
   const rows = db.prepare("SELECT COUNT(*) AS count FROM family").get();
   if (!rows?.count) {
-    upsertFamily({ id: DEFAULT_FAMILY_ID, name: "Default Family" });
+    upsertFamily({ id: DEFAULT_FAMILY_ID, name: "Master Templates", status: "system" });
     return;
   }
   const existing = db.prepare("SELECT id FROM family WHERE id = ? LIMIT 1").get(DEFAULT_FAMILY_ID);
   if (!existing) {
-    upsertFamily({ id: DEFAULT_FAMILY_ID, name: "Default Family" });
+    upsertFamily({ id: DEFAULT_FAMILY_ID, name: "Master Templates", status: "system" });
+  }
+}
+
+function clearDefaultFamilyData() {
+  const tables = ["member", "task", "reward", "ledger"];
+  let cleared = 0;
+  const wipe = db.transaction(() => {
+    for (const table of tables) {
+      if (!tableExists(table) || !hasFamilyColumn(table)) continue;
+      const countRow = db
+        .prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} WHERE family_id = ?`)
+        .get(DEFAULT_FAMILY_ID);
+      const count = countRow?.count ?? 0;
+      if (!count) continue;
+      db.prepare(`DELETE FROM ${quoteIdentifier(table)} WHERE family_id = ?`).run(DEFAULT_FAMILY_ID);
+      cleared += count;
+    }
+  });
+  wipe();
+  if (cleared > 0) {
+    console.log("[CLEANUP] default family cleared.");
   }
 }
 
@@ -295,6 +316,7 @@ const seededJangKey = ensureFamilyAdminKey(JANG_FAMILY_ID, {
   allowGenerate: true
 });
 const duplicationSummary = duplicateFamilyData(DEFAULT_FAMILY_ID, JANG_FAMILY_ID);
+clearDefaultFamilyData();
 
 const familyCount = db.prepare("SELECT COUNT(*) AS count FROM family").get()?.count ?? 0;
 const jangCounts = {};

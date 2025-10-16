@@ -20,11 +20,20 @@ router.get("/api/families", (req, res) => {
 
   const id = (req.query.id || "").trim();
   if (id) {
-    const row = db.prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`).get(id);
+    if (id.toLowerCase() === "default") {
+      return res.status(400).json({ error: "default family is reserved" });
+    }
+    const row = db
+      .prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`)
+      .get(id);
     if (!row) return res.status(404).json({ error: "not found" });
     return res.json(row);
   }
-  const rows = db.prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" ORDER BY created_at DESC`).all();
+  const rows = db
+    .prepare(
+      `SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id <> 'default' ORDER BY created_at DESC`
+    )
+    .all();
   res.json(rows);
 });
 

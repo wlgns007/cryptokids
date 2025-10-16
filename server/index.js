@@ -85,7 +85,12 @@ function createFamilyScopeResolver(options = {}) {
         next();
         return;
       }
-      req.scope = { family_id: familyId };
+      const normalizedFamilyId = familyId.toString();
+      if (normalizedFamilyId.toLowerCase() === "default") {
+        res.status(400).json({ error: "default family is reserved" });
+        return;
+      }
+      req.scope = { family_id: normalizedFamilyId };
       next();
       return;
     }
@@ -4724,6 +4729,10 @@ app.get("/api/public/rewards", (req, res) => {
     res.status(400).json({ error: "family_id required" });
     return;
   }
+  if (familyId.toLowerCase() === "default") {
+    res.status(400).json({ error: "invalid family" });
+    return;
+  }
   try {
     res.set("Cache-Control", "no-store");
     const rows = listPublicRewardsStmt.all({ family_id: familyId }).map(mapPublicReward);
@@ -4742,6 +4751,10 @@ app.get("/api/public/tasks", (req, res) => {
   const familyId = (req.query?.family_id ?? "").toString().trim();
   if (!familyId) {
     res.status(400).json({ error: "family_id required" });
+    return;
+  }
+  if (familyId.toLowerCase() === "default") {
+    res.status(400).json({ error: "invalid family" });
     return;
   }
   try {
