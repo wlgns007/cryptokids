@@ -1199,24 +1199,21 @@
               </div>
             </div>
           </div>
-          <div class="shortcut-row" aria-label="Admin sections">
-            <button type="button" class="pill shortcut" data-jump="#card-member-management" data-i18n="nav_member">Family Member Management</button>
-            <button type="button" class="pill shortcut" data-jump="#subcard-register-member" data-i18n="nav_register">Register New Family Member</button>
-            <button type="button" class="pill shortcut" data-jump="#subcard-existing-members" data-i18n="nav_existing">Existing Family Members</button>
-            <button type="button" class="pill shortcut" data-jump="#card-family-management" data-admin-role="master">Family Management</button>
-            <button type="button" class="pill shortcut" data-jump="#secIssue">Issue Points</button>
-            <button type="button" class="pill shortcut" data-jump="#secHolds">Holding Rewards To Be Redeemed</button>
-            <button type="button" class="pill shortcut" data-jump="#secRewards">Rewards Menu</button>
-            <button type="button" class="pill shortcut" data-jump="#secRegisterReward">Register New Reward</button>
-            <button type="button" class="pill shortcut" data-jump="#secEarnMenu">Edit Earn Points Menu</button>
-            <button type="button" class="pill shortcut" data-jump="#activitySection">Activity</button>
+          <div class="shortcut-row">
+            <button class="shortcut" data-jump="#card-family-management">Family Management</button>
+            <button class="shortcut" data-jump="#card-member-management">Family Member Management</button>
+            <button class="shortcut" data-jump="#card-issue-points">Issue Points</button>
+            <button class="shortcut" data-jump="#card-holds">Holding Rewards To Be Redeemed</button>
+            <button class="shortcut" data-jump="#card-rewards-menu">Rewards Menu</button>
+            <button class="shortcut" data-jump="#card-edit-earn">Edit Earn Points Menu</button>
+            <button class="shortcut" data-jump="#card-activity">Activity</button>
           </div>
         </div>
       </section>
 
-      <section class="card" id="card-family-management" data-collapsible data-admin-role="master" hidden>
+      <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" hidden>
         <header class="card-header">
-          <button class="card-toggle" aria-expanded="true">
+          <button class="card-toggle" aria-expanded="false">
             Family Management
             <span class="chev" aria-hidden="true"></span>
           </button>
@@ -1283,9 +1280,9 @@
           </div>
         </div>
       </section>
-      <section class="card" id="card-member-management" data-collapsible>
+      <section class="card collapsed" id="card-member-management" data-collapsible>
         <header class="card-header">
-          <button class="card-toggle" aria-expanded="true">
+          <button class="card-toggle" aria-expanded="false">
             Family Member Management
             <span class="chev" aria-hidden="true"></span>
           </button>
@@ -1352,7 +1349,7 @@
             </div>
             <small class="muted" id="memberStatus"></small>
           </div>
-          <section class="subcard" id="subcard-register-member" data-collapsible>
+          <section class="subcard collapsed" id="subcard-register-member" data-collapsible>
             <header class="subcard-header">
               <button class="subcard-toggle" aria-expanded="false" data-i18n="nav_register">
                 Register New Family Member
@@ -1391,9 +1388,9 @@
               </div>
             </div>
           </section>
-          <section class="subcard" id="subcard-existing-members" data-collapsible>
+          <section class="subcard collapsed" id="subcard-existing-members" data-collapsible>
             <header class="subcard-header">
-              <button class="subcard-toggle" aria-expanded="true" data-i18n="nav_existing">
+              <button class="subcard-toggle" aria-expanded="false" data-i18n="nav_existing">
                 Existing Family Members
                 <span class="chev" aria-hidden="true"></span>
               </button>
@@ -1433,7 +1430,7 @@
           </section>
         </div>
       </section>
-      <section class="card" id="secIssue">
+      <section class="card" id="card-issue-points">
         <div class="collapsible" id="issueSection">
           <button type="button" class="card-toggle" id="toggleIssueSection" aria-controls="issueSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Issue Points</span>
@@ -1461,7 +1458,7 @@
         </div>
       </section>
 
-      <section class="card" id="secHolds">
+      <section class="card" id="card-holds">
         <div class="collapsible" id="holdSection">
           <button type="button" class="card-toggle" id="toggleHoldSection" aria-controls="holdSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Holding Rewards To Be Redeemed</span>
@@ -1511,7 +1508,7 @@
         </div>
       </section>
 
-      <section class="card" id="secRewards">
+      <section class="card" id="card-rewards-menu">
         <div class="collapsible" id="rewardsSection">
           <button type="button" class="card-toggle" id="toggleRewardsSection" aria-controls="rewardsSectionFields" aria-expanded="false">
             <span class="card-toggle-title">Rewards Menu</span>
@@ -1574,7 +1571,7 @@
         </div>
       </section>
 
-      <section class="card" id="secEarnMenu">
+      <section class="card" id="card-edit-earn">
         <div class="collapsible" id="earnMenuSection">
           <button type="button" class="card-toggle" id="toggleEarnMenu" aria-controls="earnMenuFields" aria-expanded="false">
             <span class="card-toggle-title">Edit Earn Points Menu</span>
@@ -1626,7 +1623,7 @@
           </div>
         </div>
       </section>
-      <section class="card" id="activitySection">
+      <section class="card" id="card-activity">
         <div class="collapsible" id="activityPanel">
           <button type="button" class="card-toggle" id="toggleActivity" aria-controls="activityFields" aria-expanded="false">
             <span class="card-toggle-title">Activity</span>
