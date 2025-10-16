@@ -116,6 +116,78 @@
       flex-direction: column;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
+    .flex {
+      display: flex;
+    }
+
+    .items-center {
+      align-items: center;
+    }
+
+    .gap-2 {
+      gap: 8px;
+    }
+
+    .gap-3 {
+      gap: 12px;
+    }
+
+    .mt-2 {
+      margin-top: 8px;
+    }
+
+    .mb-2 {
+      margin-bottom: 8px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--ck-accent), #5d34d6);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(124, 77, 255, 0.26);
+    }
+
+    .btn-primary:hover,
+    .btn-primary:focus-visible {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 30px rgba(124, 77, 255, 0.32);
+      outline: none;
+    }
+
+    .btn:hover,
+    .btn:focus-visible {
+      opacity: 0.95;
+    }
+
+    .text-sm {
+      font-size: 14px;
+    }
+
+    .opacity-70 {
+      opacity: 0.7;
+    }
+
     .hero {
       padding: calc(32px + env(safe-area-inset-top)) clamp(16px, 5vw, 56px) 32px;
       background: radial-gradient(circle at 10% 10%, rgba(124, 77, 255, 0.32), transparent 58%), linear-gradient(140deg, rgba(45, 42, 106, 0.92), rgba(124, 77, 255, 0.82));
@@ -680,15 +752,23 @@
   <link rel="stylesheet" href="/styles.css?v=18">
   <script src="/js/i18n.js?v=1"></script>
   <script type="module" src="/child.js?v=18"></script>
-  <section id="child-id-prompt" class="stack" style="padding:24px;">
-    <p>Please enter your user ID to see your tasks and rewards.</p>
-    <div class="row" style="align-items:center;">
-      <input id="child-user-id" placeholder="e.g., leo" />
-      <button id="child-save-id" type="button">Save ID</button>
+  <section id="child-login" class="stack" style="padding:24px;">
+    <label for="child-user">User ID or Full Name</label>
+    <input id="child-user" placeholder="e.g., leo or Leo Park" />
+    <div class="flex items-center gap-3 mt-2">
+      <label class="flex items-center gap-2">
+        <input type="checkbox" id="child-remember" /> Remember me
+      </label>
+      <button id="child-login-btn" class="btn btn-primary">Log in</button>
     </div>
+    <p id="child-login-msg" class="text-sm mt-2"></p>
   </section>
 
   <div id="child-content" class="container hidden">
+    <div class="flex items-center gap-3 mb-2">
+      <div id="child-current" class="text-sm opacity-70"></div>
+      <button id="child-switch" class="btn btn-sm">Switch account</button>
+    </div>
     <section class="hero">
       <div class="hero-bar">
         <span class="app-pill">CK Wallet</span>
@@ -716,8 +796,8 @@
           placeholder="User ID"
           data-i18n="user_id"
           data-i18n-attr="placeholder"
+          readonly
         />
-        <button id="child-save-inline" type="button">Save ID</button>
         <button id="btnCheck" class="primary" data-i18n="check_balance">Check Balance</button>
         <button id="btnHistory">Refresh History</button>
         <button id="btnCsv">Download CSV</button>
@@ -732,7 +812,7 @@
         <span id="summary" class="muted"></span>
       </div>
       <div id="balanceResult" class="muted"></div>
-      <div id="redeemNotice" class="notice-box muted">Enter your user ID to see recent redeemed rewards.</div>
+        <div id="redeemNotice" class="notice-box muted">Log in to see recent redeemed rewards.</div>
       <div id="historyList"></div>
     </section>
 
