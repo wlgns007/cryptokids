@@ -32,6 +32,7 @@ const schemaStatements = [
     description TEXT,
     base_points INTEGER NOT NULL DEFAULT 0,
     icon TEXT,
+    youtube_url TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -42,6 +43,7 @@ const schemaStatements = [
     description TEXT,
     base_cost INTEGER NOT NULL DEFAULT 0,
     icon TEXT,
+    youtube_url TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -169,6 +171,70 @@ function ensureFamilyColumn(table) {
   db.prepare(`UPDATE ${table} SET family_id = @family WHERE family_id IS NULL`).run({ family: "default" });
 }
 
+(function migrateMasterYoutube() {
+  // master_task: add youtube_url (TEXT)
+  let cols = db.prepare(`PRAGMA table_info("master_task")`).all().map((c) => c.name);
+  if (!cols.includes("youtube_url")) {
+    db.exec("PRAGMA foreign_keys=OFF; BEGIN;");
+    try {
+      db.exec(`
+        CREATE TABLE "master_task__new" (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT,
+          base_points INTEGER NOT NULL DEFAULT 0,
+          icon TEXT,
+          youtube_url TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO "master_task__new"
+          (id,title,description,base_points,icon,youtube_url,status,created_at,updated_at)
+        SELECT id,title,description,base_points,icon,NULL,status,created_at,updated_at
+        FROM "master_task";
+        DROP TABLE "master_task";
+        ALTER TABLE "master_task__new" RENAME TO "master_task";
+      `);
+      db.exec("COMMIT; PRAGMA foreign_keys=ON;");
+    } catch (e) {
+      db.exec("ROLLBACK; PRAGMA foreign_keys=ON;");
+      throw e;
+    }
+  }
+
+  // master_reward: add youtube_url (TEXT)
+  cols = db.prepare(`PRAGMA table_info("master_reward")`).all().map((c) => c.name);
+  if (!cols.includes("youtube_url")) {
+    db.exec("PRAGMA foreign_keys=OFF; BEGIN;");
+    try {
+      db.exec(`
+        CREATE TABLE "master_reward__new" (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT,
+          base_cost INTEGER NOT NULL DEFAULT 0,
+          icon TEXT,
+          youtube_url TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO "master_reward__new"
+          (id,title,description,base_cost,icon,youtube_url,status,created_at,updated_at)
+        SELECT id,title,description,base_cost,icon,NULL,status,created_at,updated_at
+        FROM "master_reward";
+        DROP TABLE "master_reward";
+        ALTER TABLE "master_reward__new" RENAME TO "master_reward";
+      `);
+      db.exec("COMMIT; PRAGMA foreign_keys=ON;");
+    } catch (e) {
+      db.exec("ROLLBACK; PRAGMA foreign_keys=ON;");
+      throw e;
+    }
+  }
+})();
+
 function logInvalidFamilies(db) {
   try {
     const rows = db
@@ -288,6 +354,32 @@ for (const table of scopedTables) {
 ensureColumnDefinition("task", "master_task_id", "TEXT");
 ensureColumnDefinition("reward", "master_reward_id", "TEXT");
 
+function ensureMasterCascadeTriggers() {
+  const statements = [];
+  if (tableHasColumn("task", "master_task_id")) {
+    statements.push(`
+  CREATE TRIGGER IF NOT EXISTS trg_master_task_inactivate
+  AFTER UPDATE OF status ON "master_task"
+  WHEN NEW.status = 'inactive'
+  BEGIN
+    UPDATE "task" SET status='inactive', updated_at=strftime('%s','now') WHERE master_task_id = NEW.id;
+  END;`);
+  }
+  if (tableHasColumn("reward", "master_reward_id")) {
+    statements.push(`
+  CREATE TRIGGER IF NOT EXISTS trg_master_reward_inactivate
+  AFTER UPDATE OF status ON "master_reward"
+  WHEN NEW.status = 'inactive'
+  BEGIN
+    UPDATE "reward" SET status='inactive', updated_at=strftime('%s','now') WHERE master_reward_id = NEW.id;
+  END;`);
+  }
+  if (!statements.length) return;
+  db.exec(statements.join("\n"));
+}
+
+ensureMasterCascadeTriggers();
+
 enforceFamilyNotNull(db);
 
 const scopedIndexes = [
@@ -356,6 +448,8 @@ if (typeof db.all !== "function") {
     return stmt.all(params);
   };
 }
+
+export { ensureMasterCascadeTriggers };
 
 export function resolveAdminContext(database, adminKey) {
   const key = typeof adminKey === "string" ? adminKey.trim() : "";

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import QRCode from "qrcode";
-import db, { DATA_DIR, resolveAdminContext } from "./db.js";
+import db, { DATA_DIR, ensureMasterCascadeTriggers, resolveAdminContext } from "./db.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
 import { router as coreRoutes } from "./routes.js";
@@ -197,6 +197,7 @@ function mapMasterTaskRow(row) {
     title: row.title ?? "",
     description: row.description ?? null,
     icon: row.icon ?? null,
+    youtube_url: row.youtube_url ?? null,
     base_points: Number.isFinite(baseValue) ? baseValue : 0,
     status: row.status ?? "active"
   };
@@ -210,6 +211,7 @@ function mapMasterRewardRow(row) {
     title: row.title ?? "",
     description: row.description ?? null,
     icon: row.icon ?? null,
+    youtube_url: row.youtube_url ?? null,
     base_cost: Number.isFinite(baseValue) ? baseValue : 0,
     status: row.status ?? "active"
   };
@@ -283,134 +285,6 @@ function ensureDismissedTemplateTable() {
 }
 
 ensureDismissedTemplateTable();
-
-const EARN_TEMPLATES_HAS_FAMILY_COLUMN = tableHasColumn("earn_templates", "family_id");
-let REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
-if (!REWARD_HAS_FAMILY_COLUMN) {
-  try {
-    db.exec("ALTER TABLE reward ADD COLUMN family_id TEXT");
-    db.prepare("UPDATE reward SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
-    REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
-    if (REWARD_HAS_FAMILY_COLUMN) {
-      db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
-    }
-  } catch (err) {
-    if (!(err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || ""))) {
-      console.warn("[multitenant] unable to ensure reward.family_id column", err);
-    }
-  }
-}
-if (REWARD_HAS_FAMILY_COLUMN) {
-  db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
-}
-
-const REWARD_HAS_IMAGE_URL_COLUMN = tableHasColumn("reward", "image_url");
-const REWARD_HAS_YOUTUBE_URL_COLUMN = tableHasColumn("reward", "youtube_url");
-const REWARD_HAS_STATUS_COLUMN = tableHasColumn("reward", "status");
-
-const listPublicTasksStmt = EARN_TEMPLATES_HAS_FAMILY_COLUMN
-  ? db.prepare(
-      `SELECT id, title, points, description, youtube_url, sort_order
-       FROM earn_templates
-       WHERE family_id = @family_id AND active = 1
-       ORDER BY sort_order ASC, id ASC`
-    )
-  : null;
-
-const rewardPublicColumns = [
-  "id",
-  "name",
-  "description",
-  "cost",
-  REWARD_HAS_IMAGE_URL_COLUMN ? "image_url" : "NULL AS image_url",
-  REWARD_HAS_YOUTUBE_URL_COLUMN ? "youtube_url" : "NULL AS youtube_url",
-  REWARD_HAS_STATUS_COLUMN ? "status" : "'active' AS status"
-];
-
-const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
-  ? db.prepare(
-      `SELECT ${rewardPublicColumns.join(", ")}
-       FROM reward
-       WHERE family_id = @family_id AND (${REWARD_HAS_STATUS_COLUMN ? "status" : "'active'"} = 'active')
-       ORDER BY created_at DESC, id DESC`
-    )
-  : null;
-
-const insertFamilyStmt = db.prepare(
-  `INSERT INTO family (id, name, email, status, admin_key, created_at, updated_at)
-   VALUES (@id, @name, @email, @status, @admin_key, @created_at, @updated_at)`
-);
-
-const selectMasterTaskStmt = db.prepare(
-  `SELECT id, title, description, icon, base_points, status, created_at, updated_at
-   FROM master_task
-   WHERE id = ?`
-);
-const listMasterTasksStmt = db.prepare(
-  `SELECT id, title, description, icon, base_points, status, created_at, updated_at
-   FROM master_task
-   ORDER BY created_at DESC, id DESC`
-);
-const insertMasterTaskStmt = db.prepare(
-  `INSERT INTO master_task (id, title, description, base_points, icon, status, created_at, updated_at)
-   VALUES (@id, @title, @description, @base_points, @icon, @status, @created_at, @updated_at)`
-);
-const updateMasterTaskStmt = db.prepare(
-  `UPDATE master_task
-      SET title = @title,
-          description = @description,
-          icon = @icon,
-          base_points = @base_points,
-          status = @status,
-          updated_at = @updated_at
-    WHERE id = @id`
-);
-
-const selectMasterRewardStmt = db.prepare(
-  `SELECT id, title, description, icon, base_cost, status, created_at, updated_at
-   FROM master_reward
-   WHERE id = ?`
-);
-const listMasterRewardsStmt = db.prepare(
-  `SELECT id, title, description, icon, base_cost, status, created_at, updated_at
-   FROM master_reward
-   ORDER BY created_at DESC, id DESC`
-);
-const insertMasterRewardStmt = db.prepare(
-  `INSERT INTO master_reward (id, title, description, base_cost, icon, status, created_at, updated_at)
-   VALUES (@id, @title, @description, @base_cost, @icon, @status, @created_at, @updated_at)`
-);
-const updateMasterRewardStmt = db.prepare(
-  `UPDATE master_reward
-      SET title = @title,
-          description = @description,
-          icon = @icon,
-          base_cost = @base_cost,
-          status = @status,
-          updated_at = @updated_at
-    WHERE id = @id`
-);
-
-const listDismissedTemplatesStmt = db.prepare(
-  `SELECT kind, master_id FROM dismissed_template WHERE family_id = ?`
-);
-const upsertDismissedTemplateStmt = db.prepare(
-  `INSERT INTO dismissed_template (family_id, kind, master_id, dismissed_at)
-   VALUES (@family_id, @kind, @master_id, @dismissed_at)
-   ON CONFLICT(family_id, kind, master_id) DO UPDATE SET dismissed_at = excluded.dismissed_at`
-);
-const deleteDismissedTemplateStmt = db.prepare(
-  `DELETE FROM dismissed_template WHERE family_id = @family_id AND kind = @kind AND master_id = @master_id`
-);
-const selectFamilyByIdStmt = db.prepare(
-  "SELECT id, name, email, status, admin_key, created_at, updated_at FROM family WHERE id = ? LIMIT 1"
-);
-const updateFamilyStmt = db.prepare(
-  `UPDATE family SET name = @name, status = @status, updated_at = @updated_at WHERE id = @id`
-);
-const updateFamilyAdminKeyStmt = db.prepare(
-  `UPDATE family SET admin_key = @admin_key, updated_at = @updated_at WHERE id = @id`
-);
 
 const TOKEN_TTL_SEC = Number(process.env.QR_TTL_SEC || 120);
 const PORT = process.env.PORT || 4000;
@@ -603,6 +477,7 @@ app.post("/api/master/tasks", authenticateAdmin, requireMaster, (req, res) => {
 
   const description = normalizeNullableString(body.description);
   const icon = normalizeNullableString(body.icon);
+  const youtube_url = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
   const base_points = coerceInteger(body.base_points ?? body.basePoints, 0);
   const status = normalizeMasterStatus(body.status);
   const id = crypto.randomUUID();
@@ -614,12 +489,13 @@ app.post("/api/master/tasks", authenticateAdmin, requireMaster, (req, res) => {
     description,
     base_points,
     icon,
+    youtube_url,
     status,
     created_at: now,
     updated_at: now
   });
 
-  res.status(201).json({ item: mapMasterTaskRow({ id, title, description, icon, base_points, status }) });
+  res.status(201).json({ item: mapMasterTaskRow({ id, title, description, icon, youtube_url, base_points, status }) });
 });
 
 app.get("/api/master/tasks", authenticateAdmin, requireMaster, (_req, res) => {
@@ -644,6 +520,7 @@ app.patch("/api/master/tasks/:id", authenticateAdmin, requireMaster, (req, res) 
   let title = existing.title ?? "";
   let description = existing.description ?? null;
   let icon = existing.icon ?? null;
+  let youtube_url = existing.youtube_url ?? null;
   let base_points = coerceInteger(existing.base_points, 0);
   let status = existing.status ?? "active";
   let hasChange = false;
@@ -669,6 +546,14 @@ app.patch("/api/master/tasks/:id", authenticateAdmin, requireMaster, (req, res) 
   }
 
   if (
+    Object.prototype.hasOwnProperty.call(body, "youtube_url") ||
+    Object.prototype.hasOwnProperty.call(body, "youtubeUrl")
+  ) {
+    youtube_url = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+    hasChange = true;
+  }
+
+  if (
     Object.prototype.hasOwnProperty.call(body, "base_points") ||
     Object.prototype.hasOwnProperty.call(body, "basePoints")
   ) {
@@ -687,7 +572,7 @@ app.patch("/api/master/tasks/:id", authenticateAdmin, requireMaster, (req, res) 
   }
 
   const updated_at = Date.now();
-  updateMasterTaskStmt.run({ id, title, description, icon, base_points, status, updated_at });
+  updateMasterTaskStmt.run({ id, title, description, icon, youtube_url, base_points, status, updated_at });
   const updated = selectMasterTaskStmt.get(id);
   res.json({ item: mapMasterTaskRow(updated) });
 });
@@ -702,6 +587,7 @@ app.post("/api/master/rewards", authenticateAdmin, requireMaster, (req, res) => 
 
   const description = normalizeNullableString(body.description);
   const icon = normalizeNullableString(body.icon);
+  const youtube_url = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
   const base_cost = coerceInteger(body.base_cost ?? body.baseCost, 0);
   const status = normalizeMasterStatus(body.status);
   const id = crypto.randomUUID();
@@ -713,12 +599,13 @@ app.post("/api/master/rewards", authenticateAdmin, requireMaster, (req, res) => 
     description,
     base_cost,
     icon,
+    youtube_url,
     status,
     created_at: now,
     updated_at: now
   });
 
-  res.status(201).json({ item: mapMasterRewardRow({ id, title, description, icon, base_cost, status }) });
+  res.status(201).json({ item: mapMasterRewardRow({ id, title, description, icon, youtube_url, base_cost, status }) });
 });
 
 app.get("/api/master/rewards", authenticateAdmin, requireMaster, (_req, res) => {
@@ -743,6 +630,7 @@ app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res
   let title = existing.title ?? "";
   let description = existing.description ?? null;
   let icon = existing.icon ?? null;
+  let youtube_url = existing.youtube_url ?? null;
   let base_cost = coerceInteger(existing.base_cost, 0);
   let status = existing.status ?? "active";
   let hasChange = false;
@@ -768,6 +656,14 @@ app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res
   }
 
   if (
+    Object.prototype.hasOwnProperty.call(body, "youtube_url") ||
+    Object.prototype.hasOwnProperty.call(body, "youtubeUrl")
+  ) {
+    youtube_url = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+    hasChange = true;
+  }
+
+  if (
     Object.prototype.hasOwnProperty.call(body, "base_cost") ||
     Object.prototype.hasOwnProperty.call(body, "baseCost")
   ) {
@@ -786,7 +682,7 @@ app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res
   }
 
   const updated_at = Date.now();
-  updateMasterRewardStmt.run({ id, title, description, icon, base_cost, status, updated_at });
+  updateMasterRewardStmt.run({ id, title, description, icon, youtube_url, base_cost, status, updated_at });
   const updated = selectMasterRewardStmt.get(id);
   res.json({ item: mapMasterRewardRow(updated) });
 });
@@ -1969,6 +1865,7 @@ const ensureTables = db.transaction(() => {
   ensureColumn(db, "reward", "tags", "TEXT");
   ensureColumn(db, "reward", "campaign_id", "TEXT");
   ensureColumn(db, "reward", "source", "TEXT");
+  ensureColumn(db, "reward", "master_reward_id", "TEXT");
   ensureColumn(db, "reward", "created_at", "INTEGER");
   ensureColumn(db, "reward", "updated_at", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_reward_status ON reward(status)");
@@ -2189,6 +2086,233 @@ importLegacyRewards();
 importLegacyMembers();
 ensureSystemMember();
 ensureDefaultMembers();
+ensureMasterCascadeTriggers();
+
+const EARN_TEMPLATES_HAS_FAMILY_COLUMN = tableHasColumn("earn_templates", "family_id");
+let REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
+if (!REWARD_HAS_FAMILY_COLUMN) {
+  try {
+    db.exec("ALTER TABLE reward ADD COLUMN family_id TEXT");
+    db.prepare("UPDATE reward SET family_id = @family WHERE family_id IS NULL").run({ family: "default" });
+    REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
+    if (REWARD_HAS_FAMILY_COLUMN) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
+    }
+  } catch (err) {
+    if (!(err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || ""))) {
+      console.warn("[multitenant] unable to ensure reward.family_id column", err);
+    }
+  }
+}
+if (REWARD_HAS_FAMILY_COLUMN) {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_reward_family ON reward(family_id)");
+}
+
+const REWARD_HAS_IMAGE_URL_COLUMN = tableHasColumn("reward", "image_url");
+const REWARD_HAS_YOUTUBE_URL_COLUMN = tableHasColumn("reward", "youtube_url");
+const REWARD_HAS_STATUS_COLUMN = tableHasColumn("reward", "status");
+
+const listPublicTasksStmt = EARN_TEMPLATES_HAS_FAMILY_COLUMN
+  ? db.prepare(
+      `SELECT id, title, points, description, youtube_url, sort_order
+       FROM earn_templates
+       WHERE family_id = @family_id AND active = 1
+       ORDER BY sort_order ASC, id ASC`
+    )
+  : null;
+
+const rewardPublicColumns = [
+  "id",
+  "name",
+  "description",
+  "cost",
+  REWARD_HAS_IMAGE_URL_COLUMN ? "image_url" : "NULL AS image_url",
+  REWARD_HAS_YOUTUBE_URL_COLUMN ? "youtube_url" : "NULL AS youtube_url",
+  REWARD_HAS_STATUS_COLUMN ? "status" : "'active' AS status"
+];
+
+const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
+  ? db.prepare(
+      `SELECT ${rewardPublicColumns.join(", ")}
+       FROM reward
+       WHERE family_id = @family_id AND (${REWARD_HAS_STATUS_COLUMN ? "status" : "'active'"} = 'active')
+       ORDER BY created_at DESC, id DESC`
+    )
+  : null;
+
+const childRewardColumns = [
+  "r.id",
+  "r.name",
+  "r.cost",
+  "r.description",
+  "r.image_url",
+  "r.youtube_url",
+  "r.status",
+  "r.tags",
+  "r.created_at",
+  "r.updated_at",
+  "r.master_reward_id"
+];
+if (REWARD_HAS_FAMILY_COLUMN) {
+  childRewardColumns.push("r.family_id");
+}
+childRewardColumns.push("mr.youtube_url AS master_youtube");
+
+const childTaskColumns = [
+  "t.id",
+  "t.title",
+  "t.description",
+  "t.icon",
+  "t.points",
+  "t.status",
+  "t.master_task_id"
+];
+if (tableHasColumn("task", "family_id")) {
+  childTaskColumns.push("t.family_id");
+}
+childTaskColumns.push("mt.youtube_url AS master_youtube");
+
+const CHILD_REWARDS_SQL = `
+  SELECT ${childRewardColumns.join(",\n         ")}
+    FROM reward r
+    LEFT JOIN master_reward mr ON mr.id = r.master_reward_id
+   WHERE r.family_id = @family_id
+     AND r.status = 'active'
+     AND (mr.id IS NULL OR mr.status = 'active')
+   ORDER BY r.created_at DESC, r.id DESC
+`;
+
+const CHILD_TASKS_SQL = `
+  SELECT ${childTaskColumns.join(",\n         ")}
+    FROM task t
+    LEFT JOIN master_task mt ON mt.id = t.master_task_id
+   WHERE t.family_id = @family_id
+     AND t.status = 'active'
+     AND (mt.id IS NULL OR mt.status = 'active')
+   ORDER BY t.created_at DESC, t.id DESC
+`;
+
+let listChildRewardsStmt = null;
+let listChildTasksStmt = null;
+
+function ensureChildRewardsStmt() {
+  if (!listChildRewardsStmt) {
+    if (!tableExists("reward")) return null;
+    listChildRewardsStmt = db.prepare(CHILD_REWARDS_SQL);
+  }
+  return listChildRewardsStmt;
+}
+
+function ensureChildTasksStmt() {
+  if (!listChildTasksStmt) {
+    if (!tableExists("task")) return null;
+    listChildTasksStmt = db.prepare(CHILD_TASKS_SQL);
+  }
+  return listChildTasksStmt;
+}
+
+let selectFamilyIdByMemberStmt = null;
+
+function familyIdByMember(memberId) {
+  const normalized = normId(memberId);
+  if (!normalized) {
+    return null;
+  }
+  try {
+    if (!selectFamilyIdByMemberStmt) {
+      if (!tableExists("member")) return null;
+      selectFamilyIdByMemberStmt = db.prepare(
+        "SELECT family_id FROM member WHERE LOWER(id) = LOWER(?) LIMIT 1"
+      );
+    }
+    const row = selectFamilyIdByMemberStmt.get(normalized);
+    return row?.family_id || null;
+  } catch (err) {
+    if (err?.code === "SQLITE_ERROR" && /no such table/i.test(err?.message || "")) {
+      selectFamilyIdByMemberStmt = null;
+      return null;
+    }
+    throw err;
+  }
+}
+
+const insertFamilyStmt = db.prepare(
+  `INSERT INTO family (id, name, email, status, admin_key, created_at, updated_at)
+   VALUES (@id, @name, @email, @status, @admin_key, @created_at, @updated_at)`
+);
+
+const selectMasterTaskStmt = db.prepare(
+  `SELECT id, title, description, icon, youtube_url, base_points, status, created_at, updated_at
+   FROM master_task
+   WHERE id = ?`
+);
+const listMasterTasksStmt = db.prepare(
+  `SELECT id, title, description, icon, youtube_url, base_points, status, created_at, updated_at
+   FROM master_task
+   ORDER BY created_at DESC, id DESC`
+);
+const insertMasterTaskStmt = db.prepare(
+  `INSERT INTO master_task (id, title, description, base_points, icon, youtube_url, status, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_points, @icon, @youtube_url, @status, @created_at, @updated_at)`
+);
+const updateMasterTaskStmt = db.prepare(
+  `UPDATE master_task
+      SET title = @title,
+          description = @description,
+          icon = @icon,
+          youtube_url = @youtube_url,
+          base_points = @base_points,
+          status = @status,
+          updated_at = @updated_at
+    WHERE id = @id`
+);
+
+const selectMasterRewardStmt = db.prepare(
+  `SELECT id, title, description, icon, youtube_url, base_cost, status, created_at, updated_at
+   FROM master_reward
+   WHERE id = ?`
+);
+const listMasterRewardsStmt = db.prepare(
+  `SELECT id, title, description, icon, youtube_url, base_cost, status, created_at, updated_at
+   FROM master_reward
+   ORDER BY created_at DESC, id DESC`
+);
+const insertMasterRewardStmt = db.prepare(
+  `INSERT INTO master_reward (id, title, description, base_cost, icon, youtube_url, status, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_cost, @icon, @youtube_url, @status, @created_at, @updated_at)`
+);
+const updateMasterRewardStmt = db.prepare(
+  `UPDATE master_reward
+      SET title = @title,
+          description = @description,
+          icon = @icon,
+          youtube_url = @youtube_url,
+          base_cost = @base_cost,
+          status = @status,
+          updated_at = @updated_at
+    WHERE id = @id`
+);
+
+const listDismissedTemplatesStmt = db.prepare(
+  `SELECT kind, master_id FROM dismissed_template WHERE family_id = ?`
+);
+const upsertDismissedTemplateStmt = db.prepare(
+  `INSERT INTO dismissed_template (family_id, kind, master_id, dismissed_at)
+   VALUES (@family_id, @kind, @master_id, @dismissed_at)
+   ON CONFLICT(family_id, kind, master_id) DO UPDATE SET dismissed_at = excluded.dismissed_at`
+);
+const deleteDismissedTemplateStmt = db.prepare(
+  `DELETE FROM dismissed_template WHERE family_id = @family_id AND kind = @kind AND master_id = @master_id`
+);
+const selectFamilyByIdStmt = db.prepare(
+  "SELECT id, name, email, status, admin_key, created_at, updated_at FROM family WHERE id = ? LIMIT 1"
+);
+const updateFamilyStmt = db.prepare(
+  `UPDATE family SET name = @name, status = @status, updated_at = @updated_at WHERE id = @id`
+);
+const updateFamilyAdminKeyStmt = db.prepare(
+  `UPDATE family SET admin_key = @admin_key, updated_at = @updated_at WHERE id = @id`
+);
 
 function ensureMemberFamilyColumn() {
   try {
@@ -4420,10 +4544,10 @@ app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) 
         res.status(400).json({ error: "family_id required" });
         return;
       }
-      filters.push("family_id = ?");
+      filters.push("r.family_id = ?");
       params.push(scopedFamilyId);
     } else if (scopedFamilyId) {
-      filters.push("family_id = ?");
+      filters.push("r.family_id = ?");
       params.push(scopedFamilyId);
     }
   } else if (MULTITENANT_ENFORCE) {
@@ -4432,27 +4556,82 @@ app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) 
   }
 
   if (query.status !== undefined && query.status !== null && query.status !== "") {
-    filters.push("status = ?");
+    filters.push("r.status = ?");
     params.push(String(query.status).trim().toLowerCase());
   } else if (query.active !== undefined) {
     const raw = String(query.active).trim().toLowerCase();
     const isActive = raw === "" || raw === "1" || raw === "true" || raw === "yes" || raw === "active";
-    filters.push("status = ?");
+    filters.push("r.status = ?");
     params.push(isActive ? "active" : "disabled");
   }
 
+  filters.push("(mr.id IS NULL OR mr.status = 'active')");
+
   let sql = `
-    SELECT id, name, cost, description, image_url, youtube_url, status, tags, campaign_id, source, created_at, updated_at${
-      REWARD_HAS_FAMILY_COLUMN ? ", family_id" : ""
-    }
-    FROM reward
+    SELECT r.id, r.name, r.cost, r.description, r.image_url, r.youtube_url, r.status, r.tags, r.campaign_id, r.source,
+           r.created_at, r.updated_at${REWARD_HAS_FAMILY_COLUMN ? ", r.family_id" : ""},
+           r.master_reward_id, mr.youtube_url AS master_youtube
+    FROM reward r
+    LEFT JOIN master_reward mr ON mr.id = r.master_reward_id
   `;
   if (filters.length) {
     sql += " WHERE " + filters.join(" AND ");
   }
-  sql += " ORDER BY cost ASC, name ASC";
+  sql += " ORDER BY r.cost ASC, r.name ASC";
   const rows = db.prepare(sql).all(...params).map(mapRewardRow);
   res.json(rows);
+});
+
+app.get("/api/child/rewards", (req, res) => {
+  const userId = (req.query?.userId ?? "").toString().trim();
+  if (!userId) {
+    res.status(400).json({ error: "userId required" });
+    return;
+  }
+  const stmt = ensureChildRewardsStmt();
+  if (!stmt) {
+    res.status(500).json({ error: "rewards_unavailable" });
+    return;
+  }
+  const familyId = familyIdByMember(userId);
+  if (!familyId) {
+    res.status(404).json({ error: "member not found" });
+    return;
+  }
+  try {
+    res.set("Cache-Control", "no-store");
+    const rows = stmt.all({ family_id: familyId });
+    res.json(rows);
+  } catch (err) {
+    console.error("[child.rewards] failed", err);
+    res.status(500).json({ error: "failed" });
+  }
+});
+
+app.get("/api/child/tasks", (req, res) => {
+  const userId = (req.query?.userId ?? "").toString().trim();
+  if (!userId) {
+    res.status(400).json({ error: "userId required" });
+    return;
+  }
+  const stmt = ensureChildTasksStmt();
+  if (!stmt) {
+    res.status(500).json({ error: "tasks_unavailable" });
+    return;
+  }
+  const familyId = familyIdByMember(userId);
+  if (!familyId) {
+    res.status(404).json({ error: "member not found" });
+    return;
+  }
+  try {
+    res.set("Cache-Control", "no-store");
+    const rows = stmt.all({ family_id: familyId });
+    res.json(rows);
+  } catch (err) {
+    console.error("[child.tasks] failed", err);
+    res.status(500).json({ error: "failed" });
+  }
 });
 
 app.get("/api/features", (_req, res) => {

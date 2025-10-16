@@ -172,6 +172,25 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
+  function getChildId() {
+    try {
+      return window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function setChildId(value) {
+    const next = (value ?? '').toString().trim();
+    if (next) {
+      storageSet(CHILD_ID_STORAGE, next);
+    } else {
+      try {
+        window.localStorage?.removeItem(CHILD_ID_STORAGE);
+      } catch {}
+    }
+  }
+
   function readConfiguredFamilyId() {
     if (typeof document === 'undefined') return null;
     const bodyFamily = document.body?.dataset?.familyId;
@@ -395,24 +414,70 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   })();
 
   function getUserId() {
-    return $('childUserId').value.trim();
+    return getChildId().trim();
   }
 
-  const childIdInput = document.querySelector('#childUserId, #child-user-id');
-  const childIdSaveButton = document.querySelector('#child-save-id');
-  if (childIdInput && !childIdInput.value) {
-    try {
-      childIdInput.value = window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
-    } catch {
-      childIdInput.value = childIdInput.value || '';
-    }
+  function childIdInputs() {
+    return Array.from(document.querySelectorAll('#childUserId, #child-user-id'));
   }
-  childIdSaveButton?.addEventListener('click', () => {
-    const value = (childIdInput?.value || '').trim();
-    try {
-      window.localStorage?.setItem(CHILD_ID_STORAGE, value);
-    } catch {}
-  });
+
+  function syncChildIdInputs() {
+    const current = getChildId();
+    childIdInputs().forEach((input) => {
+      if (input && typeof input.value === 'string') {
+        input.value = current;
+      }
+    });
+  }
+
+  function readChildIdInput() {
+    const inputs = childIdInputs();
+    for (const input of inputs) {
+      if (input && typeof input.value === 'string') {
+        return input.value.trim();
+      }
+    }
+    return '';
+  }
+
+  function bindChildIdSaveButtons() {
+    const buttons = Array.from(document.querySelectorAll('#child-save-id, #child-save-inline'));
+    buttons.forEach((btn) => {
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const value = readChildIdInput();
+        setChildId(value);
+        syncChildIdInputs();
+        loadChildData();
+      });
+    });
+  }
+
+  async function loadChildData() {
+    const userId = getChildId().trim();
+    const container = document.getElementById('child-content');
+    const promptBox = document.getElementById('child-id-prompt');
+
+    if (!userId) {
+      container?.classList.add('hidden');
+      promptBox?.classList.remove('hidden');
+      const earnBox = $('earnList');
+      if (earnBox) earnBox.innerHTML = '<div class="muted">Please save your user ID to load tasks.</div>';
+      const rewardsBox = $('shopList');
+      if (rewardsBox) rewardsBox.innerHTML = '';
+      $('shopMsg').textContent = 'Save your user ID to load rewards.';
+      const empty = $('shopEmpty');
+      if (empty) empty.style.display = 'none';
+      setQR('');
+      return;
+    }
+
+    promptBox?.classList.add('hidden');
+    container?.classList.remove('hidden');
+    syncChildIdInputs();
+
+    await Promise.allSettled([loadEarnTemplates(), loadRewards()]);
+  }
 
   function saveFilters(filters) {
     const payload = JSON.stringify(filters || {});
@@ -751,11 +816,16 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   // ===== Earn templates =====
   let templates = [];
   async function loadEarnTemplates() {
+    const userId = getChildId().trim();
+    const earnBox = $('earnList');
+    if (!userId) {
+      if (earnBox) earnBox.innerHTML = '<div class="muted">Please save your user ID to load tasks.</div>';
+      templates = [];
+      return;
+    }
+    if (earnBox) earnBox.innerHTML = '<div class="muted">Loading...</div>';
     try {
-      const familyId = resolveFamilyId();
-      const params = new URLSearchParams();
-      params.set('family_id', familyId || DEFAULT_FAMILY_ID);
-      const res = await fetch(`/api/public/tasks?${params.toString()}`);
+      const res = await fetch(`/api/child/tasks?userId=${encodeURIComponent(userId)}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load tasks');
@@ -768,15 +838,11 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
               title: tpl.title || '',
               points: Number(tpl.points ?? 0) || 0,
               description: tpl.description || '',
-              youtube_url: tpl.youtube_url || '',
+              youtube_url: tpl.youtube_url || tpl.master_youtube || '',
+              master_youtube: tpl.master_youtube || '',
               sort_order: Number(tpl.sort_order ?? 0) || 0
             }))
-            .sort((a, b) => {
-              if (a.sort_order !== b.sort_order) {
-                return a.sort_order - b.sort_order;
-              }
-              return a.title.localeCompare(b.title);
-            })
+            .sort((a, b) => a.title.localeCompare(b.title))
         : [];
       renderEarnList();
     } catch (err) {
@@ -802,12 +868,13 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
         </div>
       `;
       const videoSlot = card.querySelector('.video-slot');
-      if (videoSlot && tpl.youtube_url) {
+      const clipUrl = tpl.youtube_url || tpl.master_youtube || '';
+      if (videoSlot && clipUrl) {
         const watchBtn = document.createElement('button');
         watchBtn.type = 'button';
         watchBtn.className = 'btn btn-sm';
         watchBtn.textContent = 'Watch clip';
-        watchBtn.dataset.youtube = tpl.youtube_url;
+        watchBtn.dataset.youtube = clipUrl;
         watchBtn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -1118,8 +1185,6 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  loadEarnTemplates();
-
   // ===== Scan to receive =====
   function setupScanner(btnId, videoId, canvasId, statusId, onToken) {
     const btn = $(btnId);
@@ -1250,16 +1315,25 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   updateRecentButton();
   updateFullButton();
 
+  bindChildIdSaveButtons();
+  syncChildIdInputs();
+  loadChildData();
+
   async function loadRewards(){
     const list = $('shopList');
-    if (list) list.innerHTML = '<div class="muted">Loading...</div>';
     const empty = $('shopEmpty');
+    const userId = getChildId().trim();
+    if (!userId){
+      if (list) list.innerHTML = '';
+      if (empty) empty.style.display = 'block';
+      $('shopMsg').textContent = 'Save your user ID to load rewards.';
+      setQR('');
+      return;
+    }
+    if (list) list.innerHTML = '<div class="muted">Loading...</div>';
     if (empty) empty.style.display = 'none';
     try{
-      const familyId = resolveFamilyId();
-      const params = new URLSearchParams();
-      params.set('family_id', familyId || DEFAULT_FAMILY_ID);
-      const res = await fetch(`/api/public/rewards?${params.toString()}`);
+      const res = await fetch(`/api/child/rewards?userId=${encodeURIComponent(userId)}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load rewards');
@@ -1281,8 +1355,8 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
       cost: Number.isFinite(Number(item.cost ?? item.price)) ? Number(item.cost ?? item.price) : 0,
       description: item.description || '',
       image_url: item.image_url || item.imageUrl || '',
-      youtube_url: item.youtube_url || item.youtubeUrl || '',
-      youtubeUrl: item.youtubeUrl || item.youtube_url || '',
+      youtube_url: item.youtube_url || item.master_youtube || item.youtubeUrl || '',
+      youtubeUrl: item.youtubeUrl || item.youtube_url || item.master_youtube || '',
     }));
     if (!normalized.length){
       $('shopEmpty').style.display = 'block';
