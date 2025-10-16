@@ -150,6 +150,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
   const CHILD_ID_STORAGE = 'ck.childUserId';
+  let activeUser = null;
 
   function storageGet(key) {
     try {
@@ -172,7 +173,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function getChildId() {
+  function getSavedId() {
     try {
       return window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
     } catch {
@@ -180,7 +181,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function setChildId(value) {
+  function setSavedId(value) {
     const next = (value ?? '').toString().trim();
     if (next) {
       storageSet(CHILD_ID_STORAGE, next);
@@ -189,6 +190,29 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
         window.localStorage?.removeItem(CHILD_ID_STORAGE);
       } catch {}
     }
+  }
+
+  function setActiveUser(user) {
+    if (user && typeof user === 'object') {
+      const id = (user.id ?? '').toString().trim();
+      activeUser = id
+        ? {
+            id,
+            name: (user.name ?? '').toString().trim() || id,
+            family_id: user.family_id ?? user.familyId ?? null
+          }
+        : null;
+    } else {
+      activeUser = null;
+    }
+  }
+
+  function getChildId() {
+    return activeUser?.id || '';
+  }
+
+  function getChildName() {
+    return activeUser?.name || '';
   }
 
   function readConfiguredFamilyId() {
@@ -417,66 +441,85 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     return getChildId().trim();
   }
 
-  function childIdInputs() {
-    return Array.from(document.querySelectorAll('#childUserId, #child-user-id'));
-  }
-
-  function syncChildIdInputs() {
-    const current = getChildId();
-    childIdInputs().forEach((input) => {
-      if (input && typeof input.value === 'string') {
-        input.value = current;
-      }
-    });
-  }
-
-  function readChildIdInput() {
-    const inputs = childIdInputs();
-    for (const input of inputs) {
-      if (input && typeof input.value === 'string') {
-        return input.value.trim();
-      }
+  function syncActiveUserInputs() {
+    const idInput = document.getElementById('childUserId');
+    if (idInput && typeof idInput.value === 'string') {
+      idInput.value = getChildId();
     }
-    return '';
   }
 
-  function bindChildIdSaveButtons() {
-    const buttons = Array.from(document.querySelectorAll('#child-save-id, #child-save-inline'));
-    buttons.forEach((btn) => {
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        const value = readChildIdInput();
-        setChildId(value);
-        syncChildIdInputs();
-        loadChildData();
-      });
-    });
-  }
-
-  async function loadChildData() {
-    const userId = getChildId().trim();
-    const container = document.getElementById('child-content');
-    const promptBox = document.getElementById('child-id-prompt');
-
-    if (!userId) {
-      container?.classList.add('hidden');
-      promptBox?.classList.remove('hidden');
-      const earnBox = $('earnList');
-      if (earnBox) earnBox.innerHTML = '<div class="muted">Please save your user ID to load tasks.</div>';
-      const rewardsBox = $('shopList');
-      if (rewardsBox) rewardsBox.innerHTML = '';
-      $('shopMsg').textContent = 'Save your user ID to load rewards.';
-      const empty = $('shopEmpty');
-      if (empty) empty.style.display = 'none';
-      setQR('');
-      return;
+  async function resolveUser(userInput) {
+    const raw = (userInput ?? '').toString().trim();
+    if (!raw) throw new Error('Enter a user name or ID.');
+    const res = await fetch(`/api/child/resolve-user?user=${encodeURIComponent(raw)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      let message = typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : 'login failed';
+      if (message === 'user required') message = 'Enter a user name or ID.';
+      throw new Error(message);
     }
+    return data;
+  }
 
-    promptBox?.classList.add('hidden');
-    container?.classList.remove('hidden');
-    syncChildIdInputs();
-
+  async function loadChildDataFor(user) {
+    if (!user || !user.id) return;
     await Promise.allSettled([loadEarnTemplates(), loadRewards()]);
+    refreshRedeemNotice();
+  }
+
+  function enterApp(user, remember) {
+    setActiveUser(user);
+    syncActiveUserInputs();
+    const loginSection = document.querySelector('#child-login');
+    const appSection = document.querySelector('#child-content');
+    loginSection?.classList.add('hidden');
+    appSection?.classList.remove('hidden');
+    const shortId = user.id && user.id.length > 6 ? `${user.id.slice(0, 6)}…` : user.id;
+    const banner = document.querySelector('#child-current');
+    if (banner) {
+      const name = getChildName();
+      banner.textContent = name ? `Signed in as ${name} (${shortId})` : `Signed in as ${shortId}`;
+    }
+    const rememberBox = document.querySelector('#child-remember');
+    if (rememberBox) rememberBox.checked = !!remember;
+    const msg = document.querySelector('#child-login-msg');
+    if (msg) msg.textContent = '';
+    if (remember) {
+      setSavedId(user.id);
+    } else {
+      setSavedId('');
+    }
+    loadChildDataFor(user);
+  }
+
+  function backToLogin() {
+    setActiveUser(null);
+    syncActiveUserInputs();
+    const loginSection = document.querySelector('#child-login');
+    const appSection = document.querySelector('#child-content');
+    loginSection?.classList.remove('hidden');
+    appSection?.classList.add('hidden');
+    const banner = document.querySelector('#child-current');
+    if (banner) banner.textContent = '';
+    const msg = document.querySelector('#child-login-msg');
+    if (msg) msg.textContent = '';
+    const input = document.querySelector('#child-user');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+    const earnBox = $('earnList');
+    if (earnBox) earnBox.innerHTML = '<div class="muted">Log in to load tasks.</div>';
+    const rewardsBox = $('shopList');
+    if (rewardsBox) rewardsBox.innerHTML = '';
+    $('shopMsg').textContent = 'Log in to load rewards.';
+    const empty = $('shopEmpty');
+    if (empty) empty.style.display = 'block';
+    setQR('');
+    lastRedeemEntry = null;
+    updateRedeemNotice(null, { fallbackText: 'Log in to see recent redeemed rewards.' });
+    setRecentVisible(false);
+    setFullVisible(false);
   }
 
   function saveFilters(filters) {
@@ -621,7 +664,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const userId = getUserId();
     if (!userId) {
       lastRedeemEntry = null;
-      updateRedeemNotice(null, { fallbackText: 'Enter your user ID to see recent redeemed rewards.' });
+      updateRedeemNotice(null, { fallbackText: 'Log in to see recent redeemed rewards.' });
       setRecentVisible(false);
       setFullVisible(false);
       return;
@@ -647,7 +690,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   async function loadRecentRedeems() {
     const userId = getUserId();
     if (!userId) {
-      alert('Enter user id');
+      alert('Log in first.');
       return;
     }
     const box = $('recentRedeems');
@@ -678,7 +721,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   async function loadFullRedeems() {
     const userId = getUserId();
     if (!userId) {
-      alert('Enter user id');
+      alert('Log in first.');
       return;
     }
     const box = $('fullRedeems');
@@ -719,7 +762,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   // ===== Balance & history =====
   async function checkBalance() {
     const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
+    if (!userId) { alert('Log in first.'); return; }
     try {
       const res = await fetch(`/summary/${encodeURIComponent(userId)}`);
       const data = await res.json();
@@ -734,7 +777,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   async function loadHistory() {
     const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
+    if (!userId) { alert('Log in first.'); return; }
     const filters = getFilters();
     const list = $('historyList');
     list.innerHTML = '<div class="muted">Loading...</div>';
@@ -764,7 +807,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   $('btnHistory')?.addEventListener('click', loadHistory);
   $('btnCsv')?.addEventListener('click', () => {
     const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
+    if (!userId) { alert('Log in first.'); return; }
     window.open(`/api/history.csv/${encodeURIComponent(userId)}`, '_blank');
   });
 
@@ -819,7 +862,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const userId = getChildId().trim();
     const earnBox = $('earnList');
     if (!userId) {
-      if (earnBox) earnBox.innerHTML = '<div class="muted">Please save your user ID to load tasks.</div>';
+      if (earnBox) earnBox.innerHTML = '<div class="muted">Log in to load tasks.</div>';
       templates = [];
       return;
     }
@@ -897,7 +940,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   }
   $('btnEarnQr')?.addEventListener('click', async () => {
     const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
+    if (!userId) { alert('Log in first.'); return; }
     const selected = Array.from(document.querySelectorAll('#earnList input[type="checkbox"]:checked')).map(el => ({ id: Number(el.dataset.id), count: 1 }));
     if (!selected.length) { alert('Pick at least one task'); return; }
     try {
@@ -1309,15 +1352,56 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     m.appendChild(big); document.body.appendChild(m);
   }
 
+  function setupChildLogin() {
+    syncActiveUserInputs();
+    const input = document.querySelector('#child-user');
+    const remember = document.querySelector('#child-remember');
+    const btn = document.querySelector('#child-login-btn');
+    const msg = document.querySelector('#child-login-msg');
+
+    const saved = getSavedId();
+    if (saved) {
+      resolveUser(saved)
+        .then((user) => enterApp(user, true))
+        .catch(() => {
+          setSavedId('');
+          backToLogin();
+        });
+    }
+
+    btn?.addEventListener('click', async () => {
+      const value = input && typeof input.value === 'string' ? input.value.trim() : '';
+      if (msg) msg.textContent = 'Signing in...';
+      try {
+        const user = await resolveUser(value);
+        enterApp(user, !!remember?.checked);
+      } catch (error) {
+        if (msg) msg.textContent = error?.message || 'login failed';
+      }
+    });
+
+    input?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        btn?.click();
+      }
+    });
+
+    document.querySelector('#child-switch')?.addEventListener('click', () => {
+      setSavedId('');
+      const rememberBox = document.querySelector('#child-remember');
+      if (rememberBox) rememberBox.checked = false;
+      backToLogin();
+    });
+  }
+
   document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
   $('btnRecentRedeems')?.addEventListener('click', toggleRecentRedeems);
   $('btnFullRedeems')?.addEventListener('click', toggleFullRedeems);
   updateRecentButton();
   updateFullButton();
 
-  bindChildIdSaveButtons();
-  syncChildIdInputs();
-  loadChildData();
+  setupChildLogin();
 
   async function loadRewards(){
     const list = $('shopList');
@@ -1326,7 +1410,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     if (!userId){
       if (list) list.innerHTML = '';
       if (empty) empty.style.display = 'block';
-      $('shopMsg').textContent = 'Save your user ID to load rewards.';
+      $('shopMsg').textContent = 'Log in to load rewards.';
       setQR('');
       return;
     }
@@ -1365,7 +1449,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
       return;
     }
     $('shopEmpty').style.display = 'none';
-    $('shopMsg').textContent = getUserId() ? 'Tap Redeem to request a reward.' : 'Enter your user ID, then tap Redeem.';
+    $('shopMsg').textContent = getUserId() ? 'Tap Redeem to request a reward.' : 'Log in, then tap Redeem.';
     setQR('');
     normalized.forEach((item, index) => {
       const card = document.createElement('div');
@@ -1474,7 +1558,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   async function createHold(item) {
     const userId = getUserId();
-    if (!userId) { alert('Enter user id'); return; }
+    if (!userId) { alert('Log in first.'); return; }
     setQR('Creating hold...');
     try {
       const res = await fetch('/api/holds', {

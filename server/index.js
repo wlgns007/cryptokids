@@ -4582,6 +4582,40 @@ app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) 
   res.json(rows);
 });
 
+app.get("/api/child/resolve-user", (req, res) => {
+  const raw = (req.query?.user ?? "").toString().trim();
+  if (!raw) {
+    res.status(400).json({ error: "user required" });
+    return;
+  }
+
+  let row = db.prepare(`SELECT id, family_id, name FROM "member" WHERE id = ?`).get(raw);
+  if (!row) {
+    row = db.prepare(`SELECT id, family_id, name FROM "member" WHERE lower(id) = lower(?)`).get(raw);
+  }
+  if (row) {
+    res.json(row);
+    return;
+  }
+
+  const matches = db
+    .prepare(`SELECT id, family_id, name FROM "member" WHERE lower(name) = lower(?)`)
+    .all(raw);
+  if (matches.length === 1) {
+    res.json(matches[0]);
+    return;
+  }
+  if (matches.length > 1) {
+    res.status(409).json({
+      error: "multiple matches",
+      matches: matches.map((m) => ({ id: m.id, family_id: m.family_id }))
+    });
+    return;
+  }
+
+  res.status(404).json({ error: "not found" });
+});
+
 app.get("/api/child/rewards", (req, res) => {
   const userId = (req.query?.userId ?? "").toString().trim();
   if (!userId) {

@@ -4490,95 +4490,60 @@ setupScanner({
     }
   });
 
-  async function createCustomTemplate() {
-    const title = prompt('Template title');
-    if (!title) return;
-    const points = Number(prompt('Points value'));
-    if (!Number.isFinite(points) || points <= 0) {
-      toast('Invalid points', 'error');
-      return;
-    }
-    const description = prompt('Description (optional)') || '';
-    const youtube_url = prompt('YouTube URL (optional)') || null;
-    const sort_order = Number(prompt('Sort order (optional)', '0')) || 0;
-    try {
-      const { res, body } = await adminFetch('/api/earn-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, points, description, youtube_url, sort_order })
-      });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return;
-      }
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'create failed');
-        throw new Error(msg);
-      }
-      toast('Template added');
-      await loadTemplates();
-    } catch (err) {
-      toast(err.message || 'Create failed', 'error');
-    }
-  }
-
-  async function addTemplate() {
-    const familyId = adminState.currentFamilyId || adminState.familyId || null;
-    let templates = [];
-    if (familyId) {
-      try {
-        templates = await loadAvailableTaskTemplates(familyId);
-      } catch (error) {
-        console.warn('loadAvailableTaskTemplates failed', error);
-        toast(error.message || 'Failed to load master templates', 'error');
-        templates = [];
-      }
-    } else {
+  document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
+    const famId = adminState.currentFamilyId || adminState.familyId || null;
+    if (!famId) {
       toast('Select a family scope to adopt templates.', 'error');
-    }
-
-    if (!Array.isArray(templates) || templates.length === 0) {
-      await createCustomTemplate();
       return;
     }
 
-    const options = templates
-      .map((tpl, index) => {
-        const value = Number.isFinite(Number(tpl.points)) ? Number(tpl.points) : Number(tpl.base_points || 0);
-        const suffix = Number.isFinite(value) && value > 0 ? ` (+${value})` : '';
-        return `${index + 1}. ${tpl.title || 'Template'}${suffix}`;
-      })
-      .join('\n');
-    const promptMessage = [
-      'Select a master template to adopt.',
-      options,
-      'Enter the number to adopt, or leave blank to create a custom template.'
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const selection = prompt(promptMessage, '');
-    if (selection === null) return;
-    const trimmed = selection.trim();
-    if (!trimmed) {
-      await createCustomTemplate();
-      return;
-    }
-    const index = Number(trimmed);
-    if (!Number.isInteger(index) || index < 1 || index > templates.length) {
-      toast('Invalid selection', 'error');
-      return;
-    }
+    const box = document.querySelector('#tpl-list');
+    if (!box) return;
+    box.innerHTML = '<div class="opacity-70">Loading...</div>';
 
-    const chosen = templates[index - 1];
     try {
-      await adoptTaskTemplate(familyId, chosen.id);
-      toast(`Template adopted: ${chosen.title || 'Template'}`);
+      const list = await loadAvailableTaskTemplates(famId);
+      box.innerHTML = Array.isArray(list) && list.length
+        ? list
+            .map((t) => `
+        <div class="flex items-center justify-between p-2 border rounded">
+          <div>
+            <div class="font-semibold">${t.title}</div>
+            <div class="text-sm opacity-70">${t.points} pts${t.youtube_url ? ` · <a href="${t.youtube_url}" target="_blank">YouTube</a>` : ''}</div>
+          </div>
+          <button class="btn btn-sm" data-adopt="${t.id}">Add</button>
+        </div>`)
+            .join('')
+        : '<div class="opacity-70">No more templates to add.</div>';
+      show('#modal-task-templates');
+    } catch (error) {
+      console.warn('loadAvailableTaskTemplates failed', error);
+      box.innerHTML = '<div class="opacity-70">Failed to load templates.</div>';
+      toast(error.message || 'Failed to load master templates', 'error');
+    }
+  });
+
+  document.addEventListener('click', async (e) => {
+    const adopt = e.target.closest('[data-adopt]');
+    if (!adopt) return;
+    const famId = adminState.currentFamilyId || adminState.familyId || null;
+    if (!famId) {
+      toast('Select a family scope to adopt templates.', 'error');
+      return;
+    }
+    const masterId = adopt.getAttribute('data-adopt');
+    if (!masterId) return;
+    try {
+      adopt.disabled = true;
+      await adoptTaskTemplate(famId, masterId);
+      toast('Template adopted.');
+      hide('#modal-task-templates');
       await loadTemplates();
     } catch (err) {
+      adopt.disabled = false;
       toast(err.message || 'Adoption failed', 'error');
     }
-  }
-  $('btnAddTemplate')?.addEventListener('click', addTemplate);
+  });
 
   async function editTemplate(tpl) {
     const isMasterLinked = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
