@@ -2163,6 +2163,29 @@ details.member-fold .summary-value {
     return body;
   }
 
+  async function loadAvailableTaskTemplates(familyId) {
+    if (!familyId) return [];
+    try {
+      const list = await apiFetch(
+        `/api/families/${encodeURIComponent(familyId)}/master-tasks/available`
+      );
+      return Array.isArray(list) ? list : [];
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async function adoptTaskTemplate(familyId, masterTaskId) {
+    if (!familyId || !masterTaskId) {
+      throw new Error('familyId and masterTaskId required');
+    }
+    await apiFetch(`/api/families/${encodeURIComponent(familyId)}/tasks/from-master`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ master_task_id: masterTaskId })
+    });
+  }
+
   async function fetchFamilyDetail(familyId) {
     if (!familyId) return null;
     try {
@@ -4128,8 +4151,9 @@ setupScanner({
           actions.appendChild(reactivateBtn);
 
           const deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
           deleteBtn.textContent = 'Delete permanently';
-          deleteBtn.addEventListener('click', () => deleteReward(item.id));
+          deleteBtn.dataset.deleteReward = item.id;
           actions.appendChild(deleteBtn);
         } else {
           const toggleBtn = document.createElement('button');
@@ -4191,28 +4215,48 @@ setupScanner({
   }
 
   async function deleteReward(id) {
-    if (!confirm('Delete this reward permanently?')) return;
+    const { res, body } = await adminFetch(`/api/admin/rewards/${id}`, { method: 'DELETE' });
+    if (res.status === 401) {
+      throw new Error(ADMIN_INVALID_MSG);
+    }
+    if (res.status === 409) {
+      throw new Error('Reward is referenced by existing records.');
+    }
+    if (!res.ok) {
+      const msg = (body && body.error) || (typeof body === 'string' ? body : 'Delete failed');
+      throw new Error(msg);
+    }
+    return true;
+  }
+
+  async function hardDeleteReward(id) {
+    await apiFetch(`/api/admin/rewards/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async function reloadRewardsMenu() {
+    await loadRewards();
+  }
+
+  document.addEventListener('click', async (event) => {
+    const btn = event.target.closest('[data-delete-reward]');
+    if (!btn) return;
+    event.preventDefault();
+    const rewardId = btn.getAttribute('data-delete-reward');
+    if (!rewardId) return;
+    if (!confirm('Delete this reward and its dependent records?')) return;
     try {
-      const { res, body } = await adminFetch(`/api/admin/rewards/${id}`, { method: 'DELETE' });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return;
-      }
-      if (res.status === 409) {
-        toast('Reward is referenced by existing records.', 'error');
-        return;
-      }
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'Delete failed');
-        throw new Error(msg);
+      if (adminState.role === 'master') {
+        await hardDeleteReward(rewardId);
+      } else {
+        await deleteReward(rewardId);
       }
       toast('Reward deleted');
-      loadRewards();
+      await reloadRewardsMenu();
     } catch (err) {
       console.error(err);
       toast(err.message || 'Delete failed', 'error');
     }
-  }
+  });
 
   document.getElementById('btnCreateReward')?.addEventListener('click', async (e)=>{
     e.preventDefault();
@@ -4446,10 +4490,14 @@ setupScanner({
     }
   });
 
-  async function addTemplate() {
+  async function createCustomTemplate() {
     const title = prompt('Template title');
     if (!title) return;
-    const points = Number(prompt('Points value')); if (!Number.isFinite(points) || points <= 0) return toast('Invalid points', 'error');
+    const points = Number(prompt('Points value'));
+    if (!Number.isFinite(points) || points <= 0) {
+      toast('Invalid points', 'error');
+      return;
+    }
     const description = prompt('Description (optional)') || '';
     const youtube_url = prompt('YouTube URL (optional)') || null;
     const sort_order = Number(prompt('Sort order (optional)', '0')) || 0;
@@ -4459,15 +4507,75 @@ setupScanner({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, points, description, youtube_url, sort_order })
       });
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'create failed');
         throw new Error(msg);
       }
       toast('Template added');
-      loadTemplates();
+      await loadTemplates();
     } catch (err) {
       toast(err.message || 'Create failed', 'error');
+    }
+  }
+
+  async function addTemplate() {
+    const familyId = adminState.currentFamilyId || adminState.familyId || null;
+    let templates = [];
+    if (familyId) {
+      try {
+        templates = await loadAvailableTaskTemplates(familyId);
+      } catch (error) {
+        console.warn('loadAvailableTaskTemplates failed', error);
+        toast(error.message || 'Failed to load master templates', 'error');
+        templates = [];
+      }
+    } else {
+      toast('Select a family scope to adopt templates.', 'error');
+    }
+
+    if (!Array.isArray(templates) || templates.length === 0) {
+      await createCustomTemplate();
+      return;
+    }
+
+    const options = templates
+      .map((tpl, index) => {
+        const value = Number.isFinite(Number(tpl.points)) ? Number(tpl.points) : Number(tpl.base_points || 0);
+        const suffix = Number.isFinite(value) && value > 0 ? ` (+${value})` : '';
+        return `${index + 1}. ${tpl.title || 'Template'}${suffix}`;
+      })
+      .join('\n');
+    const promptMessage = [
+      'Select a master template to adopt.',
+      options,
+      'Enter the number to adopt, or leave blank to create a custom template.'
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const selection = prompt(promptMessage, '');
+    if (selection === null) return;
+    const trimmed = selection.trim();
+    if (!trimmed) {
+      await createCustomTemplate();
+      return;
+    }
+    const index = Number(trimmed);
+    if (!Number.isInteger(index) || index < 1 || index > templates.length) {
+      toast('Invalid selection', 'error');
+      return;
+    }
+
+    const chosen = templates[index - 1];
+    try {
+      await adoptTaskTemplate(familyId, chosen.id);
+      toast(`Template adopted: ${chosen.title || 'Template'}`);
+      await loadTemplates();
+    } catch (err) {
+      toast(err.message || 'Adoption failed', 'error');
     }
   }
   $('btnAddTemplate')?.addEventListener('click', addTemplate);

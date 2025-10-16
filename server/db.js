@@ -382,6 +382,18 @@ ensureMasterCascadeTriggers();
 
 enforceFamilyNotNull(db);
 
+// Backfill any legacy rewards/tasks missing a family scope
+try {
+  if (columnInfo("reward").length) {
+    db.exec(`UPDATE reward SET family_id='default' WHERE family_id IS NULL;`);
+  }
+  if (columnInfo("task").length) {
+    db.exec(`UPDATE task SET family_id='default' WHERE family_id IS NULL;`);
+  }
+} catch (err) {
+  console.warn('[db] legacy family backfill skipped', err?.message || err);
+}
+
 const scopedIndexes = [
   { table: "member", statement: "CREATE INDEX IF NOT EXISTS idx_member_family ON member(family_id)" },
   { table: "task", statement: "CREATE INDEX IF NOT EXISTS idx_task_family ON task(family_id)" },
