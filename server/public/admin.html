@@ -1211,6 +1211,204 @@
         </div>
       </section>
 
+      <section
+        id="pendingTemplatesBanner"
+        class="pending-banner"
+        data-admin-role="family,master"
+        hidden
+      >
+        <div class="pending-banner-head">
+          <div class="pending-banner-title">
+            <span class="pending-banner-label">New from Master</span>
+            <span class="pending-banner-count" id="pendingTemplatesCount">0</span>
+          </div>
+          <div class="pending-banner-actions">
+            <button type="button" class="btn" id="pendingTemplatesRefresh">Refresh</button>
+          </div>
+        </div>
+        <p class="muted" id="pendingTemplatesStatus"></p>
+        <ul id="pendingTemplatesList" class="pending-templates-list"></ul>
+      </section>
+
+      <section
+        class="card collapsed"
+        id="card-master-templates"
+        data-collapsible
+        data-admin-role="master"
+        hidden
+      >
+        <header class="card-header">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            Master Templates
+            <span class="chev" aria-hidden="true"></span>
+          </button>
+        </header>
+        <div class="card-body">
+          <div class="master-templates">
+            <div class="master-templates-tabs" role="tablist">
+              <button
+                type="button"
+                class="master-tab is-active"
+                data-master-tab="tasks"
+                aria-selected="true"
+              >
+                Tasks
+              </button>
+              <button
+                type="button"
+                class="master-tab"
+                data-master-tab="rewards"
+                aria-selected="false"
+              >
+                Rewards
+              </button>
+            </div>
+
+            <div class="master-templates-panel" data-master-panel="tasks">
+              <form id="masterTaskForm" class="stack master-template-form" autocomplete="off">
+                <div class="row" style="flex-wrap:wrap; gap:12px;">
+                  <label style="flex:1 1 220px;">
+                    <span>Title</span>
+                    <input id="masterTaskTitle" type="text" required placeholder="Laundry, Homework, …">
+                  </label>
+                  <label style="flex:0 0 160px;">
+                    <span>Base points</span>
+                    <input id="masterTaskPoints" type="number" min="0" step="1" required value="0">
+                  </label>
+                  <label style="flex:0 0 160px;">
+                    <span>Status</span>
+                    <select id="masterTaskStatusSelect">
+                      <option value="active" selected>Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                </div>
+                <label>
+                  <span>Description</span>
+                  <textarea id="masterTaskDescription" rows="3" placeholder="Optional details"></textarea>
+                </label>
+                <label>
+                  <span>Icon (optional)</span>
+                  <input id="masterTaskIcon" type="text" placeholder="https://...">
+                </label>
+                <div class="master-template-actions">
+                  <div class="stack" style="flex:1;">
+                    <button type="submit" class="btn-primary" id="masterTaskSubmit">Create Task Template</button>
+                    <button type="button" class="btn-secondary" id="masterTaskReset">Reset</button>
+                  </div>
+                  <small class="muted" id="masterTaskFormHint">Create a new template or select one below to edit.</small>
+                </div>
+              </form>
+
+              <div class="master-templates-toolbar">
+                <div class="row" style="flex-wrap:wrap; gap:12px; align-items:flex-end;">
+                  <button type="button" class="btn" id="masterTaskRefresh">Refresh</button>
+                  <label style="flex:0 0 160px;">
+                    <span>Status filter</span>
+                    <select id="masterTaskFilter">
+                      <option value="all">All</option>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table class="table" id="masterTasksTable">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Title</th>
+                      <th>Base points</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="masterTasksTableBody">
+                    <tr id="masterTasksEmpty">
+                      <td colspan="5" class="muted">No templates yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <small class="muted" id="masterTaskStatus"></small>
+            </div>
+
+            <div class="master-templates-panel" data-master-panel="rewards" hidden>
+              <form id="masterRewardForm" class="stack master-template-form" autocomplete="off">
+                <div class="row" style="flex-wrap:wrap; gap:12px;">
+                  <label style="flex:1 1 220px;">
+                    <span>Title</span>
+                    <input id="masterRewardTitle" type="text" required placeholder="Movie night, Screen time, …">
+                  </label>
+                  <label style="flex:0 0 160px;">
+                    <span>Base cost</span>
+                    <input id="masterRewardCost" type="number" min="0" step="1" required value="0">
+                  </label>
+                  <label style="flex:0 0 160px;">
+                    <span>Status</span>
+                    <select id="masterRewardStatusSelect">
+                      <option value="active" selected>Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                </div>
+                <label>
+                  <span>Description</span>
+                  <textarea id="masterRewardDescription" rows="3" placeholder="Optional details"></textarea>
+                </label>
+                <label>
+                  <span>Icon (optional)</span>
+                  <input id="masterRewardIcon" type="text" placeholder="https://...">
+                </label>
+                <div class="master-template-actions">
+                  <div class="stack" style="flex:1;">
+                    <button type="submit" class="btn-primary" id="masterRewardSubmit">Create Reward Template</button>
+                    <button type="button" class="btn-secondary" id="masterRewardReset">Reset</button>
+                  </div>
+                  <small class="muted" id="masterRewardFormHint">Create a new template or select one below to edit.</small>
+                </div>
+              </form>
+
+              <div class="master-templates-toolbar">
+                <div class="row" style="flex-wrap:wrap; gap:12px; align-items:flex-end;">
+                  <button type="button" class="btn" id="masterRewardRefresh">Refresh</button>
+                  <label style="flex:0 0 160px;">
+                    <span>Status filter</span>
+                    <select id="masterRewardFilter">
+                      <option value="all">All</option>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="table-wrap">
+                <table class="table" id="masterRewardsTable">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Title</th>
+                      <th>Base cost</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="masterRewardsTableBody">
+                    <tr id="masterRewardsEmpty">
+                      <td colspan="5" class="muted">No templates yet.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <small class="muted" id="masterRewardStatus"></small>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" hidden>
         <header class="card-header">
           <button class="card-toggle" aria-expanded="false">
@@ -1862,7 +2060,7 @@
   </div>
 
   <script src="/js/i18n.js?v=1"></script>
-  <script type="module" src="/js/admin.js?v=18"></script>
+  <script type="module" src="/js/admin.js?v=19"></script>
   <script src="/qrcode.min.js?v=__BUILD__"></script>
   <script src="https://unpkg.com/jsqr"></script>
   <script defer src="/ck-pwa.js?v=1.0.0"></script>

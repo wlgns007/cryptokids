@@ -113,6 +113,126 @@ function tableHasColumn(table, column) {
   }
 }
 
+function normalizeMasterStatus(value) {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "inactive" || normalized === "disabled") {
+      return "inactive";
+    }
+    if (normalized === "active") {
+      return "active";
+    }
+  }
+  return "active";
+}
+
+function normalizeNullableString(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+function coerceInteger(value, fallback = 0) {
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return Math.trunc(num);
+  }
+  return fallback;
+}
+
+function quoteIdent(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function getTableColumns(table) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+    return rows.map(row => row.name);
+  } catch {
+    return [];
+  }
+}
+
+function insertRecord(table, record) {
+  const columns = Object.keys(record);
+  const placeholders = columns.map(col => `@${col}`);
+  const sql = `INSERT INTO ${quoteIdent(table)} (${columns.map(quoteIdent).join(", ")}) VALUES (${placeholders.join(", ")})`;
+  db.prepare(sql).run(record);
+}
+
+function getAdoptedMasterIds(table, masterColumn, familyId) {
+  if (!tableExists(table)) {
+    return new Set();
+  }
+  const columns = getTableColumns(table);
+  if (!columns.includes(masterColumn)) {
+    return new Set();
+  }
+  let sql = `SELECT ${quoteIdent(masterColumn)} AS master_id FROM ${quoteIdent(table)} WHERE ${quoteIdent(masterColumn)} IS NOT NULL`;
+  const params = [];
+  if (columns.includes("family_id")) {
+    sql += " AND family_id = ?";
+    params.push(familyId);
+  }
+  const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
+  const result = new Set();
+  for (const row of rows) {
+    if (row?.master_id) {
+      result.add(String(row.master_id));
+    }
+  }
+  return result;
+}
+
+function mapMasterTaskRow(row) {
+  if (!row) return null;
+  const baseValue = Number(row.base_points);
+  return {
+    id: row.id,
+    title: row.title ?? "",
+    description: row.description ?? null,
+    icon: row.icon ?? null,
+    base_points: Number.isFinite(baseValue) ? baseValue : 0,
+    status: row.status ?? "active"
+  };
+}
+
+function mapMasterRewardRow(row) {
+  if (!row) return null;
+  const baseValue = Number(row.base_cost);
+  return {
+    id: row.id,
+    title: row.title ?? "",
+    description: row.description ?? null,
+    icon: row.icon ?? null,
+    base_cost: Number.isFinite(baseValue) ? baseValue : 0,
+    status: row.status ?? "active"
+  };
+}
+
+function mapTaskRow(row) {
+  if (!row) return null;
+  const title = row.title ?? row.name ?? "";
+  const pointsValue = Number(row.points ?? row.base_points ?? 0) || 0;
+  const status = (row.status || "active").toString().trim().toLowerCase() || "active";
+  const masterTaskId = row.master_task_id || null;
+  const source = masterTaskId ? "master" : row.source || null;
+  return {
+    id: row.id,
+    title,
+    name: title,
+    description: row.description ?? "",
+    icon: row.icon ?? null,
+    points: pointsValue,
+    status,
+    source,
+    master_task_id: masterTaskId,
+    family_id: row.family_id || null,
+    created_at: Number(row.created_at ?? 0) || null,
+    updated_at: Number(row.updated_at ?? 0) || null
+  };
+}
+
 function ensureEarnTemplatesSchema() {
   const exists = !!db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'earn_templates'")
@@ -141,6 +261,23 @@ function ensureEarnTemplatesSchema() {
 }
 
 ensureEarnTemplatesSchema();
+
+function ensureDismissedTemplateTable() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dismissed_template (
+      family_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      master_id TEXT NOT NULL,
+      dismissed_at INTEGER NOT NULL,
+      PRIMARY KEY (family_id, kind, master_id)
+    );
+  `);
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_dismissed_template_family ON dismissed_template(family_id, kind)"
+  );
+}
+
+ensureDismissedTemplateTable();
 
 const EARN_TEMPLATES_HAS_FAMILY_COLUMN = tableHasColumn("earn_templates", "family_id");
 let REWARD_HAS_FAMILY_COLUMN = tableHasColumn("reward", "family_id");
@@ -197,6 +334,68 @@ const listPublicRewardsStmt = REWARD_HAS_FAMILY_COLUMN
 const insertFamilyStmt = db.prepare(
   `INSERT INTO family (id, name, email, status, admin_key, created_at, updated_at)
    VALUES (@id, @name, @email, @status, @admin_key, @created_at, @updated_at)`
+);
+
+const selectMasterTaskStmt = db.prepare(
+  `SELECT id, title, description, icon, base_points, status, created_at, updated_at
+   FROM master_task
+   WHERE id = ?`
+);
+const listMasterTasksStmt = db.prepare(
+  `SELECT id, title, description, icon, base_points, status, created_at, updated_at
+   FROM master_task
+   ORDER BY created_at DESC, id DESC`
+);
+const insertMasterTaskStmt = db.prepare(
+  `INSERT INTO master_task (id, title, description, base_points, icon, status, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_points, @icon, @status, @created_at, @updated_at)`
+);
+const updateMasterTaskStmt = db.prepare(
+  `UPDATE master_task
+      SET title = @title,
+          description = @description,
+          icon = @icon,
+          base_points = @base_points,
+          status = @status,
+          updated_at = @updated_at
+    WHERE id = @id`
+);
+
+const selectMasterRewardStmt = db.prepare(
+  `SELECT id, title, description, icon, base_cost, status, created_at, updated_at
+   FROM master_reward
+   WHERE id = ?`
+);
+const listMasterRewardsStmt = db.prepare(
+  `SELECT id, title, description, icon, base_cost, status, created_at, updated_at
+   FROM master_reward
+   ORDER BY created_at DESC, id DESC`
+);
+const insertMasterRewardStmt = db.prepare(
+  `INSERT INTO master_reward (id, title, description, base_cost, icon, status, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_cost, @icon, @status, @created_at, @updated_at)`
+);
+const updateMasterRewardStmt = db.prepare(
+  `UPDATE master_reward
+      SET title = @title,
+          description = @description,
+          icon = @icon,
+          base_cost = @base_cost,
+          status = @status,
+          updated_at = @updated_at
+    WHERE id = @id`
+);
+
+const listDismissedTemplatesStmt = db.prepare(
+  `SELECT kind, master_id FROM dismissed_template WHERE family_id = ?`
+);
+const upsertDismissedTemplateStmt = db.prepare(
+  `INSERT INTO dismissed_template (family_id, kind, master_id, dismissed_at)
+   VALUES (@family_id, @kind, @master_id, @dismissed_at)
+   ON CONFLICT(family_id, kind, master_id) DO UPDATE SET dismissed_at = excluded.dismissed_at`
+);
+const deleteDismissedTemplateStmt = db.prepare(
+  `DELETE FROM dismissed_template WHERE family_id = @family_id AND kind = @kind AND master_id = @master_id`
 );
 const selectFamilyByIdStmt = db.prepare(
   "SELECT id, name, email, status, admin_key, created_at, updated_at FROM family WHERE id = ? LIMIT 1"
@@ -387,6 +586,566 @@ app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
     return;
   }
   res.json({ id, name, status });
+});
+
+app.post("/api/master/tasks", authenticateAdmin, requireMaster, (req, res) => {
+  const body = req.body ?? {};
+  const title = (body.title ?? "").toString().trim();
+  if (!title) {
+    res.status(400).json({ error: "title required" });
+    return;
+  }
+
+  const description = normalizeNullableString(body.description);
+  const icon = normalizeNullableString(body.icon);
+  const base_points = coerceInteger(body.base_points ?? body.basePoints, 0);
+  const status = normalizeMasterStatus(body.status);
+  const id = crypto.randomUUID();
+  const now = Date.now();
+
+  insertMasterTaskStmt.run({
+    id,
+    title,
+    description,
+    base_points,
+    icon,
+    status,
+    created_at: now,
+    updated_at: now
+  });
+
+  res.status(201).json({ item: mapMasterTaskRow({ id, title, description, icon, base_points, status }) });
+});
+
+app.get("/api/master/tasks", authenticateAdmin, requireMaster, (_req, res) => {
+  const rows = listMasterTasksStmt.all();
+  res.json({ items: rows.map(mapMasterTaskRow) });
+});
+
+app.patch("/api/master/tasks/:id", authenticateAdmin, requireMaster, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "task id required" });
+    return;
+  }
+
+  const existing = selectMasterTaskStmt.get(id);
+  if (!existing) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  let title = existing.title ?? "";
+  let description = existing.description ?? null;
+  let icon = existing.icon ?? null;
+  let base_points = coerceInteger(existing.base_points, 0);
+  let status = existing.status ?? "active";
+  let hasChange = false;
+
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
+    const nextTitle = (body.title ?? "").toString().trim();
+    if (!nextTitle) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+    title = nextTitle;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    description = normalizeNullableString(body.description);
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "icon")) {
+    icon = normalizeNullableString(body.icon);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "base_points") ||
+    Object.prototype.hasOwnProperty.call(body, "basePoints")
+  ) {
+    base_points = coerceInteger(body.base_points ?? body.basePoints, base_points);
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "status")) {
+    status = normalizeMasterStatus(body.status);
+    hasChange = true;
+  }
+
+  if (!hasChange) {
+    res.json({ item: mapMasterTaskRow(existing) });
+    return;
+  }
+
+  const updated_at = Date.now();
+  updateMasterTaskStmt.run({ id, title, description, icon, base_points, status, updated_at });
+  const updated = selectMasterTaskStmt.get(id);
+  res.json({ item: mapMasterTaskRow(updated) });
+});
+
+app.post("/api/master/rewards", authenticateAdmin, requireMaster, (req, res) => {
+  const body = req.body ?? {};
+  const title = (body.title ?? "").toString().trim();
+  if (!title) {
+    res.status(400).json({ error: "title required" });
+    return;
+  }
+
+  const description = normalizeNullableString(body.description);
+  const icon = normalizeNullableString(body.icon);
+  const base_cost = coerceInteger(body.base_cost ?? body.baseCost, 0);
+  const status = normalizeMasterStatus(body.status);
+  const id = crypto.randomUUID();
+  const now = Date.now();
+
+  insertMasterRewardStmt.run({
+    id,
+    title,
+    description,
+    base_cost,
+    icon,
+    status,
+    created_at: now,
+    updated_at: now
+  });
+
+  res.status(201).json({ item: mapMasterRewardRow({ id, title, description, icon, base_cost, status }) });
+});
+
+app.get("/api/master/rewards", authenticateAdmin, requireMaster, (_req, res) => {
+  const rows = listMasterRewardsStmt.all();
+  res.json({ items: rows.map(mapMasterRewardRow) });
+});
+
+app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "reward id required" });
+    return;
+  }
+
+  const existing = selectMasterRewardStmt.get(id);
+  if (!existing) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  let title = existing.title ?? "";
+  let description = existing.description ?? null;
+  let icon = existing.icon ?? null;
+  let base_cost = coerceInteger(existing.base_cost, 0);
+  let status = existing.status ?? "active";
+  let hasChange = false;
+
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
+    const nextTitle = (body.title ?? "").toString().trim();
+    if (!nextTitle) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+    title = nextTitle;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    description = normalizeNullableString(body.description);
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "icon")) {
+    icon = normalizeNullableString(body.icon);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "base_cost") ||
+    Object.prototype.hasOwnProperty.call(body, "baseCost")
+  ) {
+    base_cost = coerceInteger(body.base_cost ?? body.baseCost, base_cost);
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "status")) {
+    status = normalizeMasterStatus(body.status);
+    hasChange = true;
+  }
+
+  if (!hasChange) {
+    res.json({ item: mapMasterRewardRow(existing) });
+    return;
+  }
+
+  const updated_at = Date.now();
+  updateMasterRewardStmt.run({ id, title, description, icon, base_cost, status, updated_at });
+  const updated = selectMasterRewardStmt.get(id);
+  res.json({ item: mapMasterRewardRow(updated) });
+});
+
+app.get("/api/family/pending/templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  const familyId = req.scope?.family_id;
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
+  try {
+    const dismissed = listDismissedTemplatesStmt.all(familyId);
+    const dismissedSet = new Set(dismissed.map(row => `${row.kind}:${row.master_id}`));
+    const items = [];
+
+    const adoptedTaskIds = getAdoptedMasterIds("task", "master_task_id", familyId);
+    for (const row of listMasterTasksStmt.all()) {
+      if (!row?.id) continue;
+      const status = row.status ?? "active";
+      if (status !== "active") continue;
+      const masterId = String(row.id);
+      if (adoptedTaskIds.has(masterId)) continue;
+      if (dismissedSet.has(`task:${masterId}`)) continue;
+      const basePoints = Number(row.base_points);
+      items.push({
+        kind: "task",
+        master_id: masterId,
+        title: row.title ?? "",
+        description: row.description ?? null,
+        icon: row.icon ?? null,
+        base_points: Number.isFinite(basePoints) ? basePoints : 0
+      });
+    }
+
+    const adoptedRewardIds = getAdoptedMasterIds("reward", "master_reward_id", familyId);
+    for (const row of listMasterRewardsStmt.all()) {
+      if (!row?.id) continue;
+      const status = row.status ?? "active";
+      if (status !== "active") continue;
+      const masterId = String(row.id);
+      if (adoptedRewardIds.has(masterId)) continue;
+      if (dismissedSet.has(`reward:${masterId}`)) continue;
+      const baseCost = Number(row.base_cost);
+      items.push({
+        kind: "reward",
+        master_id: masterId,
+        title: row.title ?? "",
+        description: row.description ?? null,
+        icon: row.icon ?? null,
+        base_cost: Number.isFinite(baseCost) ? baseCost : 0
+      });
+    }
+
+    res.json({ items });
+  } catch (err) {
+    console.error("[family.pending] failed", err);
+    res.status(500).json({ error: "pending_templates_failed" });
+  }
+});
+
+app.post("/api/family/adopt", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  const familyId = req.scope?.family_id;
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const kind = (body.kind ?? "").toString().trim().toLowerCase();
+  const masterId = (body.master_id ?? "").toString().trim();
+  if (!kind || !masterId) {
+    res.status(400).json({ error: "kind_and_master_id_required" });
+    return;
+  }
+  if (kind !== "task" && kind !== "reward") {
+    res.status(400).json({ error: "unsupported_kind" });
+    return;
+  }
+
+  const now = Date.now();
+
+  try {
+    if (kind === "task") {
+      const master = selectMasterTaskStmt.get(masterId);
+      if (!master) {
+        res.status(404).json({ error: "master_not_found" });
+        return;
+      }
+      const columns = getTableColumns("task");
+      if (!columns.length || !columns.includes("id")) {
+        res.status(500).json({ error: "task_table_missing" });
+        return;
+      }
+      if (getAdoptedMasterIds("task", "master_task_id", familyId).has(masterId)) {
+        res.status(409).json({ error: "already_adopted" });
+        return;
+      }
+      const record = {};
+      const newId = crypto.randomUUID();
+      record.id = newId;
+      const title = master.title ?? "";
+      if (columns.includes("title")) record.title = title;
+      if (columns.includes("name")) record.name = title;
+      if (columns.includes("description")) record.description = master.description ?? null;
+      if (columns.includes("icon")) record.icon = master.icon ?? null;
+      const basePoints = coerceInteger(master.base_points, 0);
+      if (columns.includes("points")) record.points = basePoints;
+      if (columns.includes("base_points")) record.base_points = basePoints;
+      if (columns.includes("status")) record.status = master.status ?? "active";
+      if (columns.includes("family_id")) record.family_id = familyId;
+      if (columns.includes("master_task_id")) record.master_task_id = masterId;
+      if (columns.includes("created_at")) record.created_at = now;
+      if (columns.includes("updated_at")) record.updated_at = now;
+      insertRecord("task", record);
+      deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: masterId });
+      res.status(201).json({
+        item: {
+          kind: "task",
+          id: newId,
+          master_id: masterId,
+          title,
+          description: master.description ?? null,
+          icon: master.icon ?? null,
+          base_points: basePoints
+        }
+      });
+      return;
+    }
+
+    const master = selectMasterRewardStmt.get(masterId);
+    if (!master) {
+      res.status(404).json({ error: "master_not_found" });
+      return;
+    }
+    const columns = getTableColumns("reward");
+    if (!columns.length || !columns.includes("id")) {
+      res.status(500).json({ error: "reward_table_missing" });
+      return;
+    }
+    if (getAdoptedMasterIds("reward", "master_reward_id", familyId).has(masterId)) {
+      res.status(409).json({ error: "already_adopted" });
+      return;
+    }
+    const record = {};
+    const newId = crypto.randomUUID();
+    record.id = newId;
+    const title = master.title ?? "";
+    if (columns.includes("title")) record.title = title;
+    if (columns.includes("name")) record.name = title;
+    if (columns.includes("description")) record.description = master.description ?? null;
+    if (columns.includes("icon")) record.icon = master.icon ?? null;
+    const baseCost = coerceInteger(master.base_cost, 0);
+    if (columns.includes("cost")) record.cost = baseCost;
+    if (columns.includes("base_cost")) record.base_cost = baseCost;
+    if (columns.includes("status")) record.status = master.status ?? "active";
+    if (columns.includes("source")) record.source = "master";
+    if (columns.includes("family_id")) record.family_id = familyId;
+    if (columns.includes("master_reward_id")) record.master_reward_id = masterId;
+    if (columns.includes("created_at")) record.created_at = now;
+    if (columns.includes("updated_at")) record.updated_at = now;
+    insertRecord("reward", record);
+    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "reward", master_id: masterId });
+    res.status(201).json({
+      item: {
+        kind: "reward",
+        id: newId,
+        master_id: masterId,
+        title,
+        description: master.description ?? null,
+        icon: master.icon ?? null,
+        base_cost: baseCost
+      }
+    });
+  } catch (err) {
+    console.error("[family.adopt] failed", err);
+    res.status(500).json({ error: "adopt_failed" });
+  }
+});
+
+app.post("/api/family/dismiss", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  const familyId = req.scope?.family_id;
+  if (!familyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const kind = (body.kind ?? "").toString().trim().toLowerCase();
+  const masterId = (body.master_id ?? "").toString().trim();
+  if (!kind || !masterId) {
+    res.status(400).json({ error: "kind_and_master_id_required" });
+    return;
+  }
+  if (kind !== "task" && kind !== "reward") {
+    res.status(400).json({ error: "unsupported_kind" });
+    return;
+  }
+
+  try {
+    const exists =
+      kind === "task" ? selectMasterTaskStmt.get(masterId) : selectMasterRewardStmt.get(masterId);
+    if (!exists) {
+      res.status(404).json({ error: "master_not_found" });
+      return;
+    }
+    upsertDismissedTemplateStmt.run({
+      family_id: familyId,
+      kind,
+      master_id: masterId,
+      dismissed_at: Date.now()
+    });
+    res.status(204).end();
+  } catch (err) {
+    console.error("[family.dismiss] failed", err);
+    res.status(500).json({ error: "dismiss_failed" });
+  }
+});
+
+app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  if (!tableExists("task")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const columns = getTableColumns("task");
+  if (!columns.includes("id")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "invalid_id" });
+    return;
+  }
+
+  const hasFamilyColumn = columns.includes("family_id");
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  if (MULTITENANT_ENFORCE && hasFamilyColumn && !scopedFamilyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
+  let selectSql = `SELECT * FROM ${quoteIdent("task")} WHERE id = ?`;
+  const selectParams = [id];
+  let guardFamilyId = null;
+  if (hasFamilyColumn) {
+    if (MULTITENANT_ENFORCE) {
+      guardFamilyId = scopedFamilyId;
+    } else if (scopedFamilyId) {
+      guardFamilyId = scopedFamilyId;
+    }
+    if (guardFamilyId) {
+      selectSql += " AND family_id = ?";
+      selectParams.push(guardFamilyId);
+    }
+  } else if (MULTITENANT_ENFORCE) {
+    res.status(500).json({ error: "task_missing_family_scope" });
+    return;
+  }
+
+  const existing = db.prepare(selectSql).get(...selectParams);
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const body = req.body || {};
+  const fields = [];
+  const params = [];
+  const isMasterLinked = !!(existing.master_task_id && String(existing.master_task_id).trim());
+
+  if (!isMasterLinked && body.title !== undefined && columns.includes("title")) {
+    const title = String(body.title).trim();
+    if (!title) {
+      res.status(400).json({ error: "title_required" });
+      return;
+    }
+    fields.push("title = ?");
+    params.push(title);
+    if (columns.includes("name")) {
+      fields.push("name = ?");
+      params.push(title);
+    }
+  } else if (!isMasterLinked && body.name !== undefined && columns.includes("name")) {
+    const title = String(body.name).trim();
+    if (!title) {
+      res.status(400).json({ error: "title_required" });
+      return;
+    }
+    fields.push("name = ?");
+    params.push(title);
+    if (columns.includes("title")) {
+      fields.push("title = ?");
+      params.push(title);
+    }
+  }
+
+  if (!isMasterLinked && body.description !== undefined && columns.includes("description")) {
+    const desc = body.description === null ? null : String(body.description);
+    fields.push("description = ?");
+    params.push(desc);
+  }
+
+  if (!isMasterLinked && body.icon !== undefined && columns.includes("icon")) {
+    const icon = body.icon === null ? null : String(body.icon).trim() || null;
+    fields.push("icon = ?");
+    params.push(icon);
+  }
+
+  if (body.points !== undefined || body.base_points !== undefined) {
+    const value = body.points ?? body.base_points;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      res.status(400).json({ error: "invalid_points" });
+      return;
+    }
+    const normalized = Math.trunc(numeric);
+    if (columns.includes("points")) {
+      fields.push("points = ?");
+      params.push(normalized);
+    }
+    if (columns.includes("base_points")) {
+      fields.push("base_points = ?");
+      params.push(normalized);
+    }
+  }
+
+  if (body.status !== undefined && columns.includes("status")) {
+    fields.push("status = ?");
+    params.push(String(body.status).trim().toLowerCase());
+  }
+
+  if (!fields.length) {
+    res.json({ ok: true, task: mapTaskRow(existing) });
+    return;
+  }
+
+  if (columns.includes("updated_at")) {
+    fields.push("updated_at = ?");
+    params.push(Date.now());
+  }
+
+  let updateSql = `UPDATE ${quoteIdent("task")} SET ${fields.join(", ")} WHERE id = ?`;
+  const updateParams = [...params, id];
+  if (guardFamilyId) {
+    updateSql += " AND family_id = ?";
+    updateParams.push(guardFamilyId);
+  }
+
+  try {
+    const info = db.prepare(updateSql).run(...updateParams);
+    if (!info.changes) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+  } catch (err) {
+    console.error("[tasks.patch] failed", err);
+    res.status(500).json({ error: "update_failed" });
+    return;
+  }
+
+  const updated = db.prepare(selectSql).get(...selectParams);
+  res.json({ ok: true, task: mapTaskRow(updated) });
 });
 
 app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
@@ -1155,6 +1914,31 @@ const ensureTables = db.transaction(() => {
   ensureMemberTable();
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS task (
+      id TEXT PRIMARY KEY,
+      family_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      icon TEXT,
+      points INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      master_task_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  ensureColumn(db, "task", "family_id", "TEXT");
+  ensureColumn(db, "task", "title", "TEXT");
+  ensureColumn(db, "task", "description", "TEXT");
+  ensureColumn(db, "task", "icon", "TEXT");
+  ensureColumn(db, "task", "points", "INTEGER");
+  ensureColumn(db, "task", "status", "TEXT");
+  ensureColumn(db, "task", "master_task_id", "TEXT");
+  ensureColumn(db, "task", "created_at", "INTEGER");
+  ensureColumn(db, "task", "updated_at", "INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_status ON task(status)");
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
       id TEXT PRIMARY KEY,
       family_id TEXT NOT NULL,
@@ -1812,6 +2596,8 @@ function mapRewardRow(row) {
   }
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
   const cost = Number(row.cost ?? row.price ?? 0) || 0;
+  const masterRewardId = row.master_reward_id || null;
+  const source = masterRewardId ? "master" : row.source || null;
   return {
     id: row.id,
     name: row.name || "",
@@ -1827,7 +2613,8 @@ function mapRewardRow(row) {
     active: status === "active",
     tags: parsedTags,
     campaign_id: row.campaign_id || null,
-    source: row.source || null,
+    source,
+    master_reward_id: masterRewardId,
     created_at: Number(row.created_at ?? 0) || null,
     updated_at: Number(row.updated_at ?? 0) || null,
     family_id: row.family_id || null
@@ -3761,7 +4548,57 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
   const body = req.body || {};
   const fields = [];
   const params = [];
-  if (body.name !== undefined) {
+  const rewardColumns = getTableColumns("reward");
+  const hasFamilyColumn = rewardColumns.includes("family_id");
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  let guardFamilyId = null;
+  if (hasFamilyColumn) {
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      guardFamilyId = scopedFamilyId;
+    } else if (scopedFamilyId) {
+      guardFamilyId = scopedFamilyId;
+    }
+  } else if (MULTITENANT_ENFORCE) {
+    return res.status(500).json({ error: "reward_missing_family_scope" });
+  }
+
+  const selectSql = "SELECT * FROM reward WHERE id = ?";
+  const selectParams = [id];
+  const existing = db.prepare(selectSql).get(...selectParams);
+  if (!existing) {
+    return res.status(404).json({ error: "not_found" });
+  }
+
+  const existingFamilyId = hasFamilyColumn ? existing.family_id ?? null : null;
+  if (hasFamilyColumn) {
+    if (MULTITENANT_ENFORCE) {
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_id required" });
+      }
+      if (existingFamilyId && scopedFamilyId !== existingFamilyId) {
+        return res.status(404).json({ error: "not_found" });
+      }
+    } else if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
+      return res.status(404).json({ error: "not_found" });
+    }
+  }
+
+  if (hasFamilyColumn) {
+    if (MULTITENANT_ENFORCE) {
+      guardFamilyId = scopedFamilyId || existingFamilyId || null;
+    } else if (scopedFamilyId) {
+      guardFamilyId = scopedFamilyId;
+    } else {
+      guardFamilyId = existingFamilyId;
+    }
+  }
+
+  const isMasterLinked = !!(existing.master_reward_id && String(existing.master_reward_id).trim());
+
+  if (!isMasterLinked && body.name !== undefined) {
     fields.push("name = ?");
     params.push(String(body.name).trim());
   }
@@ -3772,16 +4609,16 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
     fields.push("cost = ?");
     params.push(Math.trunc(numeric));
   }
-  if (body.description !== undefined) {
+  if (!isMasterLinked && body.description !== undefined) {
     fields.push("description = ?");
     params.push(String(body.description));
   }
-  if (body.imageUrl !== undefined || body.image_url !== undefined) {
+  if (!isMasterLinked && (body.imageUrl !== undefined || body.image_url !== undefined)) {
     const imageUrl = body.imageUrl ?? body.image_url;
     fields.push("image_url = ?");
     params.push(imageUrl ? String(imageUrl).trim() || null : null);
   }
-  if (body.youtubeUrl !== undefined || body.youtube_url !== undefined) {
+  if (!isMasterLinked && (body.youtubeUrl !== undefined || body.youtube_url !== undefined)) {
     const youtubeUrl = body.youtubeUrl ?? body.youtube_url;
     fields.push("youtube_url = ?");
     params.push(youtubeUrl ? String(youtubeUrl).trim() || null : null);
@@ -3816,37 +4653,31 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
     fields.push("campaign_id = ?");
     params.push(campaignId ? String(campaignId).trim() || null : null);
   }
-  if (body.source !== undefined) {
+  if (!isMasterLinked && body.source !== undefined) {
     const source = body.source;
     fields.push("source = ?");
     params.push(source ? String(source).trim() || null : null);
   }
-  if (!fields.length) return res.status(400).json({ error: "no_fields" });
+  if (!fields.length) {
+    res.json({ ok: true, reward: mapRewardRow(existing) });
+    return;
+  }
   fields.push("updated_at = ?");
   const now = Date.now();
   params.push(now);
 
   let sql = `UPDATE reward SET ${fields.join(", ")} WHERE id = ?`;
-  const whereParams = [id];
-
-  if (REWARD_HAS_FAMILY_COLUMN) {
-    if (MULTITENANT_ENFORCE) {
-      if (!req.scope?.family_id) {
-        return res.status(400).json({ error: "family_id required" });
-      }
-      sql += " AND family_id = ?";
-      whereParams.push(req.scope.family_id);
-    } else if (req.scope?.family_id) {
-      sql += " AND family_id = ?";
-      whereParams.push(req.scope.family_id);
-    }
-  } else if (MULTITENANT_ENFORCE) {
-    return res.status(500).json({ error: "reward_missing_family_scope" });
+  const updateParams = [...params, id];
+  if (guardFamilyId) {
+    sql += " AND family_id = ?";
+    updateParams.push(guardFamilyId);
   }
 
-  const info = db.prepare(sql).run(...params, ...whereParams);
+  const info = db.prepare(sql).run(...updateParams);
   if (!info.changes) return res.status(404).json({ error: "not_found" });
-  const updated = db.prepare("SELECT * FROM reward WHERE id = ?").get(id);
+  const fetchSql = guardFamilyId ? `${selectSql} AND family_id = ?` : selectSql;
+  const fetchParams = guardFamilyId ? [...selectParams, guardFamilyId] : selectParams;
+  const updated = db.prepare(fetchSql).get(...fetchParams);
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 

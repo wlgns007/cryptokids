@@ -25,6 +25,26 @@ const schemaStatements = [
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS master_task (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    base_points INTEGER NOT NULL DEFAULT 0,
+    icon TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS master_reward (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    base_cost INTEGER NOT NULL DEFAULT 0,
+    icon TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
   )`
 ];
 
@@ -123,6 +143,18 @@ function columnInfo(table) {
 
 function tableHasColumn(table, column) {
   return columnInfo(table).some((row) => row.name === column);
+}
+
+function ensureColumnDefinition(table, column, definition) {
+  const columns = columnInfo(table);
+  if (!columns.length) {
+    return;
+  }
+  const hasColumn = columns.some((row) => row.name === column);
+  if (hasColumn) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${q(table)} ADD COLUMN ${column} ${definition}`);
 }
 
 function ensureFamilyColumn(table) {
@@ -250,6 +282,9 @@ for (const table of scopedTables) {
   ensureFamilyColumn(table);
 }
 
+ensureColumnDefinition("task", "master_task_id", "TEXT");
+ensureColumnDefinition("reward", "master_reward_id", "TEXT");
+
 enforceFamilyNotNull(db);
 
 const scopedIndexes = [
@@ -260,7 +295,9 @@ const scopedIndexes = [
   {
     table: "earn_templates",
     statement: "CREATE INDEX IF NOT EXISTS idx_earn_templates_family ON earn_templates(family_id)"
-  }
+  },
+  { table: "task", statement: "CREATE INDEX IF NOT EXISTS idx_task_master ON task(master_task_id)" },
+  { table: "reward", statement: "CREATE INDEX IF NOT EXISTS idx_reward_master ON reward(master_reward_id)" }
 ];
 
 for (const { table, statement } of scopedIndexes) {

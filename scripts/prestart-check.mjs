@@ -40,6 +40,29 @@ function columnNames(table) {
   return columnInfo(table).map((col) => col.name);
 }
 
+function dumpSchema(table) {
+  try {
+    const row = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1")
+      .get(table);
+    console.log(`[testG1] .schema ${table}:`, row?.sql || "<missing>");
+  } catch (error) {
+    console.warn(`[testG1] unable to read schema for ${table}:`, error?.message || error);
+  }
+}
+
+function logColumnPresence(table, column) {
+  if (!tableExists(table)) {
+    console.log(`[testG1] ${table} table not present; skipping column check`);
+    return;
+  }
+  const names = columnNames(table);
+  console.log(`[testG1] columns for ${table}:`, names);
+  if (!names.includes(column)) {
+    console.warn(`[testG1] missing expected column ${column} on ${table}`);
+  }
+}
+
 function hasFamilyColumn(table) {
   return columnInfo(table).some((col) => col.name === "family_id");
 }
@@ -255,6 +278,11 @@ function duplicateFamilyData(fromFamily, toFamily) {
   summary.ledger = ledger.copied;
   return summary;
 }
+
+dumpSchema("master_task");
+dumpSchema("master_reward");
+logColumnPresence("task", "master_task_id");
+logColumnPresence("reward", "master_reward_id");
 
 ensureDefaultFamily();
 const defaultFamilyAdminKey = ensureFamilyAdminKey(DEFAULT_FAMILY_ID, {
