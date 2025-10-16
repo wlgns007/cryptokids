@@ -100,6 +100,7 @@ function createFamilyScopeResolver(options = {}) {
 }
 
 const resolveFamilyScope = createFamilyScopeResolver({ requireFamilyId: true });
+const resolveFamilyScopeOptional = createFamilyScopeResolver({ requireFamilyId: false });
 
 function requireMaster(req, res, next) {
   if (req.auth?.role !== "master") {
@@ -3918,6 +3919,62 @@ app.get("/summary/:userId", (req, res) => {
     earned: Number(sums?.earned || 0),
     spent: Number(sums?.spent || 0)
   });
+});
+
+app.get("/api/admin/resolve-member", authenticateAdmin, resolveFamilyScopeOptional, (req, res) => {
+  const userQuery = (req.query?.user || "").toString().trim();
+  if (!userQuery) {
+    return res.status(400).json({ error: "user required" });
+  }
+
+  const requestedFamilyId = (req.query?.family_id || "").toString().trim();
+  let scopeFamilyId = req.scope?.family_id ?? null;
+
+  if (req.auth?.role === "family") {
+    scopeFamilyId = req.auth.familyId ?? req.auth.family_id ?? scopeFamilyId;
+    if (MULTITENANT_ENFORCE && !scopeFamilyId) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+  } else if (req.auth?.role === "master") {
+    if (requestedFamilyId) {
+      scopeFamilyId = requestedFamilyId;
+    }
+    if (MULTITENANT_ENFORCE && !scopeFamilyId) {
+      return res.status(400).json({ error: "family_id required" });
+    }
+    scopeFamilyId = scopeFamilyId || null;
+  } else {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const selectColumns = "SELECT id, name, family_id FROM member";
+  let match = null;
+
+  if (MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId) {
+    match = db.prepare(`${selectColumns} WHERE id = ? AND family_id = ?`).get(userQuery, scopeFamilyId);
+  } else {
+    match = db.prepare(`${selectColumns} WHERE id = ?`).get(userQuery);
+  }
+
+  if (match) {
+    return res.json(match);
+  }
+
+  let rows = [];
+  if (MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId) {
+    rows = db.prepare(`${selectColumns} WHERE name = ? AND family_id = ?`).all(userQuery, scopeFamilyId);
+  } else {
+    rows = db.prepare(`${selectColumns} WHERE name = ?`).all(userQuery);
+  }
+
+  if (rows.length === 1) {
+    return res.json(rows[0]);
+  }
+  if (rows.length > 1) {
+    return res.status(409).json({ error: "multiple matches", matches: rows });
+  }
+
+  return res.status(404).json({ error: "not found" });
 });
 
 app.get("/api/admin/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
