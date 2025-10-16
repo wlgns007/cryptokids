@@ -150,6 +150,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
   const CHILD_ID_STORAGE = 'ck.childUserId';
+  const UUIDish = /^[0-9a-f-]{8,}$/i;
   let activeUser = null;
 
   function storageGet(key) {
@@ -173,7 +174,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function getSavedId() {
+  function getSaved() {
     try {
       return window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
     } catch {
@@ -181,15 +182,15 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function setSavedId(value) {
-    const next = (value ?? '').toString().trim();
-    if (next) {
-      storageSet(CHILD_ID_STORAGE, next);
-    } else {
-      try {
+  function setSaved(value) {
+    try {
+      const next = (value ?? '').toString().trim();
+      if (next) {
+        window.localStorage?.setItem(CHILD_ID_STORAGE, next);
+      } else {
         window.localStorage?.removeItem(CHILD_ID_STORAGE);
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   function setActiveUser(user) {
@@ -490,9 +491,9 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const msg = document.querySelector('#child-login-msg');
     if (msg) msg.textContent = '';
     if (remember) {
-      setSavedId(user.id);
+      setSaved(user.id);
     } else {
-      setSavedId('');
+      setSaved('');
     }
     loadChildDataFor(user);
   }
@@ -1357,25 +1358,32 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     m.appendChild(big); document.body.appendChild(m);
   }
 
-  function setupChildLogin() {
+  async function setupChildLogin() {
     syncActiveUserInputs();
     const input = document.querySelector('#child-user');
     const remember = document.querySelector('#child-remember');
     const btn = document.querySelector('#child-login-btn');
     const msg = document.querySelector('#child-login-msg');
 
-    const saved = getSavedId();
+    let saved = getSaved();
     if (saved) {
-      resolveUser(saved)
-        .then((user) => enterApp(user, true))
-        .catch(() => {
-          setSavedId('');
-          backToLogin();
-        });
+      try {
+        if (!UUIDish.test(saved)) {
+          const resolved = await resolveUser(saved);
+          saved = resolved.id;
+          setSaved(saved);
+        }
+        const user = await resolveUser(saved);
+        enterApp(user, true);
+      } catch {
+        setSaved('');
+        backToLogin();
+      }
     }
 
     btn?.addEventListener('click', async () => {
       const value = input && typeof input.value === 'string' ? input.value.trim() : '';
+      if (!value) return;
       if (msg) msg.textContent = 'Signing in...';
       try {
         const user = await resolveUser(value);
@@ -1393,7 +1401,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     });
 
     document.querySelector('#child-switch')?.addEventListener('click', () => {
-      setSavedId('');
+      setSaved('');
       const rememberBox = document.querySelector('#child-remember');
       if (rememberBox) rememberBox.checked = false;
       backToLogin();
