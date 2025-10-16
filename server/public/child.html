@@ -360,6 +360,10 @@
       cursor: pointer;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     .reward-card{display:flex;align-items:center;gap:12px}
     .reward-card .reward-thumb{width:96px!important;height:96px!important;max-width:none!important;object-fit:cover;aspect-ratio:1/1;display:block;flex:0 0 auto;cursor:zoom-in}
     .reward-card .youtube-thumb{width:72px!important;height:54px!important;max-width:none!important;object-fit:cover;aspect-ratio:4/3;display:block;flex:0 0 auto;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.12);cursor:pointer}
@@ -676,7 +680,15 @@
   <link rel="stylesheet" href="/styles.css?v=18">
   <script src="/js/i18n.js?v=1"></script>
   <script type="module" src="/child.js?v=18"></script>
-  <div class="container">
+  <section id="child-id-prompt" class="stack" style="padding:24px;">
+    <p>Please enter your user ID to see your tasks and rewards.</p>
+    <div class="row" style="align-items:center;">
+      <input id="child-user-id" placeholder="e.g., leo" />
+      <button id="child-save-id" type="button">Save ID</button>
+    </div>
+  </section>
+
+  <div id="child-content" class="container hidden">
     <section class="hero">
       <div class="hero-bar">
         <span class="app-pill">CK Wallet</span>
@@ -705,7 +717,7 @@
           data-i18n="user_id"
           data-i18n-attr="placeholder"
         />
-        <button id="child-save-id" type="button">Save ID</button>
+        <button id="child-save-inline" type="button">Save ID</button>
         <button id="btnCheck" class="primary" data-i18n="check_balance">Check Balance</button>
         <button id="btnHistory">Refresh History</button>
         <button id="btnCsv">Download CSV</button>

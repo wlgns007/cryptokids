@@ -265,6 +265,7 @@ function initAdmin() {
   const masterTaskTitle = $k('masterTaskTitle');
   const masterTaskDescription = $k('masterTaskDescription');
   const masterTaskIcon = $k('masterTaskIcon');
+  const masterTaskYoutube = $k('masterTaskYoutube');
   const masterTaskPoints = $k('masterTaskPoints');
   const masterTaskStatusSelect = $k('masterTaskStatusSelect');
   const masterTaskSubmit = $k('masterTaskSubmit');
@@ -280,6 +281,7 @@ function initAdmin() {
   const masterRewardTitle = $k('masterRewardTitle');
   const masterRewardDescription = $k('masterRewardDescription');
   const masterRewardIcon = $k('masterRewardIcon');
+  const masterRewardYoutube = $k('masterRewardYoutube');
   const masterRewardCost = $k('masterRewardCost');
   const masterRewardStatusSelect = $k('masterRewardStatusSelect');
   const masterRewardSubmit = $k('masterRewardSubmit');
@@ -404,6 +406,7 @@ function initAdmin() {
     if (masterTaskPoints) masterTaskPoints.value = '0';
     if (masterTaskIcon) masterTaskIcon.value = '';
     if (masterTaskDescription) masterTaskDescription.value = '';
+    if (masterTaskYoutube) masterTaskYoutube.value = '';
     masterTemplatesState.editing.task = null;
     if (masterTaskSubmit) masterTaskSubmit.textContent = 'Create Task Template';
     if (masterTaskFormHint) masterTaskFormHint.textContent = 'Create a new template or select one below to edit.';
@@ -415,6 +418,7 @@ function initAdmin() {
     if (masterRewardCost) masterRewardCost.value = '0';
     if (masterRewardIcon) masterRewardIcon.value = '';
     if (masterRewardDescription) masterRewardDescription.value = '';
+    if (masterRewardYoutube) masterRewardYoutube.value = '';
     masterTemplatesState.editing.reward = null;
     if (masterRewardSubmit) masterRewardSubmit.textContent = 'Create Reward Template';
     if (masterRewardFormHint) masterRewardFormHint.textContent = 'Create a new template or select one below to edit.';
@@ -738,6 +742,7 @@ function initAdmin() {
     if (masterTaskTitle) masterTaskTitle.value = item.title || '';
     if (masterTaskDescription) masterTaskDescription.value = item.description || '';
     if (masterTaskIcon) masterTaskIcon.value = item.icon || '';
+    if (masterTaskYoutube) masterTaskYoutube.value = item.youtube_url || '';
     if (masterTaskPoints) masterTaskPoints.value = String(Number(item.base_points ?? 0) || 0);
     if (masterTaskStatusSelect) masterTaskStatusSelect.value = normalizeMasterStatus(item.status);
     masterTemplatesState.editing.task = item.id || null;
@@ -751,6 +756,7 @@ function initAdmin() {
     if (masterRewardTitle) masterRewardTitle.value = item.title || '';
     if (masterRewardDescription) masterRewardDescription.value = item.description || '';
     if (masterRewardIcon) masterRewardIcon.value = item.icon || '';
+    if (masterRewardYoutube) masterRewardYoutube.value = item.youtube_url || '';
     if (masterRewardCost) masterRewardCost.value = String(Number(item.base_cost ?? 0) || 0);
     if (masterRewardStatusSelect) masterRewardStatusSelect.value = normalizeMasterStatus(item.status);
     masterTemplatesState.editing.reward = item.id || null;
@@ -867,10 +873,12 @@ function initAdmin() {
       base_points: Math.trunc(basePointsValue),
       description: (masterTaskDescription?.value || '').trim() || null,
       icon: (masterTaskIcon?.value || '').trim() || null,
+      youtube_url: (masterTaskYoutube?.value || '').trim() || null,
       status: normalizeMasterStatus(masterTaskStatusSelect?.value || 'active')
     };
     if (!payload.description) payload.description = null;
     if (!payload.icon) payload.icon = null;
+    if (!payload.youtube_url) payload.youtube_url = null;
 
     const editingId = masterTemplatesState.editing.task;
     try {
@@ -934,10 +942,12 @@ function initAdmin() {
       base_cost: Math.trunc(baseCostValue),
       description: (masterRewardDescription?.value || '').trim() || null,
       icon: (masterRewardIcon?.value || '').trim() || null,
+      youtube_url: (masterRewardYoutube?.value || '').trim() || null,
       status: normalizeMasterStatus(masterRewardStatusSelect?.value || 'active')
     };
     if (!payload.description) payload.description = null;
     if (!payload.icon) payload.icon = null;
+    if (!payload.youtube_url) payload.youtube_url = null;
 
     const editingId = masterTemplatesState.editing.reward;
     try {
