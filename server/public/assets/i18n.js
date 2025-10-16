@@ -1,9 +1,9 @@
 (() => {
   const STRINGS = {
-    en: {
-      nav_member: "Member Management",
-      nav_register: "Register New Member",
-      nav_existing: "Existing Members",
+      en: {
+        nav_member: "Family Member Management",
+      nav_register: "Register New Family Member",
+      nav_existing: "Existing Family Members",
       member_info: "Member Info",
       check_balance: "Check Balance",
       view_history: "View History",
@@ -18,10 +18,10 @@
       balance: "Balance",
       invalid_youtube: "Invalid YouTube URL"
     },
-    ko: {
-      nav_member: "회원 관리",
-      nav_register: "신규 회원 등록",
-      nav_existing: "기존 회원",
+      ko: {
+        nav_member: "가족 구성원 관리",
+      nav_register: "신규 가족 구성원 등록",
+      nav_existing: "기존 가족 구성원",
       member_info: "회원 정보",
       check_balance: "잔액 확인",
       view_history: "내역 보기",
