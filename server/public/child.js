@@ -461,10 +461,15 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     return data;
   }
 
+  async function loadFamilyLists(userId) {
+    if (!userId) return;
+    await Promise.allSettled([loadEarnTemplates(userId), loadRewards(userId)]);
+    refreshRedeemNotice();
+  }
+
   async function loadChildDataFor(user) {
     if (!user || !user.id) return;
-    await Promise.allSettled([loadEarnTemplates(), loadRewards()]);
-    refreshRedeemNotice();
+    await loadFamilyLists(user.id);
   }
 
   function enterApp(user, remember) {
@@ -858,8 +863,8 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   // ===== Earn templates =====
   let templates = [];
-  async function loadEarnTemplates() {
-    const userId = getChildId().trim();
+  async function loadEarnTemplates(userIdOverride) {
+    const userId = (userIdOverride ?? getChildId()).trim();
     const earnBox = $('earnList');
     if (!userId) {
       if (earnBox) earnBox.innerHTML = '<div class="muted">Log in to load tasks.</div>';
@@ -1395,7 +1400,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     });
   }
 
-  document.getElementById('btnLoadItems')?.addEventListener('click', loadRewards);
+  document.getElementById('btnLoadItems')?.addEventListener('click', () => loadRewards());
   $('btnRecentRedeems')?.addEventListener('click', toggleRecentRedeems);
   $('btnFullRedeems')?.addEventListener('click', toggleFullRedeems);
   updateRecentButton();
@@ -1403,10 +1408,10 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   setupChildLogin();
 
-  async function loadRewards(){
+  async function loadRewards(userIdOverride){
     const list = $('shopList');
     const empty = $('shopEmpty');
-    const userId = getChildId().trim();
+    const userId = (userIdOverride ?? getChildId()).trim();
     if (!userId){
       if (list) list.innerHTML = '';
       if (empty) empty.style.display = 'block';

@@ -216,6 +216,7 @@ function initAdmin() {
 
   const whoamiBanner = $k('adminWhoami');
   const whoamiRoleLabel = $k('adminRoleLabel');
+  const scopeBadgeEl = $k('admin-scope-badge');
   const masterToolbar = $k('masterToolbar');
   const familyScopeWrapper = $k('familyScopeWrapper');
   const familyScopeSelect = $k('familyScopeSelect');
@@ -516,8 +517,19 @@ function initAdmin() {
     pendingTemplatesState.loading = true;
     pendingTemplatesState.error = '';
     renderPendingTemplates();
+    let familyId;
     try {
-      const { res, body } = await adminFetch('/api/family/pending/templates');
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      pendingTemplatesState.loading = false;
+      pendingTemplatesState.items = [];
+      pendingTemplatesState.error = '';
+      renderPendingTemplates();
+      return;
+    }
+    try {
+      const url = appendFamilyQuery('/api/family/pending/templates', familyId);
+      const { res, body } = await adminFetch(url);
       if (res.status === 401) {
         pendingTemplatesState.items = [];
         pendingTemplatesState.error = ADMIN_INVALID_MSG;
@@ -551,11 +563,21 @@ function initAdmin() {
   async function handleAdoptPending(item, trigger) {
     if (!item || !item.kind || !item.master_id) return;
     if (trigger) trigger.disabled = true;
+    let familyId;
     try {
-      const { res, body } = await adminFetch('/api/family/adopt', {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      if (trigger) trigger.disabled = false;
+      toast('Select a family scope to adopt templates.', 'error');
+      return;
+    }
+    try {
+      const url = appendFamilyQuery('/api/family/adopt', familyId);
+      const payload = withFamilyInBody({ kind: item.kind, master_id: item.master_id }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: item.kind, master_id: item.master_id })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -584,11 +606,21 @@ function initAdmin() {
   async function handleDismissPending(item, trigger) {
     if (!item || !item.kind || !item.master_id) return;
     if (trigger) trigger.disabled = true;
+    let familyId;
     try {
-      const { res, body } = await adminFetch('/api/family/dismiss', {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      if (trigger) trigger.disabled = false;
+      toast('Select a family scope to dismiss templates.', 'error');
+      return;
+    }
+    try {
+      const url = appendFamilyQuery('/api/family/dismiss', familyId);
+      const payload = withFamilyInBody({ kind: item.kind, master_id: item.master_id }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: item.kind, master_id: item.master_id })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -1107,6 +1139,8 @@ function initAdmin() {
     updateWhoamiBanner();
     applyRoleVisibility();
     updateMasterScopeVisibility();
+    updateScopeBadgeDisplay();
+    updateScopeBadgeDisplay();
     if (familySearchInput) familySearchInput.value = '';
     if (familyCreateForm) familyCreateForm.reset();
     if (familyCreateIdPreview) {
@@ -1271,6 +1305,43 @@ function initAdmin() {
     familyCreateIdPreview.dataset.value = suggestion || '';
     updateFamilyCreateButtonState();
     return suggestion;
+  }
+
+  function updateScopeBadgeDisplay() {
+    if (!scopeBadgeEl) return;
+    scopeBadgeEl.classList.remove('bg-green-200', 'bg-sky-200');
+    scopeBadgeEl.style.backgroundColor = '';
+    scopeBadgeEl.style.color = '';
+
+    if (!adminState.role) {
+      scopeBadgeEl.textContent = 'No admin';
+      return;
+    }
+
+    if (adminState.role === 'master') {
+      scopeBadgeEl.classList.add('bg-green-200');
+      scopeBadgeEl.style.backgroundColor = '#bbf7d0';
+      scopeBadgeEl.style.color = '#14532d';
+      if (adminState.currentFamilyId) {
+        scopeBadgeEl.textContent = `Master · ${findFamilyLabel(adminState.currentFamilyId)}`;
+      } else {
+        scopeBadgeEl.textContent = 'Master · Select a family';
+      }
+      return;
+    }
+
+    if (adminState.role === 'family') {
+      scopeBadgeEl.classList.add('bg-sky-200');
+      scopeBadgeEl.style.backgroundColor = '#bae6fd';
+      scopeBadgeEl.style.color = '#0c4a6e';
+      const familyLabel = adminState.currentFamilyId || adminState.familyId || '';
+      scopeBadgeEl.textContent = familyLabel
+        ? `Family Admin (${findFamilyLabel(familyLabel)})`
+        : 'Family Admin';
+      return;
+    }
+
+    scopeBadgeEl.textContent = adminState.role;
   }
 
   function updateWhoamiBanner() {
@@ -2119,6 +2190,47 @@ details.member-fold .summary-value {
     }
     return stored;
   }
+
+  function readCurrentFamilyId() {
+    try {
+      if (typeof window.currentFamilyId === 'function') {
+        const value = window.currentFamilyId();
+        if (value) return String(value).trim();
+      }
+    } catch (error) {
+      console.warn('currentFamilyId getter failed', error);
+    }
+    const direct = window.currentFamilyId;
+    if (typeof direct === 'string' && direct.trim()) {
+      return direct.trim();
+    }
+    if (adminState.currentFamilyId) return adminState.currentFamilyId;
+    if (adminState.familyId) return adminState.familyId;
+    return '';
+  }
+
+  function requireFamilyId({ silent = false } = {}) {
+    const id = readCurrentFamilyId();
+    if (!id) {
+      if (!silent) toast('Select a family first', 'error');
+      throw new Error('family_id required');
+    }
+    return id;
+  }
+
+  function appendFamilyQuery(url, familyId) {
+    const [base, query = ''] = String(url).split('?');
+    const params = new URLSearchParams(query);
+    params.set('family_id', familyId);
+    const qs = params.toString();
+    return `${base}?${qs}`;
+  }
+
+  function withFamilyInBody(payload, familyId) {
+    const base = payload && typeof payload === 'object' ? { ...payload } : {};
+    base.family_id = familyId;
+    return base;
+  }
   async function adminFetch(url, opts = {}) {
     const { idempotencyKey, headers: extraHeaders, skipScope = false, ...fetchOpts } = opts;
     const key = ensureAdminKey();
@@ -2227,20 +2339,10 @@ details.member-fold .summary-value {
 
   async function refreshAdminContext({ showToastOnError = false, silent = false } = {}) {
     const key = ensureAdminKey();
-    const scopeBadge = document.querySelector('#admin-scope-badge');
     const masterCard = document.querySelector('#card-family-scope');
     const quickFamilyTable = document.querySelector('#families-table');
-    const clearBadge = () => {
-      if (scopeBadge) {
-        scopeBadge.textContent = 'No admin';
-        scopeBadge.classList.remove('bg-green-200', 'bg-sky-200');
-        scopeBadge.style.backgroundColor = '';
-        scopeBadge.style.color = '';
-      }
-    };
     if (!key) {
       clearAdminContext();
-      clearBadge();
       if (masterCard) masterCard.hidden = true;
       if (quickFamilyTable) quickFamilyTable.innerHTML = '';
       return false;
@@ -2251,23 +2353,6 @@ details.member-fold .summary-value {
         role: payload.role ?? null,
         family_id: payload.family_id ?? payload.familyId ?? null
       };
-      if (scopeBadge) {
-        scopeBadge.classList.remove('bg-green-200', 'bg-sky-200');
-        if (nextState.role === 'master') {
-          scopeBadge.textContent = 'Family Admin (Master)';
-          scopeBadge.classList.add('bg-green-200');
-          scopeBadge.style.backgroundColor = '#bbf7d0';
-          scopeBadge.style.color = '#14532d';
-        } else if (nextState.role === 'family') {
-          const familyLabel = nextState.family_id ? String(nextState.family_id) : 'scoped';
-          scopeBadge.textContent = `Family Admin (${familyLabel})`;
-          scopeBadge.classList.add('bg-sky-200');
-          scopeBadge.style.backgroundColor = '#bae6fd';
-          scopeBadge.style.color = '#0c4a6e';
-        } else {
-          clearBadge();
-        }
-      }
       if (masterCard) {
         masterCard.hidden = nextState.role !== 'master';
         if (nextState.role !== 'master' && quickFamilyTable) {
@@ -2864,9 +2949,14 @@ details.member-fold .summary-value {
     activeRefundContext = null;
   }
 
-  async function refreshMemberLedger(userId, { showPanels = true } = {}) {
+  async function refreshMemberLedger(userId, { showPanels = true, familyId: familyIdOverride = '' } = {}) {
     if (!userId) {
       clearMemberLedger();
+      return null;
+    }
+    const familyId = familyIdOverride || readCurrentFamilyId();
+    if (!familyId) {
+      toast('Select a family first', 'error');
       return null;
     }
     if (showPanels && memberBalanceContainer) memberBalanceContainer.hidden = false;
@@ -2878,7 +2968,8 @@ details.member-fold .summary-value {
     if (memberRedeemSummary) setPlaceholder(memberRedeemSummary, 'Loading redeem activity…');
     if (memberRefundSummary) setPlaceholder(memberRefundSummary, 'Loading refund activity…');
     try {
-      const { res, body } = await adminFetch(`/ck/ledger/${encodeURIComponent(userId)}`);
+      const url = appendFamilyQuery(`/ck/ledger/${encodeURIComponent(userId)}`, familyId);
+      const { res, body } = await adminFetch(url);
       if (res.status === 401) {
         clearMemberLedger('Admin key invalid.');
         toast(ADMIN_INVALID_MSG, 'error');
@@ -2916,6 +3007,31 @@ details.member-fold .summary-value {
       return null;
     }
     return info.normalized;
+  }
+
+  async function resolveMemberAdmin(userInput, familyIdOverride = '') {
+    const raw = (userInput ?? '').toString().trim();
+    if (!raw) {
+      throw new Error('Enter a user name or ID.');
+    }
+    const familyId = familyIdOverride || requireFamilyId();
+    const params = new URLSearchParams({ user: raw, family_id: familyId }).toString();
+    const { res, body } = await adminFetch(`/api/admin/resolve-member?${params}`);
+    if (res.status === 401) {
+      toast(ADMIN_INVALID_MSG, 'error');
+      throw new Error(ADMIN_INVALID_MSG);
+    }
+    if (!res.ok) {
+      const message = presentError(body?.error, 'Member not found');
+      const error = new Error(message);
+      error.status = res.status;
+      error.body = body;
+      throw error;
+    }
+    if (!body || typeof body !== 'object' || !body.id) {
+      throw new Error('Member not found');
+    }
+    return { id: body.id, name: body.name || '', family_id: body.family_id || null };
   }
 
   function setMemberStatus(message) {
@@ -3008,14 +3124,28 @@ details.member-fold .summary-value {
   });
 
   $('btnMemberInfo')?.addEventListener('click', async () => {
-    const userId = requireMemberId();
-    if (!userId) return;
-    loadActivity();
+    const rawInput = (memberIdInput?.value || '').trim();
+    if (!rawInput) {
+      toast('Enter a user name or ID.', 'error');
+      memberIdInput?.focus();
+      return;
+    }
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      return;
+    }
     setMemberStatus('');
     setMemberInfoMessage('Loading member info...');
     clearMemberLedger();
     try {
-      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(userId)}`);
+      const resolved = await resolveMemberAdmin(rawInput, familyId);
+      const userId = resolved.id;
+      memberIdInput.value = userId;
+      loadActivity();
+      const url = appendFamilyQuery(`/api/admin/members/${encodeURIComponent(userId)}`, familyId);
+      const { res, body } = await adminFetch(url);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         setMemberInfoMessage('Admin key invalid.');
@@ -3039,15 +3169,37 @@ details.member-fold .summary-value {
       }
     } catch (err) {
       console.error(err);
-      setMemberInfoMessage(err.message || 'Failed to load member.');
-      toast(err.message || 'Failed to load member', 'error');
-      clearMemberLedger(err.message || 'Redeem history unavailable.');
+      const message = err?.message || 'Failed to load member.';
+      setMemberInfoMessage(message);
+      toast(message, 'error');
+      clearMemberLedger(message || 'Redeem history unavailable.');
     }
   });
 
   $('btnMemberBalance')?.addEventListener('click', async () => {
-    const userId = requireMemberId();
-    if (!userId) return;
+    const rawInput = (memberIdInput?.value || '').trim();
+    if (!rawInput) {
+      toast('Enter a user name or ID.', 'error');
+      memberIdInput?.focus();
+      return;
+    }
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      return;
+    }
+    let userId;
+    try {
+      const resolved = await resolveMemberAdmin(rawInput, familyId);
+      userId = resolved.id;
+      memberIdInput.value = userId;
+    } catch (error) {
+      const message = error?.message || 'Member not found';
+      setMemberStatus(message);
+      toast(message, 'error');
+      return;
+    }
     loadActivity();
     setMemberStatus('Fetching balance...');
     if (memberBalanceContainer) memberBalanceContainer.hidden = false;
@@ -3057,7 +3209,7 @@ details.member-fold .summary-value {
     collapseDetails(memberRefundDetails);
     if (memberBalanceSummaryValue) memberBalanceSummaryValue.textContent = 'Loading…';
     if (memberBalanceBody) setPlaceholder(memberBalanceBody, 'Loading balance…');
-    const data = await refreshMemberLedger(userId, { showPanels: true });
+    const data = await refreshMemberLedger(userId, { showPanels: true, familyId });
     if (data?.hints) {
       const formattedBalance = formatTokenValue(Number(data.hints.balance ?? 0));
       setMemberStatus(`Balance: ${formattedBalance} tokens.`);
@@ -3081,10 +3233,18 @@ details.member-fold .summary-value {
     }
     setMemberStatus('Registering member...');
     try {
-      const { res, body } = await adminFetch('/api/admin/members', {
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery('/api/admin/members', familyId);
+      const payload = withFamilyInBody({
+        userId,
+        name,
+        dob: dob || undefined,
+        sex: sex || undefined
+      }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, name, dob: dob || undefined, sex: sex || undefined })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -3176,8 +3336,10 @@ details.member-fold .summary-value {
       memberEditSaveBtn.textContent = 'Saving...';
     }
     try {
-      const payload = { name, dob: dob || undefined, sex: sex || undefined };
-      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(userId)}`, {
+      const familyId = requireFamilyId();
+      const payload = withFamilyInBody({ name, dob: dob || undefined, sex: sex || undefined }, familyId);
+      const url = appendFamilyQuery(`/api/admin/members/${encodeURIComponent(userId)}`, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -3217,7 +3379,9 @@ details.member-fold .summary-value {
     if (!member) return;
     if (!confirm(`Delete member "${member.userId}"? This cannot be undone.`)) return;
     try {
-      const { res, body } = await adminFetch(`/api/admin/members/${encodeURIComponent(member.userId)}`, {
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery(`/api/admin/members/${encodeURIComponent(member.userId)}`, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'DELETE'
       });
       if (res.status === 401) {
@@ -3256,8 +3420,19 @@ details.member-fold .summary-value {
     if (memberListSection) memberListSection.hidden = false;
     memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Loading...</td></tr>';
     if (memberListStatus) memberListStatus.textContent = '';
+    let familyId;
     try {
-      const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      memberTableBody.innerHTML = '<tr><td colspan="5" class="muted">Select a family to search members.</td></tr>';
+      if (memberListStatus) memberListStatus.textContent = 'Select a family to search members.';
+      return;
+    }
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      params.set('family_id', familyId);
+      const qs = params.toString() ? `?${params.toString()}` : '';
       const { res, body } = await adminFetch(`/api/admin/members${qs}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -3364,10 +3539,13 @@ details.member-fold .summary-value {
     }
     $('issueStatus').textContent = 'Generating QR...';
     try {
-      const { res, body } = await adminFetch('/api/tokens/give', {
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery('/api/tokens/give', familyId);
+      const payload = withFamilyInBody({ userId, amount, note: note || undefined }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, amount, note: note || undefined })
+        body: JSON.stringify(payload)
       });
       const data = body && typeof body === 'object' ? body : {};
       if (res.status === 401){
@@ -3385,6 +3563,10 @@ details.member-fold .summary-value {
       toast('QR ready');
     } catch (err) {
       console.error(err);
+      if (err?.message === 'family_id required') {
+        $('issueStatus').textContent = 'Select a family first.';
+        return;
+      }
       $('issueStatus').textContent = 'Failed to generate QR.';
       toast(err.message || 'Failed', 'error');
     }
@@ -3419,9 +3601,19 @@ details.member-fold .summary-value {
       return;
     }
     $('holdsStatus').textContent = 'Loading...';
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      const msg = 'Select a family to view holds.';
+      $('holdsStatus').textContent = msg;
+      holdsTable.innerHTML = `<tr><td colspan="6" class="muted">${msg}</td></tr>`;
+      return;
+    }
     try {
       const params = new URLSearchParams({ status });
       if (normalizedUser) params.set('userId', normalizedUser);
+      params.set('family_id', familyId);
       const { res, body } = await adminFetch(`/api/holds?${params.toString()}`);
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
@@ -3522,18 +3714,25 @@ details.member-fold .summary-value {
       toast(`Amount exceeds remaining refundable tokens (${remaining}).`, 'error');
       return;
     }
+    const familyId = readCurrentFamilyId();
+    if (!familyId) {
+      toast('Select a family first', 'error');
+      return;
+    }
     const payload = {
       user_id: userId,
       redeem_tx_id: activeRefundContext.id,
       amount,
       reason: refundReasonSelect?.value || 'duplicate',
       notes: (refundNotesInput?.value || '').trim() || undefined,
-      idempotency_key: generateIdempotencyKey()
+      idempotency_key: generateIdempotencyKey(),
+      family_id: familyId
     };
     refundConfirmBtn.disabled = true;
     refundConfirmBtn.textContent = 'Processing…';
     try {
-      const { res, body } = await adminFetch('/ck/refund', {
+      const url = appendFamilyQuery('/ck/refund', familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -3553,7 +3752,7 @@ details.member-fold .summary-value {
       if (res.status === 409 && body && typeof body === 'object') {
         toast(presentError(body.error || 'REFUND_EXISTS', 'This refund was already recorded.'), 'warning');
         closeRefundModal();
-        await refreshMemberLedger(userId);
+        await refreshMemberLedger(userId, { familyId });
         applyStateHints(body.hints || null);
         return;
       }
@@ -3563,7 +3762,7 @@ details.member-fold .summary-value {
       }
       toast(`${amount} tokens returned.`, 'success');
       closeRefundModal();
-      await refreshMemberLedger(userId);
+      await refreshMemberLedger(userId, { familyId });
       applyStateHints(body?.hints || null);
       loadHolds();
     } catch (err) {
@@ -3577,7 +3776,9 @@ details.member-fold .summary-value {
   async function cancelHold(id) {
     if (!confirm('Cancel this hold?')) return;
     try {
-      const { res, body } = await adminFetch(`/api/holds/${id}/cancel`, { method: 'POST' });
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery(`/api/holds/${encodeURIComponent(id)}/cancel`, familyId);
+      const { res, body } = await adminFetch(url, { method: 'POST' });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = presentError(body?.error, 'Cancel failed');
@@ -3689,6 +3890,16 @@ details.member-fold .summary-value {
     if (activityTo?.value) params.set('to', activityTo.value);
     params.set('limit', '100');
     params.set('offset', '0');
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      const message = 'Select a family to view activity.';
+      if (activityStatus) activityStatus.textContent = message;
+      renderActivity([], { emptyMessage: message });
+      return;
+    }
+    params.set('family_id', familyId);
     const qs = params.toString() ? `?${params.toString()}` : '';
     if (activityStatus) activityStatus.textContent = 'Loading activity…';
     activityTableBody.innerHTML = '';
@@ -3837,10 +4048,13 @@ setupScanner({
       return;
     }
     try {
-      const { res, body } = await adminFetch('/api/earn/scan', {
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery('/api/earn/scan', familyId);
+      const payload = withFamilyInBody({ token: parsed.token }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: parsed.token })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
@@ -3969,6 +4183,17 @@ setupScanner({
     list.innerHTML = '<div class="muted">Loading...</div>';
     if (statusEl) statusEl.textContent = '';
     updateRewardsToggleButton();
+    let familyId;
+    try {
+      familyId = requireFamilyId();
+    } catch (error) {
+      const message = 'Select a family to view rewards.';
+      list.innerHTML = `<div class="muted">${message}</div>`;
+      if (statusEl) statusEl.textContent = message;
+      rewardsToggleInitialized = false;
+      updateRewardsToggleButton();
+      return;
+    }
     try {
       const params = new URLSearchParams();
       if (rewardsStatusFilter === 'active') {
@@ -3976,6 +4201,7 @@ setupScanner({
       } else if (rewardsStatusFilter === 'disabled') {
         params.set('status', 'disabled');
       }
+      params.set('family_id', familyId);
       const qs = params.toString() ? `?${params.toString()}` : '';
       const { res, body } = await adminFetch(`/api/admin/rewards${qs}`);
       if (res.status === 401){
@@ -4196,11 +4422,20 @@ setupScanner({
   });
 
   async function updateReward(id, body) {
+    let familyId;
     try {
-      const { res, body: respBody } = await adminFetch(`/api/admin/rewards/${id}`, {
+      familyId = requireFamilyId();
+    } catch {
+      toast('Select a family to update rewards.', 'error');
+      return;
+    }
+    try {
+      const url = appendFamilyQuery(`/api/admin/rewards/${id}`, familyId);
+      const payload = withFamilyInBody(body, familyId);
+      const { res, body: respBody } = await adminFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(payload)
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
@@ -4210,12 +4445,20 @@ setupScanner({
       toast('Reward updated');
       loadRewards();
     } catch (err) {
+      if (err?.message === 'family_id required') return;
       toast(err.message || 'Update failed', 'error');
     }
   }
 
   async function deleteReward(id) {
-    const { res, body } = await adminFetch(`/api/admin/rewards/${id}`, { method: 'DELETE' });
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      throw new Error('Select a family to delete rewards.');
+    }
+    const url = appendFamilyQuery(`/api/admin/rewards/${encodeURIComponent(id)}`, familyId);
+    const { res, body } = await adminFetch(url, { method: 'DELETE' });
     if (res.status === 401) {
       throw new Error(ADMIN_INVALID_MSG);
     }
@@ -4230,7 +4473,14 @@ setupScanner({
   }
 
   async function hardDeleteReward(id) {
-    await apiFetch(`/api/admin/rewards/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      throw new Error('Select a family to delete rewards.');
+    }
+    const url = appendFamilyQuery(`/api/admin/rewards/${encodeURIComponent(id)}`, familyId);
+    await apiFetch(url, { method: 'DELETE' });
   }
 
   async function reloadRewardsMenu() {
@@ -4254,7 +4504,8 @@ setupScanner({
       await reloadRewardsMenu();
     } catch (err) {
       console.error(err);
-      toast(err.message || 'Delete failed', 'error');
+      const message = err?.message === 'family_id required' ? 'Select a family to delete rewards.' : err.message || 'Delete failed';
+      toast(message, 'error');
     }
   });
 
@@ -4273,10 +4524,13 @@ setupScanner({
     const description = descEl?.value?.trim() || '';
     if (!name || Number.isNaN(cost)) { toast('Name and numeric cost required', 'error'); return; }
 
-    const { res, body } = await adminFetch('/api/admin/rewards', {
+    const familyId = requireFamilyId();
+    const url = appendFamilyQuery('/api/admin/rewards', familyId);
+    const payload = withFamilyInBody({ name, cost, imageUrl, youtubeUrl, description }, familyId);
+    const { res, body } = await adminFetch(url, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ name, cost, imageUrl, youtubeUrl, description }),
+      body: JSON.stringify(payload),
     });
 
     if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
@@ -4350,8 +4604,16 @@ setupScanner({
   let earnTemplates = [];
 
   async function loadTemplates() {
+    let familyId;
     try {
-      const { res, body } = await adminFetch('/api/earn-templates?sort=sort_order');
+      familyId = requireFamilyId({ silent: true });
+    } catch (error) {
+      toast('Select a family to manage templates.', 'error');
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ sort: 'sort_order', family_id: familyId });
+      const { res, body } = await adminFetch(`/api/earn-templates?${params.toString()}`);
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok){
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
@@ -4491,8 +4753,10 @@ setupScanner({
   });
 
   document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
-    const famId = adminState.currentFamilyId || adminState.familyId || null;
-    if (!famId) {
+    let famId;
+    try {
+      famId = requireFamilyId();
+    } catch {
       toast('Select a family scope to adopt templates.', 'error');
       return;
     }
@@ -4526,8 +4790,10 @@ setupScanner({
   document.addEventListener('click', async (e) => {
     const adopt = e.target.closest('[data-adopt]');
     if (!adopt) return;
-    const famId = adminState.currentFamilyId || adminState.familyId || null;
-    if (!famId) {
+    let famId;
+    try {
+      famId = requireFamilyId();
+    } catch {
       toast('Select a family scope to adopt templates.', 'error');
       return;
     }
@@ -4561,10 +4827,13 @@ setupScanner({
     const youtube_url = prompt('YouTube URL', tpl.youtube_url || '') || null;
     const sort_order = Number(prompt('Sort order', tpl.sort_order));
     try {
-      const { res, body } = await adminFetch(`/api/earn-templates/${tpl.id}`, {
+      const familyId = requireFamilyId();
+      const payload = withFamilyInBody({ title, points, description, youtube_url, sort_order }, familyId);
+      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(tpl.id)}`, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, points, description, youtube_url, sort_order })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
@@ -4580,10 +4849,13 @@ setupScanner({
 
   async function updateTemplate(id, body) {
     try {
-      const { res, body: respBody } = await adminFetch(`/api/earn-templates/${id}`, {
+      const familyId = requireFamilyId();
+      const payload = withFamilyInBody(body, familyId);
+      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(id)}`, familyId);
+      const { res, body: respBody } = await adminFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(payload)
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
@@ -4600,7 +4872,9 @@ setupScanner({
   async function deleteTemplate(id) {
     if (!confirm('Delete this template?')) return;
     try {
-      const { res, body } = await adminFetch(`/api/earn-templates/${id}`, { method: 'DELETE' });
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(id)}`, familyId);
+      const { res, body } = await adminFetch(url, { method: 'DELETE' });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
         const msg = (body && body.error) || (typeof body === 'string' ? body : 'delete failed');
@@ -4630,10 +4904,13 @@ setupScanner({
     const userId = $('quickUser').value.trim();
     if (!templateId || !userId) return toast('Select template and user', 'error');
     try {
-      const { res, body } = await adminFetch('/api/earn/quick', {
+      const familyId = requireFamilyId();
+      const url = appendFamilyQuery('/api/earn/quick', familyId);
+      const payload = withFamilyInBody({ templateId, userId }, familyId);
+      const { res, body } = await adminFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId, userId })
+        body: JSON.stringify(payload)
       });
       if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
@@ -4648,7 +4925,7 @@ setupScanner({
       applyStateHints(data.hints || latestHints);
       const info = normalizeMemberInput();
       if (info?.normalized && info.normalized === String(user).toLowerCase()) {
-        await refreshMemberLedger(info.normalized, { showPanels: true });
+        await refreshMemberLedger(info.normalized, { showPanels: true, familyId });
       }
     } catch (err) {
       toast(presentError(err.message, 'Quick award failed'), 'error');
@@ -4673,7 +4950,8 @@ setupScanner({
   $('btnHistoryRefresh')?.addEventListener('click', loadHistory);
   $('btnHistoryCsv')?.addEventListener('click', () => {
     const params = buildHistoryParams();
-    const qs = new URLSearchParams({ ...params, format: 'csv' }).toString();
+    const familyId = requireFamilyId();
+    const qs = new URLSearchParams({ ...params, family_id: familyId, format: 'csv' }).toString();
     window.open(`/api/history?${qs}`, '_blank');
   });
 
@@ -4695,9 +4973,16 @@ setupScanner({
   async function loadHistory() {
     if (!historyTable) return;
     historyTable.innerHTML = '<tr><td colspan="17" class="muted">Loading...</td></tr>';
+    let familyId;
+    try {
+      familyId = requireFamilyId();
+    } catch {
+      historyTable.innerHTML = '<tr><td colspan="17" class="muted">Select a family to view history.</td></tr>';
+      return;
+    }
     try {
       const params = buildHistoryParams();
-      const qs = new URLSearchParams(params).toString();
+      const qs = new URLSearchParams({ ...params, family_id: familyId }).toString();
       const { res, body } = await adminFetch(`/api/history?${qs}`);
       if (res.status === 401){
         toast(ADMIN_INVALID_MSG, 'error');
