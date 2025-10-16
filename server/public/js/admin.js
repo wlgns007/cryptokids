@@ -2275,27 +2275,25 @@ details.member-fold .summary-value {
     return body;
   }
 
-  async function loadAvailableTaskTemplates(familyId) {
-    if (!familyId) return [];
-    try {
-      const list = await apiFetch(
-        `/api/families/${encodeURIComponent(familyId)}/master-tasks/available`
-      );
-      return Array.isArray(list) ? list : [];
-    } catch (error) {
-      throw error;
-    }
+  async function loadAvailableTaskTemplates() {
+    const familyId = requireFamilyId({ silent: true });
+    const list = await apiFetch(
+      `/api/families/${encodeURIComponent(familyId)}/master-tasks/available`
+    );
+    return Array.isArray(list) ? list : [];
   }
 
-  async function adoptTaskTemplate(familyId, masterTaskId) {
-    if (!familyId || !masterTaskId) {
-      throw new Error('familyId and masterTaskId required');
+  async function adoptTaskTemplate(masterTaskId) {
+    if (!masterTaskId) {
+      throw new Error('masterTaskId required');
     }
+    const familyId = requireFamilyId({ silent: true });
     await apiFetch(`/api/families/${encodeURIComponent(familyId)}/tasks/from-master`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ master_task_id: masterTaskId })
     });
+    await loadTemplates();
   }
 
   async function fetchFamilyDetail(familyId) {
@@ -2596,7 +2594,8 @@ details.member-fold .summary-value {
   }
 
 
-  const memberIdInput = $('memberUserId');
+  const memberActionInput = document.querySelector('#member-search');
+  const memberIdInput = $('memberUserId') || memberActionInput;
   const memberStatusEl = $('memberStatus');
   const memberInfoDetails = $('memberInfoDetails');
   const memberBalanceContainer = $('memberBalanceContainer');
@@ -2710,16 +2709,25 @@ details.member-fold .summary-value {
     });
   }
 
+  function syncMemberInputs(value) {
+    const next = typeof value === 'string' ? value : '';
+    if (memberIdInput && memberIdInput.value !== next) memberIdInput.value = next;
+    if (memberActionInput && memberActionInput.value !== next) memberActionInput.value = next;
+  }
+
   function getMemberIdInfo() {
-    const raw = (memberIdInput?.value || '').trim();
+    const rawPrimary = (memberIdInput?.value || '').trim();
+    const rawSearch = memberActionInput && memberActionInput !== memberIdInput
+      ? (memberActionInput.value || '').trim()
+      : '';
+    const raw = rawPrimary || rawSearch;
     return { raw, normalized: raw.toLowerCase() };
   }
 
   function normalizeMemberInput() {
-    if (!memberIdInput) return getMemberIdInfo();
     const info = getMemberIdInfo();
     if (info.raw && info.raw !== info.normalized) {
-      memberIdInput.value = info.normalized;
+      syncMemberInputs(info.normalized);
       return { raw: info.normalized, normalized: info.normalized };
     }
     return info;
@@ -3034,6 +3042,25 @@ details.member-fold .summary-value {
     return { id: body.id, name: body.name || '', family_id: body.family_id || null };
   }
 
+  async function resolveMemberForActions() {
+    const info = getMemberIdInfo();
+    const raw = (info.raw || '').trim();
+    if (!raw) throw new Error('Enter an ID or full name');
+    let familyId;
+    try {
+      familyId = requireFamilyId({ silent: true });
+    } catch {
+      toast('Select a family first', 'error');
+      throw new Error('Select a family first');
+    }
+    const resolved = await resolveMemberAdmin(raw, familyId);
+    if (!resolved || !resolved.id) {
+      throw new Error('Member not found');
+    }
+    syncMemberInputs(resolved.id);
+    return resolved.id;
+  }
+
   function setMemberStatus(message) {
     if (memberStatusEl) memberStatusEl.textContent = message || '';
   }
@@ -3123,11 +3150,28 @@ details.member-fold .summary-value {
     if (event.key === 'Enter') memberIdChanged({ loadActivityNow: event.isTrusted !== false });
   });
 
-  $('btnMemberInfo')?.addEventListener('click', async () => {
-    const rawInput = (memberIdInput?.value || '').trim();
-    if (!rawInput) {
-      toast('Enter a user name or ID.', 'error');
-      memberIdInput?.focus();
+  if (memberActionInput && memberActionInput !== memberIdInput) {
+    memberActionInput.addEventListener('blur', () => {
+      normalizeMemberInput();
+    });
+    memberActionInput.addEventListener('input', () => {
+      if (!memberActionInput.value.trim()) {
+        syncMemberInputs('');
+        resetActivityView();
+      }
+    });
+  }
+
+  async function handleMemberInfoAction() {
+    let userId;
+    try {
+      userId = await resolveMemberForActions();
+    } catch (error) {
+      const message = error?.message || 'Member not found';
+      if (message !== 'Select a family first') {
+        toast(message, 'error');
+        memberIdInput?.focus();
+      }
       return;
     }
     let familyId;
@@ -3140,9 +3184,6 @@ details.member-fold .summary-value {
     setMemberInfoMessage('Loading member info...');
     clearMemberLedger();
     try {
-      const resolved = await resolveMemberAdmin(rawInput, familyId);
-      const userId = resolved.id;
-      memberIdInput.value = userId;
       loadActivity();
       const url = appendFamilyQuery(`/api/admin/members/${encodeURIComponent(userId)}`, familyId);
       const { res, body } = await adminFetch(url);
@@ -3174,30 +3215,44 @@ details.member-fold .summary-value {
       toast(message, 'error');
       clearMemberLedger(message || 'Redeem history unavailable.');
     }
+  }
+
+  const memberInfoButtons = Array.from(
+    new Set([
+      $('btnMemberInfo'),
+      document.querySelector('#btn-member-info')
+    ].filter(Boolean))
+  );
+  memberInfoButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      void handleMemberInfoAction();
+    });
   });
 
-  $('btnMemberBalance')?.addEventListener('click', async () => {
-    const rawInput = (memberIdInput?.value || '').trim();
-    if (!rawInput) {
-      toast('Enter a user name or ID.', 'error');
-      memberIdInput?.focus();
+  memberActionInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const targetBtn = document.querySelector('#btn-member-info') || $('btnMemberInfo');
+      targetBtn?.click();
+    }
+  });
+
+  async function handleMemberBalanceAction() {
+    let userId;
+    try {
+      userId = await resolveMemberForActions();
+    } catch (error) {
+      const message = error?.message || 'Member not found';
+      setMemberStatus(message);
+      if (message !== 'Select a family first') {
+        toast(message, 'error');
+      }
       return;
     }
     let familyId;
     try {
       familyId = requireFamilyId({ silent: true });
     } catch {
-      return;
-    }
-    let userId;
-    try {
-      const resolved = await resolveMemberAdmin(rawInput, familyId);
-      userId = resolved.id;
-      memberIdInput.value = userId;
-    } catch (error) {
-      const message = error?.message || 'Member not found';
-      setMemberStatus(message);
-      toast(message, 'error');
       return;
     }
     loadActivity();
@@ -3216,6 +3271,18 @@ details.member-fold .summary-value {
     } else {
       setMemberStatus('Balance unavailable.');
     }
+  }
+
+  const memberBalanceButtons = Array.from(
+    new Set([
+      $('btnMemberBalance'),
+      document.querySelector('#btn-check-balance')
+    ].filter(Boolean))
+  );
+  memberBalanceButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      void handleMemberBalanceAction();
+    });
   });
 
   async function submitMemberRegistration() {
@@ -3265,7 +3332,7 @@ details.member-fold .summary-value {
       if (dobEl) dobEl.value = '';
       if (sexEl) sexEl.value = '';
       if (memberIdInput) {
-        memberIdInput.value = userId;
+        syncMemberInputs(userId);
         memberIdChanged();
       }
       await loadMembersList();
@@ -3398,7 +3465,7 @@ details.member-fold .summary-value {
       }
       toast('Member deleted');
       if (memberIdInput?.value === member.userId) {
-        memberIdInput.value = '';
+        syncMemberInputs('');
         memberIdChanged();
       }
       await loadMembersList();
@@ -4753,20 +4820,12 @@ setupScanner({
   });
 
   document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
-    let famId;
-    try {
-      famId = requireFamilyId();
-    } catch {
-      toast('Select a family scope to adopt templates.', 'error');
-      return;
-    }
-
     const box = document.querySelector('#tpl-list');
     if (!box) return;
     box.innerHTML = '<div class="opacity-70">Loading...</div>';
 
     try {
-      const list = await loadAvailableTaskTemplates(famId);
+      const list = await loadAvailableTaskTemplates();
       box.innerHTML = Array.isArray(list) && list.length
         ? list
             .map((t) => `
@@ -4782,32 +4841,35 @@ setupScanner({
       show('#modal-task-templates');
     } catch (error) {
       console.warn('loadAvailableTaskTemplates failed', error);
-      box.innerHTML = '<div class="opacity-70">Failed to load templates.</div>';
-      toast(error.message || 'Failed to load master templates', 'error');
+      const message = error?.message || 'Failed to load master templates';
+      if (message === 'family_id required') {
+        box.innerHTML = '<div class="opacity-70">Select a family scope to adopt templates.</div>';
+        toast('Select a family scope to adopt templates.', 'error');
+      } else {
+        box.innerHTML = '<div class="opacity-70">Failed to load templates.</div>';
+        toast(message, 'error');
+      }
     }
   });
 
   document.addEventListener('click', async (e) => {
     const adopt = e.target.closest('[data-adopt]');
     if (!adopt) return;
-    let famId;
-    try {
-      famId = requireFamilyId();
-    } catch {
-      toast('Select a family scope to adopt templates.', 'error');
-      return;
-    }
     const masterId = adopt.getAttribute('data-adopt');
     if (!masterId) return;
     try {
       adopt.disabled = true;
-      await adoptTaskTemplate(famId, masterId);
+      await adoptTaskTemplate(masterId);
       toast('Template adopted.');
       hide('#modal-task-templates');
-      await loadTemplates();
     } catch (err) {
       adopt.disabled = false;
-      toast(err.message || 'Adoption failed', 'error');
+      const message = err?.message || 'Adoption failed';
+      if (message === 'family_id required') {
+        toast('Select a family scope to adopt templates.', 'error');
+      } else {
+        toast(message, 'error');
+      }
     }
   });
 
@@ -5031,19 +5093,32 @@ setupScanner({
     }
   }
 
-  document.querySelectorAll('.view-history').forEach(btn => {
-    btn.addEventListener('click', () => {
+  const historyButtons = Array.from(
+    new Set([
+      ...document.querySelectorAll('.view-history'),
+      document.querySelector('#btn-view-history')
+    ].filter(Boolean))
+  );
+  historyButtons.forEach((btn) => {
+    btn.addEventListener('click', async () => {
       const preset = {};
-      const type = btn.dataset.historyType;
+      const type = btn.dataset?.historyType;
       if (type && type !== 'all') {
         preset.type = type;
       }
-      const scope = btn.dataset.historyScope;
+      const scope = btn.dataset?.historyScope;
       if (scope === 'member') {
-        const userId = requireMemberId();
-        if (!userId) return;
-        preset.userId = userId;
-      } else if (btn.dataset.historyUser) {
+        try {
+          const userId = await resolveMemberForActions();
+          preset.userId = userId;
+        } catch (error) {
+          const message = error?.message || 'Member not found';
+          if (message !== 'Select a family first') {
+            toast(message, 'error');
+          }
+          return;
+        }
+      } else if (btn.dataset?.historyUser) {
         preset.userId = btn.dataset.historyUser;
       }
       openHistory(preset);
