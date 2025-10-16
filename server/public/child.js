@@ -150,7 +150,6 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
   const CHILD_ID_STORAGE = 'ck.childUserId';
-  const UUIDish = /^[0-9a-f-]{8,}$/i;
   let activeUser = null;
 
   function storageGet(key) {
@@ -449,17 +448,97 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  async function resolveUser(userInput) {
+  async function resolveUserFlexible(userInput) {
     const raw = (userInput ?? '').toString().trim();
     if (!raw) throw new Error('Enter a user name or ID.');
     const res = await fetch(`/api/child/resolve-user?user=${encodeURIComponent(raw)}`);
     const data = await res.json().catch(() => ({}));
+    if (res.status === 409 && Array.isArray(data.matches) && data.matches.length) {
+      const modal = document.getElementById('child-chooser');
+      const list = document.getElementById('child-chooser-list');
+      if (!modal || !list) {
+        throw new Error('Multiple matches. Please use your ID.');
+      }
+
+      list.innerHTML = '';
+      for (const match of data.matches) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'choose-child btn';
+        button.dataset.id = match.id;
+        const familyId = (match.family_id || '').toString();
+        const suffix = familyId ? ` · ${familyId.slice(0, 6)}…` : '';
+        button.textContent = `${match.name || match.id}${suffix}`;
+        list.appendChild(button);
+      }
+
+      modal.classList.remove('hidden');
+      modal.setAttribute('aria-hidden', 'false');
+
+      return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          list.replaceChildren();
+          list.removeEventListener('click', handleChoice);
+          modal.removeEventListener('click', handleBackdropClick);
+          window.removeEventListener('keydown', handleKeydown);
+          modal.classList.add('hidden');
+          modal.setAttribute('aria-hidden', 'true');
+        };
+
+        const handleBackdropClick = (event) => {
+          if (event.target === modal.querySelector('.modal-backdrop') || event.target.closest('[data-close]')) {
+            event.preventDefault();
+            cleanup();
+            reject(new Error('Selection cancelled'));
+          }
+        };
+
+        const handleKeydown = (event) => {
+          if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
+            cleanup();
+            reject(new Error('Selection cancelled'));
+          }
+        };
+
+        const handleChoice = (event) => {
+          const button = event.target.closest('.choose-child');
+          if (!button) return;
+          event.preventDefault();
+          const selectedId = button.dataset.id;
+          if (!selectedId) return;
+          cleanup();
+          fetch(`/api/child/resolve-user?user=${encodeURIComponent(selectedId)}`)
+            .then((rr) => rr.json().then((payload) => ({ ok: rr.ok, payload })).catch(() => ({ ok: rr.ok, payload: {} })))
+            .then(({ ok, payload }) => {
+              if (!ok) {
+                const message = typeof payload?.error === 'string' && payload.error.trim() ? payload.error.trim() : 'login failed';
+                throw new Error(message);
+              }
+              resolve(payload);
+            })
+            .catch((error) => {
+              reject(new Error(error?.message || 'login failed'));
+            });
+        };
+
+        list.addEventListener('click', handleChoice);
+        modal.addEventListener('click', handleBackdropClick);
+        window.addEventListener('keydown', handleKeydown);
+      });
+    }
+
     if (!res.ok) {
       let message = typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : 'login failed';
       if (message === 'user required') message = 'Enter a user name or ID.';
       throw new Error(message);
     }
     return data;
+  }
+
+  async function loginChild(rawInput, remember) {
+    const user = await resolveUserFlexible(rawInput);
+    enterApp(user, !!remember);
+    return user;
   }
 
   async function loadFamilyLists(userId) {
@@ -1365,17 +1444,12 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const btn = document.querySelector('#child-login-btn');
     const msg = document.querySelector('#child-login-msg');
 
-    let saved = getSaved();
+    const saved = getSaved();
     if (saved) {
       try {
-        if (!UUIDish.test(saved)) {
-          const resolved = await resolveUser(saved);
-          saved = resolved.id;
-          setSaved(saved);
-        }
-        const user = await resolveUser(saved);
-        enterApp(user, true);
-      } catch {
+        await loginChild(saved, true);
+      } catch (error) {
+        console.warn('Auto-login failed', error);
         setSaved('');
         backToLogin();
       }
@@ -1383,13 +1457,20 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
     btn?.addEventListener('click', async () => {
       const value = input && typeof input.value === 'string' ? input.value.trim() : '';
-      if (!value) return;
+      if (!value) {
+        if (msg) msg.textContent = 'Enter a user name or ID.';
+        return;
+      }
       if (msg) msg.textContent = 'Signing in...';
       try {
-        const user = await resolveUser(value);
-        enterApp(user, !!remember?.checked);
+        await loginChild(value, !!remember?.checked);
+        if (msg) msg.textContent = '';
       } catch (error) {
-        if (msg) msg.textContent = error?.message || 'login failed';
+        if (msg) {
+          const raw = error?.message || 'login failed';
+          const message = raw === 'Selection cancelled' ? 'Login cancelled' : raw;
+          msg.textContent = message;
+        }
       }
     });
 

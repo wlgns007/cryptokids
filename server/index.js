@@ -225,6 +225,9 @@ function mapTaskRow(row) {
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
   const masterTaskId = row.master_task_id || null;
   const source = masterTaskId ? "master" : row.source || null;
+  const sortOrder = Number(row.sort_order ?? 0) || 0;
+  const youtubeUrl = row.youtube_url ?? null;
+  const masterYoutube = row.master_youtube ?? null;
   return {
     id: row.id,
     title,
@@ -237,7 +240,11 @@ function mapTaskRow(row) {
     master_task_id: masterTaskId,
     family_id: row.family_id || null,
     created_at: Number(row.created_at ?? 0) || null,
-    updated_at: Number(row.updated_at ?? 0) || null
+    updated_at: Number(row.updated_at ?? 0) || null,
+    sort_order: sortOrder,
+    youtube_url: youtubeUrl,
+    master_youtube: masterYoutube,
+    active: status === "active"
   };
 }
 
@@ -903,6 +910,111 @@ app.post("/api/family/dismiss", authenticateAdmin, resolveFamilyScope, (req, res
   }
 });
 
+app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  if (!tableExists("task")) {
+    res.json([]);
+    return;
+  }
+
+  const columns = getTableColumns("task");
+  const hasFamilyColumn = columns.includes("family_id");
+  const hasTitle = columns.includes("title");
+  const hasName = columns.includes("name");
+  const hasDescription = columns.includes("description");
+  const hasIcon = columns.includes("icon");
+  const hasStatus = columns.includes("status");
+  const hasSortOrder = columns.includes("sort_order");
+  const hasUpdatedAt = columns.includes("updated_at");
+  const hasCreatedAt = columns.includes("created_at");
+  const hasMasterId = columns.includes("master_task_id");
+  const hasYoutube = columns.includes("youtube_url");
+
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  if (MULTITENANT_ENFORCE) {
+    if (!hasFamilyColumn) {
+      res.status(500).json({ error: "task_missing_family_scope" });
+      return;
+    }
+    if (!scopedFamilyId) {
+      res.status(400).json({ error: "family_id required" });
+      return;
+    }
+  }
+
+  const modeParam = (req.query?.mode || "").toString().trim().toLowerCase();
+  const mode = modeParam === "inactive" ? "inactive" : "active";
+
+  const selectParts = [];
+  selectParts.push("t.id");
+  const titleExpr = hasTitle ? "t.title" : hasName ? "t.name" : "t.id";
+  selectParts.push(`${titleExpr} AS title`);
+  if (hasName) {
+    selectParts.push("t.name");
+  }
+  selectParts.push(hasDescription ? "t.description" : "NULL AS description");
+  selectParts.push(hasIcon ? "t.icon" : "NULL AS icon");
+  if (columns.includes("points")) {
+    selectParts.push("t.points");
+  }
+  if (columns.includes("base_points")) {
+    selectParts.push("t.base_points");
+  }
+  selectParts.push(hasStatus ? "t.status" : "'active' AS status");
+  selectParts.push(hasSortOrder ? "t.sort_order" : "0 AS sort_order");
+  selectParts.push(hasUpdatedAt ? "t.updated_at" : "0 AS updated_at");
+  selectParts.push(hasCreatedAt ? "t.created_at" : "0 AS created_at");
+  selectParts.push(hasMasterId ? "t.master_task_id" : "NULL AS master_task_id");
+  selectParts.push(hasYoutube ? "t.youtube_url" : "NULL AS youtube_url");
+  if (hasFamilyColumn) {
+    selectParts.push("t.family_id");
+  }
+
+  const joinMaster = tableExists("master_task");
+  if (joinMaster) {
+    selectParts.push("mt.youtube_url AS master_youtube");
+  }
+
+  let sql = `SELECT ${selectParts.join(", ")} FROM task t`;
+  if (joinMaster) {
+    sql += " LEFT JOIN master_task mt ON mt.id = t.master_task_id";
+  }
+
+  const filters = [];
+  const params = [];
+
+  if (hasFamilyColumn && scopedFamilyId) {
+    filters.push("t.family_id = ?");
+    params.push(scopedFamilyId);
+  }
+
+  if (hasStatus) {
+    filters.push("t.status = ?");
+    params.push(mode);
+  } else if (mode === "inactive") {
+    res.json([]);
+    return;
+  }
+
+  if (filters.length) {
+    sql += ` WHERE ${filters.join(" AND ")}`;
+  }
+
+  if (mode === "active" && hasSortOrder) {
+    if (hasUpdatedAt) {
+      sql += " ORDER BY t.sort_order ASC, t.updated_at DESC";
+    } else {
+      sql += " ORDER BY t.sort_order ASC, t.id DESC";
+    }
+  } else if (hasUpdatedAt) {
+    sql += " ORDER BY t.updated_at DESC";
+  } else {
+    sql += " ORDER BY t.id DESC";
+  }
+
+  const rows = db.prepare(sql).all(...params);
+  res.json(rows.map(mapTaskRow));
+});
+
 app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   if (!tableExists("task")) {
     res.status(404).json({ error: "not_found" });
@@ -1012,6 +1124,23 @@ app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) =>
     }
   }
 
+  if (body.sort_order !== undefined && columns.includes("sort_order")) {
+    const order = Number(body.sort_order);
+    if (!Number.isFinite(order)) {
+      res.status(400).json({ error: "invalid_sort_order" });
+      return;
+    }
+    fields.push("sort_order = ?");
+    params.push(Math.trunc(order));
+  }
+
+  if (!isMasterLinked && (body.youtubeUrl !== undefined || body.youtube_url !== undefined) && columns.includes("youtube_url")) {
+    const youtubeValue = body.youtubeUrl ?? body.youtube_url;
+    const normalizedYoutube = youtubeValue == null ? null : String(youtubeValue).trim() || null;
+    fields.push("youtube_url = ?");
+    params.push(normalizedYoutube);
+  }
+
   if (body.status !== undefined && columns.includes("status")) {
     fields.push("status = ?");
     params.push(String(body.status).trim().toLowerCase());
@@ -1048,6 +1177,53 @@ app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) =>
 
   const updated = db.prepare(selectSql).get(...selectParams);
   res.json({ ok: true, task: mapTaskRow(updated) });
+});
+
+app.delete("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+  if (!tableExists("task")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "invalid_id" });
+    return;
+  }
+
+  const columns = getTableColumns("task");
+  if (!columns.includes("id")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const hasFamilyColumn = columns.includes("family_id");
+  const scopedFamilyId = req.scope?.family_id ?? null;
+  if (MULTITENANT_ENFORCE && hasFamilyColumn && !scopedFamilyId) {
+    res.status(400).json({ error: "family_id required" });
+    return;
+  }
+
+  let sql = `DELETE FROM ${quoteIdent("task")} WHERE id = ?`;
+  const params = [id];
+  if (hasFamilyColumn && scopedFamilyId) {
+    sql += " AND family_id = ?";
+    params.push(scopedFamilyId);
+  }
+
+  try {
+    const info = db.prepare(sql).run(...params);
+    if (!info.changes) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+  } catch (err) {
+    console.error("[tasks.delete] failed", err);
+    res.status(500).json({ error: "delete_failed" });
+    return;
+  }
+
+  res.json({ ok: true });
 });
 
 app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
@@ -4665,7 +4841,7 @@ app.get("/api/child/resolve-user", (req, res) => {
   if (matches.length > 1) {
     res.status(409).json({
       error: "multiple matches",
-      matches: matches.map((m) => ({ id: m.id, family_id: m.family_id }))
+      matches: matches.map((m) => ({ id: m.id, family_id: m.family_id, name: m.name || "" }))
     });
     return;
   }
