@@ -116,6 +116,51 @@
   margin-bottom: 12px;
 }
 
+.admin-tabs {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-tab {
+  border: 1px solid var(--line, #e5e7eb);
+  background: #fff;
+  color: var(--muted, #6b7280);
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: box-shadow 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.admin-tab.is-active {
+  background: linear-gradient(135deg,#7c4dff,#5d34d6);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(93,52,214,0.25);
+  transform: translateY(-1px);
+}
+
+.admin-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.scope-note {
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.is-inactive-view,
+.is-scope-disabled {
+  display: none !important;
+}
+
 .master-toolbar {
   display: flex;
   flex-direction: column;

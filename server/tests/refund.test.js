@@ -22,8 +22,9 @@ import db from '../db.js';
 function ensureDefaultFamily() {
   const now = Date.now();
   db.prepare(
-    "INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)"
-  ).run(DEFAULT_FAMILY_ID, 'Default Family', now, now);
+    "INSERT OR IGNORE INTO family (id, name, status, created_at, updated_at) VALUES (?, ?, 'system', ?, ?)"
+  ).run(DEFAULT_FAMILY_ID, 'Master Templates', now, now);
+  db.prepare("UPDATE family SET name = ?, status = 'system' WHERE id = ?").run('Master Templates', DEFAULT_FAMILY_ID);
 }
 
 ensureDefaultFamily();

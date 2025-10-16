@@ -518,9 +518,9 @@ export async function testF1() {
       `);
       seedDb.prepare(
         `INSERT INTO family (id, name, email, status, created_at, updated_at)
-         VALUES (@id, @name, @email, 'active', @now, @now)
+         VALUES (@id, @name, @email, 'system', @now, @now)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=COALESCE(excluded.email, family.email), status=excluded.status, updated_at=excluded.updated_at`
-      ).run({ id: DEFAULT_FAMILY_ID, name: "Default Family", email: "default@example.com", now });
+      ).run({ id: DEFAULT_FAMILY_ID, name: "Master Templates", email: "default@example.com", now });
       const memberId = crypto.randomUUID();
       const taskId = crypto.randomUUID();
       const rewardId = crypto.randomUUID();

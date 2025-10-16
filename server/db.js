@@ -201,9 +201,12 @@ function enforceFamilyNotNull(db) {
   `);
   db.prepare(`
     INSERT INTO ${q("family")} (id, name, email, status, admin_key, created_at, updated_at)
-    SELECT 'default', 'Default Family', NULL, 'active', NULL, datetime('now'), datetime('now')
+    SELECT 'default', 'Master Templates', NULL, 'system', NULL, datetime('now'), datetime('now')
     WHERE NOT EXISTS (SELECT 1 FROM ${q("family")} WHERE id = 'default')
   `).run();
+  db.prepare(
+    `UPDATE ${q("family")} SET name = 'Master Templates', status = 'system' WHERE id = 'default'`
+  ).run();
 
   // 1) Detect if we even need to migrate
   const pragma = db.prepare(`PRAGMA table_info(${q("member")})`).all();
