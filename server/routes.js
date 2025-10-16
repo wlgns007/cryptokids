@@ -29,11 +29,15 @@ router.get("/api/families", (req, res) => {
     if (!row) return res.status(404).json({ error: "not found" });
     return res.json(row);
   }
-  const rows = db
-    .prepare(
-      `SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id <> 'default' ORDER BY created_at DESC`
-    )
-    .all();
+
+  const includeInactive = String(req.query.include_inactive || "0").trim() === "1";
+  let sql =
+    "SELECT id, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
+  if (!includeInactive) {
+    sql += " AND status = 'active'";
+  }
+  sql += " ORDER BY created_at DESC";
+  const rows = db.prepare(sql).all();
   res.json(rows);
 });
 
@@ -180,14 +184,107 @@ router.post("/api/families/:familyId/tasks/from-master", express.json(), (req, r
   const mt = db.prepare(`SELECT * FROM master_task WHERE id = ? AND status = 'active'`).get(master_task_id);
   if (!mt) return res.status(404).json({ error: "template not found or inactive" });
 
-  const now = Math.floor(Date.now() / 1000);
   const id = crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO task (id, family_id, title, description, icon, points, status, master_task_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`
-  ).run(id, familyId, mt.title, mt.description, mt.icon, mt.base_points, mt.id, now, now);
+  const now = Date.now();
+  const columns = ["id", "family_id"];
+  const values = [id, familyId];
+
+  if (hasColumn(db, "task", "title")) {
+    columns.push("title");
+    values.push(mt.title);
+  }
+  if (hasColumn(db, "task", "name")) {
+    columns.push("name");
+    values.push(mt.title);
+  }
+  if (hasColumn(db, "task", "description")) {
+    columns.push("description");
+    values.push(mt.description);
+  }
+  if (hasColumn(db, "task", "icon")) {
+    columns.push("icon");
+    values.push(mt.icon);
+  }
+  if (hasColumn(db, "task", "points")) {
+    columns.push("points");
+    values.push(mt.base_points);
+  }
+  if (hasColumn(db, "task", "base_points")) {
+    columns.push("base_points");
+    values.push(mt.base_points);
+  }
+  if (hasColumn(db, "task", "status")) {
+    columns.push("status");
+    values.push("active");
+  }
+  if (hasColumn(db, "task", "master_task_id")) {
+    columns.push("master_task_id");
+    values.push(mt.id);
+  }
+  if (hasColumn(db, "task", "sort_order")) {
+    columns.push("sort_order");
+    values.push(0);
+  }
+  if (hasColumn(db, "task", "created_at")) {
+    columns.push("created_at");
+    values.push(now);
+  }
+  if (hasColumn(db, "task", "updated_at")) {
+    columns.push("updated_at");
+    values.push(now);
+  }
+
+  const placeholders = columns.map(() => "?");
+  const sql = `INSERT INTO task (${columns.map((col) => `"${col}"`).join(", ")}) VALUES (${placeholders.join(", ")})`;
+  db.prepare(sql).run(...values);
 
   res.status(201).json({ id });
+});
+
+router.delete("/api/families/:id", (req, res) => {
+  const ctx = resolveAdminContext(db, readAdminKey(req));
+  if (ctx.role !== "master") return res.status(403).json({ error: "forbidden" });
+
+  const id = (req.params?.id || "").toString().trim();
+  if (!id) return res.status(400).json({ error: "invalid id" });
+  if (id.toLowerCase() === "default") {
+    return res.status(400).json({ error: "cannot delete default family" });
+  }
+
+  db.exec("PRAGMA foreign_keys=ON; BEGIN");
+  try {
+    db.prepare(`DELETE FROM holds   WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM history WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM reward  WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM task    WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM member  WHERE family_id = ?`).run(id);
+    const info = db.prepare(`DELETE FROM family WHERE id = ?`).run(id);
+    db.exec("COMMIT");
+    if (!info.changes) {
+      return res.status(404).json({ error: "not found" });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    db.exec("ROLLBACK");
+  }
+
+  try {
+    db.exec("PRAGMA foreign_keys=OFF; BEGIN");
+    db.prepare(`DELETE FROM holds   WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM history WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM reward  WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM task    WHERE family_id = ?`).run(id);
+    db.prepare(`DELETE FROM member  WHERE family_id = ?`).run(id);
+    const info = db.prepare(`DELETE FROM family WHERE id = ?`).run(id);
+    db.exec("COMMIT; PRAGMA foreign_keys=ON;");
+    if (!info.changes) {
+      return res.status(404).json({ error: "not found" });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    db.exec("ROLLBACK; PRAGMA foreign_keys=ON;");
+    return res.status(500).json({ error: "delete failed" });
+  }
 });
 
 // HARD DELETE reward and its dependents (master-only)

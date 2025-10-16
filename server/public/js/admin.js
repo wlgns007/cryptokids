@@ -210,7 +210,8 @@ function initAdmin() {
     familyId: null,
     families: [],
     currentFamilyId: null,
-    masterView: 'templates'
+    masterView: 'templates',
+    showInactiveFamilies: false
   };
   const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
 
@@ -223,11 +224,11 @@ function initAdmin() {
   const familyScopeSummary = $k('familyScopeSummary');
   const familySearchForm = $k('familySearchForm');
   const familySearchInput = $k('familySearchInput');
-  const familyManagementButton = $k('btnFamilyManagement');
   const familyManagementPanel = $k('familyManagementPanel');
   const familiesRefreshButton = $k('btnFamiliesRefresh');
   const familyListTableBody = $k('familyListTableBody');
   const familyListEmptyRow = $k('familyListEmpty');
+  const familyIncludeInactiveToggle = $k('familyIncludeInactive');
   const familyCreateForm = $k('familyCreateForm');
   const familyCreateNameInput = $k('familyCreateName');
   const familyCreateFirstNameInput = $k('familyCreateFirstName');
@@ -357,7 +358,8 @@ function initAdmin() {
         role: adminState.role,
         family_id: adminState.familyId,
         currentFamilyId: adminState.currentFamilyId,
-        masterView: adminState.masterView
+        masterView: adminState.masterView,
+        showInactiveFamilies: adminState.showInactiveFamilies
       });
     }
   }
@@ -1099,7 +1101,6 @@ function initAdmin() {
     if (familySearchInput) familySearchInput.disabled = activeRole !== 'master';
     const searchSubmit = familySearchForm?.querySelector('button[type="submit"]');
     if (searchSubmit) searchSubmit.disabled = activeRole !== 'master';
-    if (familyManagementButton) familyManagementButton.disabled = activeRole !== 'master';
     if (familiesRefreshButton) familiesRefreshButton.disabled = activeRole !== 'master';
     for (const node of roleVisibilityNodes) {
       if (!node) continue;
@@ -1134,6 +1135,7 @@ function initAdmin() {
     adminState.families = [];
     adminState.currentFamilyId = null;
     adminState.masterView = 'templates';
+    adminState.showInactiveFamilies = false;
     window.currentFamilyId = null;
     saveAdminContext(null);
     updateWhoamiBanner();
@@ -1162,12 +1164,18 @@ function initAdmin() {
         adminState.masterView = 'families';
       }
       adminState.role = nextRole;
+      if (adminState.role !== 'master') {
+        adminState.showInactiveFamilies = false;
+      }
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'masterView')) {
       adminState.masterView = partial.masterView === 'families' ? 'families' : 'templates';
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
       adminState.familyId = normalizeScopeId(partial.family_id);
+    }
+    if (Object.prototype.hasOwnProperty.call(partial, 'showInactiveFamilies')) {
+      adminState.showInactiveFamilies = !!partial.showInactiveFamilies;
     }
     const hasCurrentFamilyId = Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId');
     if (Object.prototype.hasOwnProperty.call(partial, 'families')) {
@@ -1199,7 +1207,8 @@ function initAdmin() {
         role: adminState.role,
         family_id: adminState.familyId,
         currentFamilyId: adminState.currentFamilyId,
-        masterView: adminState.masterView
+        masterView: adminState.masterView,
+        showInactiveFamilies: adminState.showInactiveFamilies
       });
     }
     updateWhoamiBanner();
@@ -1428,7 +1437,12 @@ function initAdmin() {
   }
 
   async function fetchFamiliesStrict() {
-    const { res, body } = await adminFetch('/api/families', { skipScope: true });
+    const params = new URLSearchParams();
+    if (adminState.showInactiveFamilies) {
+      params.set('include_inactive', '1');
+    }
+    const url = params.toString() ? `/api/families?${params.toString()}` : '/api/families';
+    const { res, body } = await adminFetch(url, { skipScope: true });
     if (res.status === 401) {
       const error = new Error(ADMIN_INVALID_MSG);
       error.code = 'UNAUTHORIZED';
@@ -1478,6 +1492,14 @@ function initAdmin() {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      skipScope: true
+    });
+  }
+
+  async function deleteFamily(id) {
+    if (!id) throw new Error('Family ID required');
+    return apiFetch(`/api/families/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
       skipScope: true
     });
   }
@@ -1545,6 +1567,9 @@ function initAdmin() {
     if (family.id && family.id === adminState.currentFamilyId) {
       row.classList.add('is-active');
     }
+    if (normalizedStatus === 'inactive') {
+      row.classList.add('is-inactive');
+    }
 
     const idCell = document.createElement('td');
     idCell.textContent = family.id || '—';
@@ -1575,12 +1600,17 @@ function initAdmin() {
     statusSelect.className = 'family-status-select';
     const normalizedStatus = (family.status ?? 'active').toString().trim().toLowerCase() || 'active';
     statusSelect.dataset.originalValue = normalizedStatus;
+    const deleteOptionValue = '__delete__';
     for (const option of statusOptions) {
       const opt = document.createElement('option');
       opt.value = option;
       opt.textContent = option.charAt(0).toUpperCase() + option.slice(1);
       statusSelect.appendChild(opt);
     }
+    const deleteOpt = document.createElement('option');
+    deleteOpt.value = deleteOptionValue;
+    deleteOpt.textContent = 'Delete permanently';
+    statusSelect.appendChild(deleteOpt);
     if (statusSelect.value !== normalizedStatus) {
       statusSelect.value = normalizedStatus;
     }
@@ -1597,6 +1627,10 @@ function initAdmin() {
     row.appendChild(actionsCell);
 
     const evaluateDirtyState = () => {
+      if (statusSelect.value === deleteOptionValue) {
+        saveButton.disabled = true;
+        return;
+      }
       const currentName = nameInput.value.trim();
       const originalNameNormalized = (nameInput.dataset.originalValue || '').trim();
       const currentStatus = statusSelect.value;
@@ -1612,7 +1646,25 @@ function initAdmin() {
 
     nameInput.addEventListener('input', evaluateDirtyState);
     emailInput.addEventListener('input', evaluateDirtyState);
-    statusSelect.addEventListener('change', evaluateDirtyState);
+    statusSelect.addEventListener('change', async () => {
+      if (statusSelect.value === deleteOptionValue) {
+        statusSelect.value = statusSelect.dataset.originalValue || normalizedStatus;
+        if (!confirm('Delete this family permanently?')) {
+          evaluateDirtyState();
+          return;
+        }
+        try {
+          await deleteFamily(family.id);
+          toast('Family deleted.');
+          await refreshFamiliesFromServer({ silent: false });
+        } catch (error) {
+          const message = presentError(error?.body?.error || error?.message, 'Delete failed');
+          toast(message, 'error');
+        }
+        return;
+      }
+      evaluateDirtyState();
+    });
     saveButton.addEventListener('click', () =>
       handleFamilyRowSave({ id: family.id, nameInput, emailInput, statusSelect, button: saveButton })
     );
@@ -1623,6 +1675,10 @@ function initAdmin() {
   function renderFamilyManagement() {
     if (!familyManagementPanel) return;
     const isMaster = adminState.role === 'master';
+    if (familyIncludeInactiveToggle) {
+      familyIncludeInactiveToggle.checked = !!adminState.showInactiveFamilies;
+      familyIncludeInactiveToggle.disabled = !isMaster;
+    }
     if (!isMaster) {
       if (familyListTableBody) {
         familyListTableBody.innerHTML = '';
@@ -2007,9 +2063,10 @@ details.member-fold .summary-value {
     await reloadScopedData();
   });
 
-  familyManagementButton?.addEventListener('click', () => {
-    if (adminState.role !== 'master') return;
-    jumpTo('#card-family-management');
+  familyIncludeInactiveToggle?.addEventListener('change', async () => {
+    const include = !!familyIncludeInactiveToggle.checked;
+    setAdminState({ showInactiveFamilies: include });
+    await refreshFamiliesFromServer({ silent: true });
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -2276,7 +2333,7 @@ details.member-fold .summary-value {
   }
 
   async function loadAvailableTaskTemplates() {
-    const familyId = requireFamilyId({ silent: true });
+    const familyId = requireFamilyId();
     const list = await apiFetch(
       `/api/families/${encodeURIComponent(familyId)}/master-tasks/available`
     );
@@ -2287,13 +2344,13 @@ details.member-fold .summary-value {
     if (!masterTaskId) {
       throw new Error('masterTaskId required');
     }
-    const familyId = requireFamilyId({ silent: true });
+    const familyId = requireFamilyId();
     await apiFetch(`/api/families/${encodeURIComponent(familyId)}/tasks/from-master`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ master_task_id: masterTaskId })
     });
-    await loadTemplates();
+    await reloadEarnPointsTable('active');
   }
 
   async function fetchFamilyDetail(familyId) {
@@ -4665,81 +4722,160 @@ setupScanner({
 
   // ===== Earn templates =====
   const earnTableBody = $('earnTable')?.querySelector('tbody');
-  const inactiveModal = $('inactiveTemplatesModal');
-  const inactiveTableBody = $('inactiveTemplatesTable')?.querySelector('tbody');
-  const inactiveEmpty = $('inactiveTemplatesEmpty');
+  const btnViewDeactivated = $('btn-view-deactivated');
+  const btnReloadActive = $('btn-reload-active');
+  const earnTasksState = { mode: 'active', cachedActive: [] };
   let earnTemplates = [];
 
-  async function loadTemplates() {
+  function updateEarnTasksControls() {
+    if (btnViewDeactivated) {
+      btnViewDeactivated.disabled = earnTasksState.mode === 'inactive';
+    }
+    if (btnReloadActive) {
+      btnReloadActive.disabled = earnTasksState.mode === 'active';
+    }
+  }
+
+  async function reloadEarnPointsTable(modeOverride) {
     let familyId;
     try {
       familyId = requireFamilyId({ silent: true });
     } catch (error) {
-      toast('Select a family to manage templates.', 'error');
+      earnTemplates = [];
+      if (earnTableBody) {
+        earnTableBody.innerHTML = '<tr><td colspan="9" class="muted">Select a family to manage tasks.</td></tr>';
+      }
+      if (modeOverride !== undefined) {
+        toast('Select a family to manage tasks.', 'error');
+      }
+      updateEarnTasksControls();
       return;
     }
+
+    const mode = modeOverride || earnTasksState.mode || 'active';
+    earnTasksState.mode = mode;
+    updateEarnTasksControls();
+
     try {
-      const params = new URLSearchParams({ sort: 'sort_order', family_id: familyId });
-      const { res, body } = await adminFetch(`/api/earn-templates?${params.toString()}`);
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
-      if (!res.ok){
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'failed');
-        throw new Error(msg);
+      const params = new URLSearchParams({ family_id: familyId, mode });
+      const data = await apiFetch(`/api/admin/earn-templates?${params.toString()}`);
+      earnTemplates = Array.isArray(data) ? data : [];
+      if (mode === 'active') {
+        earnTasksState.cachedActive = earnTemplates.slice();
+      } else {
+        try {
+          const activeParams = new URLSearchParams({ family_id: familyId, mode: 'active' });
+          const activeRows = await apiFetch(`/api/admin/earn-templates?${activeParams.toString()}`);
+          earnTasksState.cachedActive = Array.isArray(activeRows) ? activeRows : [];
+        } catch (err) {
+          console.warn('Failed to refresh active task cache', err);
+        }
       }
-      const data = Array.isArray(body) ? body : [];
-      earnTemplates = data;
       renderTemplates();
       populateQuickTemplates();
-      renderInactiveTemplates();
     } catch (err) {
-      toast(err.message || 'Load templates failed', 'error');
+      const message = err?.message || 'Load tasks failed';
+      if (earnTableBody) {
+        earnTableBody.innerHTML = `<tr><td colspan="9" class="muted">${message}</td></tr>`;
+      }
+      toast(message, 'error');
     }
   }
-  $('btnReloadTemplates')?.addEventListener('click', loadTemplates);
+
+  async function loadTemplates(options = {}) {
+    const mode = options.mode || earnTasksState.mode || 'active';
+    await reloadEarnPointsTable(mode);
+  }
 
   function renderTemplates() {
     if (!earnTableBody) return;
-    const query = $('templateSearch').value.trim().toLowerCase();
+    const query = ($('templateSearch')?.value || '').trim().toLowerCase();
     earnTableBody.innerHTML = '';
-    const rows = earnTemplates.filter(t => !query || t.title.toLowerCase().includes(query) || (t.description || '').toLowerCase().includes(query));
+    const rows = (Array.isArray(earnTemplates) ? earnTemplates : []).filter((task) => {
+      if (!query) return true;
+      const title = (task.title || '').toLowerCase();
+      const description = (task.description || '').toLowerCase();
+      return title.includes(query) || description.includes(query);
+    });
+
+    if (!rows.length) {
+      const emptyRow = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 9;
+      cell.className = 'muted';
+      cell.textContent = earnTasksState.mode === 'inactive' ? 'No deactivated tasks.' : 'No tasks found.';
+      emptyRow.appendChild(cell);
+      earnTableBody.appendChild(emptyRow);
+      return;
+    }
+
     for (const tpl of rows) {
       const tr = document.createElement('tr');
-      if (!tpl.active) tr.classList.add('inactive');
+      if ((tpl.status || '').toLowerCase() !== 'active') {
+        tr.classList.add('inactive');
+      }
+      const youtubeLink = tpl.youtube_url || tpl.master_youtube || '';
+      const updatedValue = Number(tpl.updated_at ?? 0);
+      const updatedMs = updatedValue > 0 && updatedValue < 10_000_000_000 ? updatedValue * 1000 : updatedValue;
+      const updatedDisplay = updatedMs ? formatTime(updatedMs) : '—';
+      const statusLabel = (tpl.status || 'active').toString();
+      const friendlyStatus = statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1);
+
       tr.innerHTML = `
         <td>${tpl.id}</td>
-        <td>${tpl.title}</td>
+        <td>${tpl.title || ''}</td>
         <td>${tpl.points}</td>
         <td>${tpl.description || ''}</td>
-        <td>${tpl.youtube_url ? `<a class="video-link" href="${tpl.youtube_url}" target="_blank" rel="noopener" title="Open video"><span aria-hidden="true">🎬</span><span class="sr-only">Video</span></a>` : ''}</td>
-        <td>${tpl.active ? 'Yes' : 'No'}</td>
-        <td>${tpl.sort_order}</td>
-        <td>${formatTime(tpl.updated_at * 1000)}</td>
+        <td>${youtubeLink ? `<a class="video-link" href="${youtubeLink}" target="_blank" rel="noopener" title="Open video"><span aria-hidden="true">🎬</span><span class="sr-only">Video</span></a>` : ''}</td>
+        <td>${friendlyStatus}</td>
+        <td>${Number.isFinite(Number(tpl.sort_order)) ? Number(tpl.sort_order) : 0}</td>
+        <td>${updatedDisplay}</td>
         <td class="actions"></td>
       `;
-      const videoLink = tr.querySelector('a[href]');
-      if (videoLink) {
-        videoLink.dataset.youtube = videoLink.href;
-        videoLink.addEventListener('click', (event) => {
+
+      const videoLinkEl = tr.querySelector('a[href]');
+      if (videoLinkEl) {
+        videoLinkEl.dataset.youtube = youtubeLink;
+        videoLinkEl.addEventListener('click', (event) => {
           event.preventDefault();
-          const url = videoLink.dataset.youtube;
+          const url = videoLinkEl.dataset.youtube;
           if (url) openVideoModal(url);
         });
       }
+
       const actions = tr.querySelector('.actions');
-      const isMasterLinkedTask = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
-      const editBtn = document.createElement('button');
-      editBtn.textContent = isMasterLinkedTask ? 'Adjust points' : 'Edit';
-      if (isMasterLinkedTask) {
-        editBtn.title = 'Title and description managed by master template';
+      if (!actions) {
+        earnTableBody.appendChild(tr);
+        continue;
       }
-      editBtn.addEventListener('click', () => editTemplate(tpl));
-      const toggleBtn = document.createElement('button');
-      toggleBtn.textContent = tpl.active ? 'Deactivate' : 'Activate';
-      toggleBtn.addEventListener('click', () => updateTemplate(tpl.id, { active: tpl.active ? 0 : 1 }));
-      const delBtn = document.createElement('button');
-      delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', () => deleteTemplate(tpl.id));
-      actions.append(editBtn, toggleBtn, delBtn);
+
+      const isMasterLinkedTask = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
+
+      if (earnTasksState.mode === 'active') {
+        const editBtn = document.createElement('button');
+        editBtn.textContent = isMasterLinkedTask ? 'Adjust points' : 'Edit';
+        if (isMasterLinkedTask) {
+          editBtn.title = 'Title and description managed by master template';
+        }
+        editBtn.addEventListener('click', () => editTemplate(tpl));
+        actions.appendChild(editBtn);
+
+        const deactivateBtn = document.createElement('button');
+        deactivateBtn.textContent = 'Deactivate';
+        deactivateBtn.addEventListener('click', () => updateTaskStatus(tpl.id, 'inactive'));
+        actions.appendChild(deactivateBtn);
+      } else {
+        const reactivateBtn = document.createElement('button');
+        reactivateBtn.textContent = 'Reactivate';
+        reactivateBtn.addEventListener('click', () => updateTaskStatus(tpl.id, 'active'));
+        actions.appendChild(reactivateBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteTask(tpl.id));
+        actions.appendChild(deleteBtn);
+      }
+
       if (isMasterLinkedTask) {
         const titleCell = tr.querySelector('td:nth-child(2)');
         if (titleCell) {
@@ -4750,74 +4886,13 @@ setupScanner({
           titleCell.appendChild(origin);
         }
       }
+
       earnTableBody.appendChild(tr);
     }
   }
   $('templateSearch')?.addEventListener('input', renderTemplates);
-
-  function renderInactiveTemplates() {
-    if (!inactiveTableBody) return;
-    const rows = earnTemplates.filter(t => !t.active);
-    inactiveTableBody.innerHTML = '';
-    if (inactiveEmpty) inactiveEmpty.hidden = rows.length !== 0;
-    if (!rows.length) return;
-    for (const tpl of rows) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${tpl.id}</td>
-        <td>${tpl.title}</td>
-        <td>${tpl.points}</td>
-        <td>${tpl.description || ''}</td>
-        <td>${tpl.sort_order}</td>
-        <td>${formatTime(tpl.updated_at * 1000)}</td>
-        <td class="actions"></td>
-      `;
-      const videoLink = tr.querySelector('a[href]');
-      if (videoLink) {
-        videoLink.dataset.youtube = videoLink.href;
-        videoLink.addEventListener('click', (event) => {
-          event.preventDefault();
-          const url = videoLink.dataset.youtube;
-          if (url) openVideoModal(url);
-        });
-      }
-      const actions = tr.querySelector('.actions');
-      if (actions) {
-        const reactivateBtn = document.createElement('button');
-        reactivateBtn.textContent = 'Reactivate';
-        reactivateBtn.addEventListener('click', async () => {
-          await updateTemplate(tpl.id, { active: 1 });
-          renderInactiveTemplates();
-        });
-        actions.appendChild(reactivateBtn);
-      }
-      inactiveTableBody.appendChild(tr);
-    }
-  }
-
-  function openInactiveTemplatesModal() {
-    if (!inactiveModal) return;
-    renderInactiveTemplates();
-    inactiveModal.classList.add('open');
-    inactiveModal.setAttribute('aria-hidden', 'false');
-  }
-
-  function closeInactiveTemplatesModal() {
-    if (!inactiveModal) return;
-    inactiveModal.classList.remove('open');
-    inactiveModal.setAttribute('aria-hidden', 'true');
-  }
-
-  $('btnShowInactiveTemplates')?.addEventListener('click', openInactiveTemplatesModal);
-  $('btnInactiveTemplatesClose')?.addEventListener('click', closeInactiveTemplatesModal);
-  inactiveModal?.addEventListener('click', (event) => {
-    if (event.target === inactiveModal) closeInactiveTemplatesModal();
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && inactiveModal?.classList.contains('open')) {
-      closeInactiveTemplatesModal();
-    }
-  });
+  btnReloadActive?.addEventListener('click', () => reloadEarnPointsTable('active'));
+  btnViewDeactivated?.addEventListener('click', () => reloadEarnPointsTable('inactive'));
 
   document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
     const box = document.querySelector('#tpl-list');
@@ -4874,76 +4949,76 @@ setupScanner({
   });
 
   async function editTemplate(tpl) {
+    if (!tpl) return;
     const isMasterLinked = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
     if (isMasterLinked) {
       const points = Number(prompt('Points', tpl.points));
       if (!Number.isFinite(points) || points <= 0) return toast('Invalid points', 'error');
-      await updateTemplate(tpl.id, { points });
+      await updateTask(tpl.id, { points });
       return;
     }
+
     const title = prompt('Title', tpl.title);
     if (!title) return;
     const points = Number(prompt('Points', tpl.points));
     if (!Number.isFinite(points) || points <= 0) return toast('Invalid points', 'error');
     const description = prompt('Description', tpl.description || '') || '';
-    const youtube_url = prompt('YouTube URL', tpl.youtube_url || '') || null;
-    const sort_order = Number(prompt('Sort order', tpl.sort_order));
-    try {
-      const familyId = requireFamilyId();
-      const payload = withFamilyInBody({ title, points, description, youtube_url, sort_order }, familyId);
-      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(tpl.id)}`, familyId);
-      const { res, body } = await adminFetch(url, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
-      if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'update failed');
-        throw new Error(msg);
-      }
-      toast('Template updated');
-      loadTemplates();
-    } catch (err) {
-      toast(err.message || 'Update failed', 'error');
+    const youtubeInput = prompt('YouTube URL', tpl.youtube_url || '') || '';
+    const sortPrompt = prompt('Sort order', Number.isFinite(Number(tpl.sort_order)) ? tpl.sort_order : 0);
+    const sortValue = Number(sortPrompt);
+
+    const payload = {
+      title,
+      points,
+      description,
+      youtube_url: youtubeInput.trim() ? youtubeInput.trim() : null
+    };
+    if (Number.isFinite(sortValue)) {
+      payload.sort_order = sortValue;
     }
+    await updateTask(tpl.id, payload);
   }
 
-  async function updateTemplate(id, body) {
+  async function updateTaskStatus(id, status) {
+    const normalized = (status || '').toString().trim().toLowerCase();
+    const message = normalized === 'inactive' ? 'Task deactivated' : 'Task reactivated';
+    await updateTask(id, { status: normalized }, { successMessage: message });
+  }
+
+  async function updateTask(id, body = {}, { successMessage } = {}) {
     try {
       const familyId = requireFamilyId();
-      const payload = withFamilyInBody(body, familyId);
-      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(id)}`, familyId);
+      const url = appendFamilyQuery(`/api/tasks/${encodeURIComponent(id)}`, familyId);
       const { res, body: respBody } = await adminFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(body)
       });
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (res.status === 401) { toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
-        const msg = (respBody && respBody.error) || (typeof respBody === 'string' ? respBody : 'update failed');
+        const msg = presentError(respBody?.error, 'Update failed');
         throw new Error(msg);
       }
-      toast('Template saved');
-      await loadTemplates();
+      toast(successMessage || 'Task updated');
+      await reloadEarnPointsTable();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
     }
   }
 
-  async function deleteTemplate(id) {
-    if (!confirm('Delete this template?')) return;
+  async function deleteTask(id) {
+    if (!confirm('Delete this task permanently?')) return;
     try {
       const familyId = requireFamilyId();
-      const url = appendFamilyQuery(`/api/earn-templates/${encodeURIComponent(id)}`, familyId);
+      const url = appendFamilyQuery(`/api/tasks/${encodeURIComponent(id)}`, familyId);
       const { res, body } = await adminFetch(url, { method: 'DELETE' });
-      if (res.status === 401){ toast(ADMIN_INVALID_MSG, 'error'); return; }
+      if (res.status === 401) { toast(ADMIN_INVALID_MSG, 'error'); return; }
       if (!res.ok) {
-        const msg = (body && body.error) || (typeof body === 'string' ? body : 'delete failed');
+        const msg = presentError(body?.error, 'Delete failed');
         throw new Error(msg);
       }
-      toast('Template deleted');
-      loadTemplates();
+      toast('Task deleted');
+      await reloadEarnPointsTable();
     } catch (err) {
       toast(err.message || 'Delete failed', 'error');
     }
@@ -4953,7 +5028,9 @@ setupScanner({
     const select = $('quickTemplate');
     if (!select) return;
     select.innerHTML = '<option value="">Select template</option>';
-    for (const tpl of earnTemplates.filter(t => t.active)) {
+    const source = earnTasksState.mode === 'active' ? earnTemplates : earnTasksState.cachedActive;
+    const rows = Array.isArray(source) ? source : [];
+    for (const tpl of rows.filter((task) => (task.active !== undefined ? task.active : (task.status || '').toLowerCase() === 'active'))) {
       const opt = document.createElement('option');
       opt.value = tpl.id;
       opt.textContent = `${tpl.title} (+${tpl.points})`;

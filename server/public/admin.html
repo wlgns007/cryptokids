@@ -976,8 +976,7 @@
       display: none;
     }
 
-    #historyModal,
-    #inactiveTemplatesModal {
+    #historyModal {
       position: fixed;
       inset: 0;
       background: rgba(15, 23, 42, 0.45);
@@ -988,13 +987,11 @@
       z-index: 1000;
     }
 
-    #historyModal.open,
-    #inactiveTemplatesModal.open {
+    #historyModal.open {
       display: flex;
     }
 
-    #historyModal .panel,
-    #inactiveTemplatesModal .panel {
+    #historyModal .panel {
       background: var(--card);
       border-radius: 18px;
       width: min(920px, 100%);
@@ -1004,8 +1001,7 @@
       overflow: hidden;
     }
 
-    #historyModal header,
-    #inactiveTemplatesModal header {
+    #historyModal header {
       padding: 18px 24px;
       display: flex;
       align-items: center;
@@ -1014,16 +1010,22 @@
       border-bottom: 1px solid var(--line);
     }
 
-    #historyModal header h3,
-    #inactiveTemplatesModal header h3 {
+    #historyModal header h3 {
       margin: 0;
     }
 
-    #historyModal .body,
-    #inactiveTemplatesModal .body {
+    #historyModal .body {
       padding: 16px 24px 24px;
       display: grid;
       gap: 16px;
+    }
+
+    .family-table tr.is-inactive {
+      opacity: 0.6;
+    }
+
+    .family-management-controls {
+      margin-bottom: 12px;
     }
 
     #historyModal .filters {
@@ -1420,7 +1422,6 @@
                 </select>
               </label>
               <div class="master-toolbar-actions">
-                <button type="button" id="btnFamilyManagement">Family Management</button>
                 <form id="familySearchForm" class="master-toolbar-search" autocomplete="off">
                   <label class="sr-only" for="familySearchInput">Search by Family ID</label>
                   <input id="familySearchInput" name="familyId" type="text" placeholder="Family ID">
@@ -1480,6 +1481,12 @@
           <div id="familyManagementPanel" class="stack family-management">
             <div class="family-management-list">
               <h3>Existing families</h3>
+              <div class="family-management-controls">
+                <label class="toggle" style="display:flex; align-items:center; gap:8px;">
+                  <input type="checkbox" id="familyIncludeInactive">
+                  <span>View inactive families</span>
+                </label>
+              </div>
               <div class="table-responsive">
                 <table class="family-table">
                   <thead>
@@ -1833,8 +1840,8 @@
           <div class="stack" id="earnMenuFields" hidden>
             <div class="row">
               <button id="btn-add-task-template" class="btn-primary">Add Template</button>
-              <button id="btnReloadTemplates">Reload</button>
-              <button id="btnShowInactiveTemplates">View Deactivated</button>
+              <button id="btn-reload-active">Show Active</button>
+              <button id="btn-view-deactivated">View Deactivated</button>
               <label style="flex:1;">Search
                 <input id="templateSearch" type="text" placeholder="search templates">
               </label>
@@ -1858,7 +1865,7 @@
                     <th>Points</th>
                     <th>Description</th>
                     <th>YouTube</th>
-                    <th>Active</th>
+                    <th>Status</th>
                     <th>Sort</th>
                     <th>Updated</th>
                     <th></th>
@@ -1938,34 +1945,6 @@
         </div>
       </section>
     </main>
-  </div>
-
-  <div id="inactiveTemplatesModal" aria-hidden="true">
-    <div class="panel">
-      <header>
-        <h3>Deactivated Templates</h3>
-        <button id="btnInactiveTemplatesClose">Close</button>
-      </header>
-      <div class="body">
-        <p class="muted" id="inactiveTemplatesEmpty" hidden>No deactivated templates.</p>
-        <div style="overflow:auto; max-height:60vh;">
-          <table class="table" id="inactiveTemplatesTable">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Points</th>
-                <th>Description</th>
-                <th>Sort</th>
-                <th>Updated</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
   </div>
 
   <div id="historyModal">

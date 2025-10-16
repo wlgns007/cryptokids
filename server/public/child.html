@@ -393,6 +393,59 @@
       height: 100%;
     }
 
+    #child-chooser .modal-dialog {
+      width: min(90vw, 420px);
+      max-width: 420px;
+      max-height: 80vh;
+      padding: 24px;
+      background: var(--card);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      aspect-ratio: auto;
+      box-shadow: 0 20px 48px rgba(15, 23, 42, 0.28);
+    }
+
+    #child-chooser .modal-body {
+      height: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 0;
+      overflow-y: auto;
+      max-height: calc(80vh - 96px);
+    }
+
+    #child-chooser .modal-close {
+      background: transparent;
+      color: var(--muted-strong);
+      font-size: 20px;
+    }
+
+    #child-chooser .choose-child {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: linear-gradient(135deg, rgba(124, 77, 255, 0.16), rgba(124, 77, 255, 0.32));
+      color: var(--fg);
+      border: 1px solid rgba(124, 77, 255, 0.35);
+      border-radius: 14px;
+      padding: 12px 16px;
+      font-size: 15px;
+      font-weight: 600;
+      text-align: left;
+    }
+
+    #child-chooser .choose-child:hover,
+    #child-chooser .choose-child:focus-visible {
+      outline: none;
+      transform: translateY(-1px);
+      box-shadow: 0 12px 24px rgba(124, 77, 255, 0.24);
+    }
+
     h2 {
       margin: 0;
       font-size: 22px;
@@ -763,6 +816,18 @@
     </div>
     <p id="child-login-msg" class="text-sm mt-2"></p>
   </section>
+
+  <div id="child-chooser" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-dialog">
+      <button class="modal-close" aria-label="Close" data-close>×</button>
+      <div class="modal-body">
+        <h3>Choose your account</h3>
+        <p class="muted">We found multiple matches. Pick your profile to continue.</p>
+        <div id="child-chooser-list" class="stack" style="gap:12px;"></div>
+      </div>
+    </div>
+  </div>
 
   <div id="child-content" class="container hidden">
     <div class="flex items-center gap-3 mb-2">
