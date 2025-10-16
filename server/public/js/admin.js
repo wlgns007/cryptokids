@@ -1136,7 +1136,7 @@ details.member-fold .summary-value {
 
   familyManagementButton?.addEventListener('click', () => {
     if (adminState.role !== 'master') return;
-    jumpToCard('#card-family-management');
+    jumpTo('#card-family-management');
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -3851,30 +3851,57 @@ setupScanner({
 }
 
   function setupCollapsibles() {
-    document.querySelectorAll('[data-collapsible] .card-toggle').forEach((btn) => {
-      if (btn.dataset.collapsibleBound === 'true') return;
+    const mainCards = document.querySelectorAll(
+      '#card-family-scope, #card-family-management, #card-member-management'
+    );
+    mainCards.forEach((card) => {
+      const btn = card.querySelector('.card-toggle');
+      if (!btn || btn.dataset.collapsibleBound === 'true') return;
       btn.dataset.collapsibleBound = 'true';
+      const isExpanded = btn.getAttribute('aria-expanded') === 'true';
+      card.classList.toggle('collapsed', !isExpanded);
       btn.addEventListener('click', () => {
-        const card = btn.closest('.card');
-        if (!card) return;
         const expanded = btn.getAttribute('aria-expanded') === 'true';
         btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
         card.classList.toggle('collapsed', expanded);
       });
     });
+
+    document.querySelectorAll('#card-member-management .subcard').forEach((sub) => {
+      const btn = sub.querySelector('.subcard-toggle');
+      if (!btn || btn.dataset.collapsibleBound === 'true') return;
+      btn.dataset.collapsibleBound = 'true';
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      sub.classList.toggle('collapsed', !expanded);
+      btn.addEventListener('click', () => {
+        const isOpen = btn.getAttribute('aria-expanded') === 'true';
+        btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+        sub.classList.toggle('collapsed', isOpen);
+      });
+    });
   }
 
-  function jumpToCard(selector) {
+  function expandIfCollapsible(el) {
+    if (!el) return;
+    const card = el.closest('.card');
+    if (card && card.classList.contains('collapsed')) {
+      card.classList.remove('collapsed');
+      const toggle = card.querySelector('.card-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    }
+    const sub = el.closest('.subcard');
+    if (sub && sub.classList.contains('collapsed')) {
+      sub.classList.remove('collapsed');
+      const toggle = sub.querySelector('.subcard-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  function jumpTo(selector) {
     if (!selector) return;
     const el = document.querySelector(selector);
     if (!el) return;
-    if (el.classList.contains('collapsed')) {
-      const toggle = el.querySelector('.card-toggle');
-      if (toggle) {
-        toggle.setAttribute('aria-expanded', 'true');
-      }
-      el.classList.remove('collapsed');
-    }
+    expandIfCollapsible(el);
     if (typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -3889,7 +3916,7 @@ setupScanner({
       btn.addEventListener('click', (event) => {
         event.preventDefault();
         const target = btn.getAttribute('data-jump');
-        if (target) jumpToCard(target);
+        if (target) jumpTo(target);
       });
     });
     initAdmin();
