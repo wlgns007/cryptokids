@@ -238,11 +238,674 @@ function initAdmin() {
   const newFamilyCreateButton = $k('nf-create');
   const forgotKeySendButton = $k('fk-send');
   const roleVisibilityNodes = Array.from(document.querySelectorAll('[data-admin-role]'));
+  const pendingBanner = $k('pendingTemplatesBanner');
+  const pendingList = $k('pendingTemplatesList');
+  const pendingCount = $k('pendingTemplatesCount');
+  const pendingStatus = $k('pendingTemplatesStatus');
+  const pendingRefreshButton = $k('pendingTemplatesRefresh');
+
+  const masterTemplatesCard = $k('card-master-templates');
+  const masterTabs = Array.from(document.querySelectorAll('[data-master-tab]'));
+  const masterPanels = Array.from(document.querySelectorAll('[data-master-panel]'));
+
+  const masterTaskForm = $k('masterTaskForm');
+  const masterTaskTitle = $k('masterTaskTitle');
+  const masterTaskDescription = $k('masterTaskDescription');
+  const masterTaskIcon = $k('masterTaskIcon');
+  const masterTaskPoints = $k('masterTaskPoints');
+  const masterTaskStatusSelect = $k('masterTaskStatusSelect');
+  const masterTaskSubmit = $k('masterTaskSubmit');
+  const masterTaskReset = $k('masterTaskReset');
+  const masterTaskFormHint = $k('masterTaskFormHint');
+  const masterTaskFilter = $k('masterTaskFilter');
+  const masterTaskRefresh = $k('masterTaskRefresh');
+  const masterTaskTableBody = $k('masterTasksTableBody');
+  const masterTasksEmpty = $k('masterTasksEmpty');
+  const masterTaskStatus = $k('masterTaskStatus');
+
+  const masterRewardForm = $k('masterRewardForm');
+  const masterRewardTitle = $k('masterRewardTitle');
+  const masterRewardDescription = $k('masterRewardDescription');
+  const masterRewardIcon = $k('masterRewardIcon');
+  const masterRewardCost = $k('masterRewardCost');
+  const masterRewardStatusSelect = $k('masterRewardStatusSelect');
+  const masterRewardSubmit = $k('masterRewardSubmit');
+  const masterRewardReset = $k('masterRewardReset');
+  const masterRewardFormHint = $k('masterRewardFormHint');
+  const masterRewardFilter = $k('masterRewardFilter');
+  const masterRewardRefresh = $k('masterRewardRefresh');
+  const masterRewardsTableBody = $k('masterRewardsTableBody');
+  const masterRewardsEmpty = $k('masterRewardsEmpty');
+  const masterRewardStatus = $k('masterRewardStatus');
+
+  const pendingTemplatesState = {
+    items: [],
+    loading: false,
+    error: ''
+  };
+
+  const masterTemplatesState = {
+    tasks: [],
+    rewards: [],
+    loadingTasks: false,
+    loadingRewards: false,
+    activeTab: 'tasks',
+    editing: { task: null, reward: null }
+  };
+
+  function canShowPendingBanner() {
+    return (adminState.role === 'master' || adminState.role === 'family') && Boolean(adminState.currentFamilyId);
+  }
+
+  function normalizeMasterStatus(value, fallback = 'active') {
+    const normalized = (value || '').toString().trim().toLowerCase();
+    return normalized === 'inactive' ? 'inactive' : fallback;
+  }
+
+  function setMasterTemplatesTab(tab) {
+    const desired = tab === 'rewards' ? 'rewards' : 'tasks';
+    masterTemplatesState.activeTab = desired;
+    masterTabs.forEach((btn) => {
+      if (!btn) return;
+      const tabName = btn.dataset.masterTab || 'tasks';
+      const isActive = tabName === desired;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    masterPanels.forEach((panel) => {
+      if (!panel) return;
+      const tabName = panel.dataset.masterPanel || 'tasks';
+      panel.hidden = tabName !== desired;
+    });
+  }
+
+  function resetMasterTaskForm() {
+    if (masterTaskForm) masterTaskForm.reset();
+    if (masterTaskStatusSelect) masterTaskStatusSelect.value = 'active';
+    if (masterTaskPoints) masterTaskPoints.value = '0';
+    if (masterTaskIcon) masterTaskIcon.value = '';
+    if (masterTaskDescription) masterTaskDescription.value = '';
+    masterTemplatesState.editing.task = null;
+    if (masterTaskSubmit) masterTaskSubmit.textContent = 'Create Task Template';
+    if (masterTaskFormHint) masterTaskFormHint.textContent = 'Create a new template or select one below to edit.';
+  }
+
+  function resetMasterRewardForm() {
+    if (masterRewardForm) masterRewardForm.reset();
+    if (masterRewardStatusSelect) masterRewardStatusSelect.value = 'active';
+    if (masterRewardCost) masterRewardCost.value = '0';
+    if (masterRewardIcon) masterRewardIcon.value = '';
+    if (masterRewardDescription) masterRewardDescription.value = '';
+    masterTemplatesState.editing.reward = null;
+    if (masterRewardSubmit) masterRewardSubmit.textContent = 'Create Reward Template';
+    if (masterRewardFormHint) masterRewardFormHint.textContent = 'Create a new template or select one below to edit.';
+  }
+
+  function renderPendingTemplates() {
+    if (!pendingBanner) return;
+    const { items = [], loading, error } = pendingTemplatesState;
+    const canShow = canShowPendingBanner() && (loading || error || (Array.isArray(items) && items.length > 0));
+    pendingBanner.hidden = !canShow;
+    if (pendingCount) pendingCount.textContent = String(Array.isArray(items) ? items.length : 0);
+    if (!canShow) {
+      if (pendingStatus) pendingStatus.textContent = loading ? 'Loading templates…' : '';
+      if (pendingList) pendingList.innerHTML = '';
+      return;
+    }
+    if (pendingStatus) {
+      if (loading) {
+        pendingStatus.textContent = 'Loading templates…';
+      } else if (error) {
+        pendingStatus.textContent = error;
+      } else if (!items.length) {
+        pendingStatus.textContent = 'You’re all caught up.';
+      } else {
+        pendingStatus.textContent = '';
+      }
+    }
+    if (!pendingList) return;
+    pendingList.innerHTML = '';
+    if (!Array.isArray(items) || !items.length) return;
+
+    for (const item of items) {
+      if (!item) continue;
+      const li = document.createElement('li');
+      li.className = 'pending-template-item';
+
+      const info = document.createElement('div');
+      info.className = 'pending-template-info';
+
+      const title = document.createElement('span');
+      title.className = 'pending-template-title';
+      title.textContent = item.title || 'Untitled template';
+      info.appendChild(title);
+
+      const meta = document.createElement('span');
+      meta.className = 'pending-template-meta';
+      const kindLabel = item.kind === 'reward' ? 'Reward' : 'Task';
+      const valueLabel = item.kind === 'reward'
+        ? `${Number(item.base_cost ?? 0) || 0} points`
+        : `${Number(item.base_points ?? 0) || 0} points`;
+      meta.textContent = `${kindLabel} • ${valueLabel}`;
+      info.appendChild(meta);
+
+      if (item.description) {
+        const desc = document.createElement('div');
+        desc.className = 'pending-template-description';
+        desc.textContent = item.description;
+        info.appendChild(desc);
+      }
+
+      li.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'pending-template-actions';
+
+      const adoptBtn = document.createElement('button');
+      adoptBtn.type = 'button';
+      adoptBtn.className = 'btn-primary';
+      adoptBtn.textContent = 'Adopt';
+      adoptBtn.addEventListener('click', () => handleAdoptPending(item, adoptBtn));
+      actions.appendChild(adoptBtn);
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button';
+      dismissBtn.className = 'btn';
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.addEventListener('click', () => handleDismissPending(item, dismissBtn));
+      actions.appendChild(dismissBtn);
+
+      li.appendChild(actions);
+
+      pendingList.appendChild(li);
+    }
+  }
+
+  async function loadPendingTemplates({ silent = false } = {}) {
+    if (!pendingBanner || !pendingList) return;
+    if (!canShowPendingBanner()) {
+      pendingTemplatesState.items = [];
+      pendingTemplatesState.error = '';
+      pendingTemplatesState.loading = false;
+      renderPendingTemplates();
+      return;
+    }
+    pendingTemplatesState.loading = true;
+    pendingTemplatesState.error = '';
+    renderPendingTemplates();
+    try {
+      const { res, body } = await adminFetch('/api/family/pending/templates');
+      if (res.status === 401) {
+        pendingTemplatesState.items = [];
+        pendingTemplatesState.error = ADMIN_INVALID_MSG;
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Failed to load pending templates');
+        throw new Error(msg);
+      }
+      const list = Array.isArray(body?.items) ? body.items : [];
+      pendingTemplatesState.items = list.map((entry) => ({
+        kind: entry.kind === 'reward' ? 'reward' : 'task',
+        master_id: entry.master_id,
+        title: entry.title || '',
+        description: entry.description || null,
+        icon: entry.icon || null,
+        base_points: Number(entry.base_points ?? 0) || 0,
+        base_cost: Number(entry.base_cost ?? 0) || 0
+      }));
+    } catch (error) {
+      pendingTemplatesState.items = [];
+      pendingTemplatesState.error = error.message || 'Unable to load pending templates.';
+      if (!silent) toast(pendingTemplatesState.error, 'error');
+    } finally {
+      pendingTemplatesState.loading = false;
+      renderPendingTemplates();
+    }
+  }
+
+  async function handleAdoptPending(item, trigger) {
+    if (!item || !item.kind || !item.master_id) return;
+    if (trigger) trigger.disabled = true;
+    try {
+      const { res, body } = await adminFetch('/api/family/adopt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: item.kind, master_id: item.master_id })
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Adoption failed');
+        throw new Error(msg);
+      }
+      toast(item.kind === 'reward' ? 'Reward template adopted' : 'Task template adopted');
+      await loadPendingTemplates({ silent: true });
+      if (item.kind === 'reward') {
+        if (typeof loadRewards === 'function') {
+          await loadRewards();
+        }
+      } else if (typeof loadTemplates === 'function') {
+        await loadTemplates();
+      }
+    } catch (error) {
+      toast(error.message || 'Adoption failed', 'error');
+    } finally {
+      if (trigger) trigger.disabled = false;
+    }
+  }
+
+  async function handleDismissPending(item, trigger) {
+    if (!item || !item.kind || !item.master_id) return;
+    if (trigger) trigger.disabled = true;
+    try {
+      const { res, body } = await adminFetch('/api/family/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: item.kind, master_id: item.master_id })
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok && res.status !== 204) {
+        const msg = presentError(body?.error, 'Dismiss failed');
+        throw new Error(msg);
+      }
+      toast(item.kind === 'reward' ? 'Reward dismissed' : 'Task dismissed', 'info');
+      await loadPendingTemplates({ silent: true });
+    } catch (error) {
+      toast(error.message || 'Dismiss failed', 'error');
+    } finally {
+      if (trigger) trigger.disabled = false;
+    }
+  }
+
+  function renderMasterTaskList() {
+    if (!masterTaskTableBody) return;
+    const all = Array.isArray(masterTemplatesState.tasks) ? masterTemplatesState.tasks : [];
+    const filter = (masterTaskFilter?.value || 'all').toLowerCase();
+    const rows = all.filter((item) => {
+      const status = (item.status || 'active').toLowerCase();
+      if (filter === 'active') return status === 'active';
+      if (filter === 'inactive') return status === 'inactive';
+      return true;
+    });
+
+    masterTaskTableBody.innerHTML = '';
+    if (rows.length === 0) {
+      if (masterTasksEmpty) masterTasksEmpty.style.display = '';
+    } else if (masterTasksEmpty) {
+      masterTasksEmpty.style.display = 'none';
+    }
+
+    for (const item of rows) {
+      if (!item) continue;
+      const tr = document.createElement('tr');
+      tr.className = 'master-template-row';
+      if (masterTemplatesState.editing.task && masterTemplatesState.editing.task === item.id) {
+        tr.classList.add('is-editing');
+      }
+
+      const idCell = document.createElement('td');
+      idCell.textContent = item.id || '';
+      tr.appendChild(idCell);
+
+      const titleCell = document.createElement('td');
+      titleCell.textContent = item.title || '';
+      tr.appendChild(titleCell);
+
+      const pointsCell = document.createElement('td');
+      pointsCell.textContent = `${Number(item.base_points ?? 0) || 0}`;
+      tr.appendChild(pointsCell);
+
+      const statusCell = document.createElement('td');
+      statusCell.textContent = (item.status || 'active').toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+      tr.appendChild(statusCell);
+
+      const actionsCell = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => startEditMasterTask(item));
+      actionsCell.appendChild(editBtn);
+      tr.appendChild(actionsCell);
+
+      masterTaskTableBody.appendChild(tr);
+    }
+
+    if (masterTaskStatus) {
+      if (masterTemplatesState.loadingTasks) {
+        masterTaskStatus.textContent = 'Loading templates…';
+      } else if (rows.length === 0) {
+        masterTaskStatus.textContent = all.length ? 'No templates match this filter.' : 'No templates yet.';
+      } else {
+        masterTaskStatus.textContent = `Showing ${rows.length} template${rows.length === 1 ? '' : 's'}.`;
+      }
+    }
+  }
+
+  function renderMasterRewardList() {
+    if (!masterRewardsTableBody) return;
+    const all = Array.isArray(masterTemplatesState.rewards) ? masterTemplatesState.rewards : [];
+    const filter = (masterRewardFilter?.value || 'all').toLowerCase();
+    const rows = all.filter((item) => {
+      const status = (item.status || 'active').toLowerCase();
+      if (filter === 'active') return status === 'active';
+      if (filter === 'inactive') return status === 'inactive';
+      return true;
+    });
+
+    masterRewardsTableBody.innerHTML = '';
+    if (rows.length === 0) {
+      if (masterRewardsEmpty) masterRewardsEmpty.style.display = '';
+    } else if (masterRewardsEmpty) {
+      masterRewardsEmpty.style.display = 'none';
+    }
+
+    for (const item of rows) {
+      if (!item) continue;
+      const tr = document.createElement('tr');
+      tr.className = 'master-template-row';
+      if (masterTemplatesState.editing.reward && masterTemplatesState.editing.reward === item.id) {
+        tr.classList.add('is-editing');
+      }
+
+      const idCell = document.createElement('td');
+      idCell.textContent = item.id || '';
+      tr.appendChild(idCell);
+
+      const titleCell = document.createElement('td');
+      titleCell.textContent = item.title || '';
+      tr.appendChild(titleCell);
+
+      const costCell = document.createElement('td');
+      costCell.textContent = `${Number(item.base_cost ?? 0) || 0}`;
+      tr.appendChild(costCell);
+
+      const statusCell = document.createElement('td');
+      statusCell.textContent = (item.status || 'active').toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+      tr.appendChild(statusCell);
+
+      const actionsCell = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => startEditMasterReward(item));
+      actionsCell.appendChild(editBtn);
+      tr.appendChild(actionsCell);
+
+      masterRewardsTableBody.appendChild(tr);
+    }
+
+    if (masterRewardStatus) {
+      if (masterTemplatesState.loadingRewards) {
+        masterRewardStatus.textContent = 'Loading templates…';
+      } else if (rows.length === 0) {
+        masterRewardStatus.textContent = all.length ? 'No templates match this filter.' : 'No templates yet.';
+      } else {
+        masterRewardStatus.textContent = `Showing ${rows.length} template${rows.length === 1 ? '' : 's'}.`;
+      }
+    }
+  }
+
+  function startEditMasterTask(item) {
+    if (!item) return;
+    if (masterTaskTitle) masterTaskTitle.value = item.title || '';
+    if (masterTaskDescription) masterTaskDescription.value = item.description || '';
+    if (masterTaskIcon) masterTaskIcon.value = item.icon || '';
+    if (masterTaskPoints) masterTaskPoints.value = String(Number(item.base_points ?? 0) || 0);
+    if (masterTaskStatusSelect) masterTaskStatusSelect.value = normalizeMasterStatus(item.status);
+    masterTemplatesState.editing.task = item.id || null;
+    if (masterTaskSubmit) masterTaskSubmit.textContent = 'Update Task Template';
+    if (masterTaskFormHint) masterTaskFormHint.textContent = `Editing template ${item.title || item.id || ''}`.trim();
+    setMasterTemplatesTab('tasks');
+  }
+
+  function startEditMasterReward(item) {
+    if (!item) return;
+    if (masterRewardTitle) masterRewardTitle.value = item.title || '';
+    if (masterRewardDescription) masterRewardDescription.value = item.description || '';
+    if (masterRewardIcon) masterRewardIcon.value = item.icon || '';
+    if (masterRewardCost) masterRewardCost.value = String(Number(item.base_cost ?? 0) || 0);
+    if (masterRewardStatusSelect) masterRewardStatusSelect.value = normalizeMasterStatus(item.status);
+    masterTemplatesState.editing.reward = item.id || null;
+    if (masterRewardSubmit) masterRewardSubmit.textContent = 'Update Reward Template';
+    if (masterRewardFormHint) masterRewardFormHint.textContent = `Editing template ${item.title || item.id || ''}`.trim();
+    setMasterTemplatesTab('rewards');
+  }
+
+  async function loadMasterTasks({ silent = false } = {}) {
+    if (adminState.role !== 'master') {
+      masterTemplatesState.tasks = [];
+      masterTemplatesState.loadingTasks = false;
+      renderMasterTaskList();
+      return;
+    }
+    masterTemplatesState.loadingTasks = true;
+    renderMasterTaskList();
+    try {
+      const { res, body } = await adminFetch('/api/master/tasks', { skipScope: true });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        masterTemplatesState.tasks = [];
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Failed to load templates');
+        throw new Error(msg);
+      }
+      const items = Array.isArray(body?.items) ? body.items : [];
+      masterTemplatesState.tasks = items;
+    } catch (error) {
+      masterTemplatesState.tasks = [];
+      if (!silent) toast(error.message || 'Failed to load templates', 'error');
+      if (masterTaskStatus) masterTaskStatus.textContent = error.message || 'Failed to load templates.';
+    } finally {
+      masterTemplatesState.loadingTasks = false;
+      renderMasterTaskList();
+    }
+  }
+
+  async function loadMasterRewards({ silent = false } = {}) {
+    if (adminState.role !== 'master') {
+      masterTemplatesState.rewards = [];
+      masterTemplatesState.loadingRewards = false;
+      renderMasterRewardList();
+      return;
+    }
+    masterTemplatesState.loadingRewards = true;
+    renderMasterRewardList();
+    try {
+      const { res, body } = await adminFetch('/api/master/rewards', { skipScope: true });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        masterTemplatesState.rewards = [];
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Failed to load templates');
+        throw new Error(msg);
+      }
+      const items = Array.isArray(body?.items) ? body.items : [];
+      masterTemplatesState.rewards = items;
+    } catch (error) {
+      masterTemplatesState.rewards = [];
+      if (!silent) toast(error.message || 'Failed to load templates', 'error');
+      if (masterRewardStatus) masterRewardStatus.textContent = error.message || 'Failed to load templates.';
+    } finally {
+      masterTemplatesState.loadingRewards = false;
+      renderMasterRewardList();
+    }
+  }
 
   window.CKPWA?.initAppShell({
     swVersion: '1.0.0',
     installButtonSelector: '#installBtn'
   });
+
+  if (pendingRefreshButton) {
+    pendingRefreshButton.addEventListener('click', () => {
+      loadPendingTemplates();
+    });
+  }
+
+  setMasterTemplatesTab(masterTemplatesState.activeTab);
+
+  masterTabs.forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener('click', () => setMasterTemplatesTab(btn.dataset.masterTab || 'tasks'));
+  });
+
+  masterTaskFilter?.addEventListener('change', () => renderMasterTaskList());
+  masterRewardFilter?.addEventListener('change', () => renderMasterRewardList());
+  masterTaskRefresh?.addEventListener('click', () => loadMasterTasks());
+  masterRewardRefresh?.addEventListener('click', () => loadMasterRewards());
+  masterTaskReset?.addEventListener('click', () => resetMasterTaskForm());
+  masterRewardReset?.addEventListener('click', () => resetMasterRewardForm());
+
+  masterTaskForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = (masterTaskTitle?.value || '').trim();
+    if (!title) {
+      toast('Title is required', 'error');
+      masterTaskTitle?.focus();
+      return;
+    }
+    const basePointsValue = Number(masterTaskPoints?.value ?? 0);
+    if (!Number.isFinite(basePointsValue) || basePointsValue < 0) {
+      toast('Base points must be zero or greater', 'error');
+      masterTaskPoints?.focus();
+      return;
+    }
+    const payload = {
+      title,
+      base_points: Math.trunc(basePointsValue),
+      description: (masterTaskDescription?.value || '').trim() || null,
+      icon: (masterTaskIcon?.value || '').trim() || null,
+      status: normalizeMasterStatus(masterTaskStatusSelect?.value || 'active')
+    };
+    if (!payload.description) payload.description = null;
+    if (!payload.icon) payload.icon = null;
+
+    const editingId = masterTemplatesState.editing.task;
+    try {
+      if (editingId) {
+        const { res, body } = await adminFetch(`/api/master/tasks/${editingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          skipScope: true
+        });
+        if (res.status === 401) {
+          toast(ADMIN_INVALID_MSG, 'error');
+          return;
+        }
+        if (!res.ok) {
+          const msg = presentError(body?.error, 'Update failed');
+          throw new Error(msg);
+        }
+        toast('Task template updated');
+      } else {
+        const { res, body } = await adminFetch('/api/master/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          skipScope: true
+        });
+        if (res.status === 401) {
+          toast(ADMIN_INVALID_MSG, 'error');
+          return;
+        }
+        if (!res.ok) {
+          const msg = presentError(body?.error, 'Create failed');
+          throw new Error(msg);
+        }
+        toast('Task template created');
+      }
+      resetMasterTaskForm();
+      await loadMasterTasks({ silent: true });
+      await loadPendingTemplates({ silent: true });
+    } catch (error) {
+      toast(error.message || 'Save failed', 'error');
+    }
+  });
+
+  masterRewardForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = (masterRewardTitle?.value || '').trim();
+    if (!title) {
+      toast('Title is required', 'error');
+      masterRewardTitle?.focus();
+      return;
+    }
+    const baseCostValue = Number(masterRewardCost?.value ?? 0);
+    if (!Number.isFinite(baseCostValue) || baseCostValue < 0) {
+      toast('Base cost must be zero or greater', 'error');
+      masterRewardCost?.focus();
+      return;
+    }
+    const payload = {
+      title,
+      base_cost: Math.trunc(baseCostValue),
+      description: (masterRewardDescription?.value || '').trim() || null,
+      icon: (masterRewardIcon?.value || '').trim() || null,
+      status: normalizeMasterStatus(masterRewardStatusSelect?.value || 'active')
+    };
+    if (!payload.description) payload.description = null;
+    if (!payload.icon) payload.icon = null;
+
+    const editingId = masterTemplatesState.editing.reward;
+    try {
+      if (editingId) {
+        const { res, body } = await adminFetch(`/api/master/rewards/${editingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          skipScope: true
+        });
+        if (res.status === 401) {
+          toast(ADMIN_INVALID_MSG, 'error');
+          return;
+        }
+        if (!res.ok) {
+          const msg = presentError(body?.error, 'Update failed');
+          throw new Error(msg);
+        }
+        toast('Reward template updated');
+      } else {
+        const { res, body } = await adminFetch('/api/master/rewards', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          skipScope: true
+        });
+        if (res.status === 401) {
+          toast(ADMIN_INVALID_MSG, 'error');
+          return;
+        }
+        if (!res.ok) {
+          const msg = presentError(body?.error, 'Create failed');
+          throw new Error(msg);
+        }
+        toast('Reward template created');
+      }
+      resetMasterRewardForm();
+      await loadMasterRewards({ silent: true });
+      await loadPendingTemplates({ silent: true });
+    } catch (error) {
+      toast(error.message || 'Save failed', 'error');
+    }
+  });
+
+  renderMasterTaskList();
+  renderMasterRewardList();
+  renderPendingTemplates();
 
   function storageGet(key) {
     try {
@@ -359,6 +1022,8 @@ function initAdmin() {
   }
 
   function setAdminState(partial = {}, { persist = true } = {}) {
+    const previousRole = adminState.role;
+    const previousFamilyScope = adminState.currentFamilyId;
     if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
       adminState.role = partial.role ?? null;
     }
@@ -393,6 +1058,21 @@ function initAdmin() {
     updateWhoamiBanner();
     applyRoleVisibility();
     renderFamilyManagement();
+    if (!adminState.currentFamilyId) {
+      pendingTemplatesState.items = [];
+      pendingTemplatesState.error = '';
+      pendingTemplatesState.loading = false;
+    }
+    renderPendingTemplates();
+    if (previousRole === 'master' && adminState.role !== 'master') {
+      masterTemplatesState.tasks = [];
+      masterTemplatesState.rewards = [];
+      renderMasterTaskList();
+      renderMasterRewardList();
+    }
+    if (!adminState.currentFamilyId && previousFamilyScope) {
+      renderPendingTemplates();
+    }
   }
 
   function findFamilyLabel(familyId) {
@@ -1379,8 +2059,11 @@ details.member-fold .summary-value {
       loadMembersList,
       loadRewards,
       loadTemplates,
+      loadPendingTemplates,
       loadHolds,
-      loadActivity
+      loadActivity,
+      loadMasterTasks,
+      loadMasterRewards
     ];
     for (const loader of loaders) {
       if (typeof loader !== 'function') continue;
@@ -3065,6 +3748,19 @@ setupScanner({
   })();
 
   function editReward(item) {
+    const isMasterLinked = item && (item.source === 'master' || (item.master_reward_id && String(item.master_reward_id).trim()));
+    if (isMasterLinked) {
+      const costPrompt = prompt('Cost (points)', Number.isFinite(item.cost) ? String(item.cost) : '');
+      if (costPrompt === null) return;
+      const cost = Number(costPrompt.trim());
+      if (!Number.isFinite(cost) || cost < 0) {
+        toast('Cost must be a non-negative number', 'error');
+        return;
+      }
+      updateReward(item.id, { cost });
+      return;
+    }
+
     const nameInput = prompt('Reward name', item.name || '');
     if (nameInput === null) return;
     const name = nameInput.trim();
@@ -3157,7 +3853,9 @@ setupScanner({
         youtubeUrl: item.youtubeUrl || item.youtube_url || '',
         youtube_url: item.youtube_url || item.youtubeUrl || '',
         status: (item.status || (item.active ? 'active' : 'disabled') || 'active').toString().toLowerCase(),
-        active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0
+        active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0,
+        source: item.source || null,
+        master_reward_id: item.master_reward_id || null
       }));
       rewardsToggleInitialized = true;
       updateRewardsToggleButton();
@@ -3245,12 +3943,21 @@ setupScanner({
           info.appendChild(desc);
         }
 
+        const isMasterLinkedReward = item.source === 'master' || (item.master_reward_id && String(item.master_reward_id).trim());
+
         if (!item.active) {
           const badge = document.createElement('div');
           badge.className = 'muted';
           badge.textContent = 'Inactive';
           info.appendChild(badge);
           card.style.opacity = '0.6';
+        }
+
+        if (isMasterLinkedReward) {
+          const origin = document.createElement('div');
+          origin.className = 'reward-origin-badge';
+          origin.textContent = 'Master Template';
+          info.appendChild(origin);
         }
 
         card.appendChild(info);
@@ -3281,7 +3988,10 @@ setupScanner({
         }
 
         const editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit';
+        editBtn.textContent = isMasterLinkedReward ? 'Adjust cost' : 'Edit';
+        if (isMasterLinkedReward) {
+          editBtn.title = 'Title and description managed by master template';
+        }
         editBtn.addEventListener('click', () => editReward(item));
         actions.appendChild(editBtn);
 
@@ -3518,8 +4228,12 @@ setupScanner({
         });
       }
       const actions = tr.querySelector('.actions');
+      const isMasterLinkedTask = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
       const editBtn = document.createElement('button');
-      editBtn.textContent = 'Edit';
+      editBtn.textContent = isMasterLinkedTask ? 'Adjust points' : 'Edit';
+      if (isMasterLinkedTask) {
+        editBtn.title = 'Title and description managed by master template';
+      }
       editBtn.addEventListener('click', () => editTemplate(tpl));
       const toggleBtn = document.createElement('button');
       toggleBtn.textContent = tpl.active ? 'Deactivate' : 'Activate';
@@ -3528,6 +4242,16 @@ setupScanner({
       delBtn.textContent = 'Delete';
       delBtn.addEventListener('click', () => deleteTemplate(tpl.id));
       actions.append(editBtn, toggleBtn, delBtn);
+      if (isMasterLinkedTask) {
+        const titleCell = tr.querySelector('td:nth-child(2)');
+        if (titleCell) {
+          titleCell.appendChild(document.createElement('br'));
+          const origin = document.createElement('span');
+          origin.className = 'template-origin-badge';
+          origin.textContent = 'Master Template';
+          titleCell.appendChild(origin);
+        }
+      }
       earnTableBody.appendChild(tr);
     }
   }
@@ -3624,6 +4348,13 @@ setupScanner({
   $('btnAddTemplate')?.addEventListener('click', addTemplate);
 
   async function editTemplate(tpl) {
+    const isMasterLinked = tpl && (tpl.source === 'master' || (tpl.master_task_id && String(tpl.master_task_id).trim()));
+    if (isMasterLinked) {
+      const points = Number(prompt('Points', tpl.points));
+      if (!Number.isFinite(points) || points <= 0) return toast('Invalid points', 'error');
+      await updateTemplate(tpl.id, { points });
+      return;
+    }
     const title = prompt('Title', tpl.title);
     if (!title) return;
     const points = Number(prompt('Points', tpl.points));
