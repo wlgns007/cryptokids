@@ -171,10 +171,14 @@ function getAdoptedMasterIds(table, masterColumn, familyId) {
     return new Set();
   }
   const columns = getTableColumns(table);
-  if (!columns.includes(masterColumn)) {
+  const hasSource = columns.includes('source_template_id');
+  if (!columns.includes(masterColumn) && !hasSource) {
     return new Set();
   }
-  let sql = `SELECT ${quoteIdent(masterColumn)} AS master_id FROM ${quoteIdent(table)} WHERE ${quoteIdent(masterColumn)} IS NOT NULL`;
+  const selector = hasSource
+    ? `COALESCE(${quoteIdent('source_template_id')}, ${columns.includes(masterColumn) ? quoteIdent(masterColumn) : 'NULL'})`
+    : quoteIdent(masterColumn);
+  let sql = `SELECT ${selector} AS master_id FROM ${quoteIdent(table)} WHERE ${selector} IS NOT NULL`;
   const params = [];
   if (columns.includes("family_id")) {
     sql += " AND family_id = ?";
@@ -193,6 +197,7 @@ function getAdoptedMasterIds(table, masterColumn, familyId) {
 function mapMasterTaskRow(row) {
   if (!row) return null;
   const baseValue = Number(row.base_points);
+  const version = Number(row.version ?? 1) || 1;
   return {
     id: row.id,
     title: row.title ?? "",
@@ -200,13 +205,15 @@ function mapMasterTaskRow(row) {
     icon: row.icon ?? null,
     youtube_url: row.youtube_url ?? null,
     base_points: Number.isFinite(baseValue) ? baseValue : 0,
-    status: row.status ?? "active"
+    status: row.status ?? "active",
+    version
   };
 }
 
 function mapMasterRewardRow(row) {
   if (!row) return null;
   const baseValue = Number(row.base_cost);
+  const version = Number(row.version ?? 1) || 1;
   return {
     id: row.id,
     title: row.title ?? "",
@@ -214,7 +221,8 @@ function mapMasterRewardRow(row) {
     icon: row.icon ?? null,
     youtube_url: row.youtube_url ?? null,
     base_cost: Number.isFinite(baseValue) ? baseValue : 0,
-    status: row.status ?? "active"
+    status: row.status ?? "active",
+    version
   };
 }
 
@@ -223,11 +231,14 @@ function mapTaskRow(row) {
   const title = row.title ?? row.name ?? "";
   const pointsValue = Number(row.points ?? row.base_points ?? 0) || 0;
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
+  const sourceTemplateId = row.source_template_id || row.master_task_id || null;
   const masterTaskId = row.master_task_id || null;
-  const source = masterTaskId ? "master" : row.source || null;
+  const source = sourceTemplateId ? "master" : row.source || null;
   const sortOrder = Number(row.sort_order ?? 0) || 0;
   const youtubeUrl = row.youtube_url ?? null;
   const masterYoutube = row.master_youtube ?? null;
+  const sourceVersion = Number(row.source_version ?? 0) || 0;
+  const isCustomized = Number(row.is_customized ?? 0) ? 1 : 0;
   return {
     id: row.id,
     title,
@@ -238,6 +249,9 @@ function mapTaskRow(row) {
     status,
     source,
     master_task_id: masterTaskId,
+    source_template_id: sourceTemplateId,
+    source_version: sourceVersion,
+    is_customized: isCustomized,
     family_id: row.family_id || null,
     created_at: Number(row.created_at ?? 0) || null,
     updated_at: Number(row.updated_at ?? 0) || null,
@@ -605,6 +619,7 @@ app.post("/api/master/tasks", authenticateAdmin, requireMaster, (req, res) => {
     icon,
     youtube_url,
     status,
+    version: 1,
     created_at: now,
     updated_at: now
   });
@@ -686,8 +701,80 @@ app.patch("/api/master/tasks/:id", authenticateAdmin, requireMaster, (req, res) 
   }
 
   const updated_at = Date.now();
-  updateMasterTaskStmt.run({ id, title, description, icon, youtube_url, base_points, status, updated_at });
+  const nextVersion = Number(existing.version ?? 1) + 1;
+  updateMasterTaskStmt.run({
+    id,
+    title,
+    description,
+    icon,
+    youtube_url,
+    base_points,
+    status,
+    version: nextVersion,
+    updated_at
+  });
   const updated = selectMasterTaskStmt.get(id);
+
+  if (tableExists("task")) {
+    const taskColumns = getTableColumns("task");
+    if (taskColumns.includes("source_template_id")) {
+      const updateParts = [];
+      const params = {
+        template_id: id,
+        version: nextVersion
+      };
+      const now = Date.now();
+      if (taskColumns.includes("title")) {
+        updateParts.push("title = @title");
+        params.title = title;
+      }
+      if (taskColumns.includes("name")) {
+        updateParts.push("name = @name");
+        params.name = title;
+      }
+      if (taskColumns.includes("description")) {
+        updateParts.push("description = @description");
+        params.description = description;
+      }
+      if (taskColumns.includes("icon")) {
+        updateParts.push("icon = @icon");
+        params.icon = icon;
+      }
+      if (taskColumns.includes("points")) {
+        updateParts.push("points = @points");
+        params.points = base_points;
+      }
+      if (taskColumns.includes("base_points")) {
+        updateParts.push("base_points = @base_points");
+        params.base_points = base_points;
+      }
+      if (taskColumns.includes("youtube_url")) {
+        updateParts.push("youtube_url = @youtube_url");
+        params.youtube_url = youtube_url;
+      }
+      if (taskColumns.includes("source_version")) {
+        updateParts.push("source_version = @version");
+      }
+      if (taskColumns.includes("updated_at")) {
+        updateParts.push("updated_at = @updated_at");
+        params.updated_at = now;
+      }
+      if (updateParts.length) {
+        const sql = `
+          UPDATE task
+             SET ${updateParts.join(", ")}
+           WHERE source_template_id = @template_id
+             AND (is_customized IS NULL OR is_customized = 0)
+        `;
+        try {
+          db.prepare(sql).run(params);
+        } catch (err) {
+          console.warn('[master_task] propagate update failed', err?.message || err);
+        }
+      }
+    }
+  }
+
   res.json({ item: mapMasterTaskRow(updated) });
 });
 
@@ -715,6 +802,7 @@ app.post("/api/master/rewards", authenticateAdmin, requireMaster, (req, res) => 
     icon,
     youtube_url,
     status,
+    version: 1,
     created_at: now,
     updated_at: now
   });
@@ -796,8 +884,80 @@ app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res
   }
 
   const updated_at = Date.now();
-  updateMasterRewardStmt.run({ id, title, description, icon, youtube_url, base_cost, status, updated_at });
+  const nextVersion = Number(existing.version ?? 1) + 1;
+  updateMasterRewardStmt.run({
+    id,
+    title,
+    description,
+    icon,
+    youtube_url,
+    base_cost,
+    status,
+    version: nextVersion,
+    updated_at
+  });
   const updated = selectMasterRewardStmt.get(id);
+
+  if (tableExists("reward")) {
+    const rewardColumns = getTableColumns("reward");
+    if (rewardColumns.includes("source_template_id")) {
+      const updateParts = [];
+      const params = {
+        template_id: id,
+        version: nextVersion
+      };
+      const now = Date.now();
+      if (rewardColumns.includes("name")) {
+        updateParts.push("name = @name");
+        params.name = title;
+      }
+      if (rewardColumns.includes("description")) {
+        updateParts.push("description = @description");
+        params.description = description;
+      }
+      if (rewardColumns.includes("icon")) {
+        updateParts.push("icon = @icon");
+        params.icon = icon;
+      }
+      if (rewardColumns.includes("image_url")) {
+        updateParts.push("image_url = @image_url");
+        params.image_url = icon;
+      }
+      if (rewardColumns.includes("cost")) {
+        updateParts.push("cost = @cost");
+        params.cost = base_cost;
+      }
+      if (rewardColumns.includes("price")) {
+        updateParts.push("price = @price");
+        params.price = base_cost;
+      }
+      if (rewardColumns.includes("youtube_url")) {
+        updateParts.push("youtube_url = @youtube_url");
+        params.youtube_url = youtube_url;
+      }
+      if (rewardColumns.includes("source_version")) {
+        updateParts.push("source_version = @version");
+      }
+      if (rewardColumns.includes("updated_at")) {
+        updateParts.push("updated_at = @updated_at");
+        params.updated_at = now;
+      }
+      if (updateParts.length) {
+        const sql = `
+          UPDATE reward
+             SET ${updateParts.join(", ")}
+           WHERE source_template_id = @template_id
+             AND (is_customized IS NULL OR is_customized = 0)
+        `;
+        try {
+          db.prepare(sql).run(params);
+        } catch (err) {
+          console.warn('[master_reward] propagate update failed', err?.message || err);
+        }
+      }
+    }
+  }
+
   res.json({ item: mapMasterRewardRow(updated) });
 });
 
@@ -904,11 +1064,15 @@ app.post("/api/family/adopt", authenticateAdmin, resolveFamilyScope, (req, res) 
       if (columns.includes("description")) record.description = master.description ?? null;
       if (columns.includes("icon")) record.icon = master.icon ?? null;
       const basePoints = coerceInteger(master.base_points, 0);
+      const masterVersion = Number(master.version ?? 1) || 1;
       if (columns.includes("points")) record.points = basePoints;
       if (columns.includes("base_points")) record.base_points = basePoints;
       if (columns.includes("status")) record.status = master.status ?? "active";
       if (columns.includes("family_id")) record.family_id = familyId;
       if (columns.includes("master_task_id")) record.master_task_id = masterId;
+      if (columns.includes("source_template_id")) record.source_template_id = masterId;
+      if (columns.includes("source_version")) record.source_version = masterVersion;
+      if (columns.includes("is_customized")) record.is_customized = 0;
       if (columns.includes("created_at")) record.created_at = now;
       if (columns.includes("updated_at")) record.updated_at = now;
       insertRecord("task", record);
@@ -949,13 +1113,18 @@ app.post("/api/family/adopt", authenticateAdmin, resolveFamilyScope, (req, res) 
     if (columns.includes("name")) record.name = title;
     if (columns.includes("description")) record.description = master.description ?? null;
     if (columns.includes("icon")) record.icon = master.icon ?? null;
+    if (columns.includes("image_url")) record.image_url = master.icon ?? null;
     const baseCost = coerceInteger(master.base_cost, 0);
+    const masterVersion = Number(master.version ?? 1) || 1;
     if (columns.includes("cost")) record.cost = baseCost;
     if (columns.includes("base_cost")) record.base_cost = baseCost;
     if (columns.includes("status")) record.status = master.status ?? "active";
     if (columns.includes("source")) record.source = "master";
     if (columns.includes("family_id")) record.family_id = familyId;
     if (columns.includes("master_reward_id")) record.master_reward_id = masterId;
+    if (columns.includes("source_template_id")) record.source_template_id = masterId;
+    if (columns.includes("source_version")) record.source_version = masterVersion;
+    if (columns.includes("is_customized")) record.is_customized = 0;
     if (columns.includes("created_at")) record.created_at = now;
     if (columns.includes("updated_at")) record.updated_at = now;
     insertRecord("reward", record);
@@ -1035,6 +1204,9 @@ app.get(
     const hasMasterId = columns.includes("master_task_id");
     const hasYoutube = columns.includes("youtube_url");
     const hasSource = columns.includes("source");
+    const hasSourceTemplate = columns.includes("source_template_id");
+    const hasSourceVersion = columns.includes("source_version");
+    const hasIsCustomized = columns.includes("is_customized");
 
     if (MULTITENANT_ENFORCE && !hasFamilyColumn) {
       res.status(500).json({ error: "task_missing_family_scope" });
@@ -1063,6 +1235,9 @@ app.get(
       hasStatus ? "t.status" : "'active' AS status",
       hasSource ? "t.source" : "NULL AS source",
       hasMasterId ? "t.master_task_id" : "NULL AS master_task_id",
+      hasSourceTemplate ? "t.source_template_id" : "NULL AS source_template_id",
+      hasSourceVersion ? "t.source_version" : "0 AS source_version",
+      hasIsCustomized ? "t.is_customized" : "0 AS is_customized",
       hasFamilyColumn ? "t.family_id" : "NULL AS family_id",
       hasCreatedAt ? "t.created_at" : "0 AS created_at",
       hasUpdatedAt ? "t.updated_at" : "0 AS updated_at",
@@ -1130,6 +1305,9 @@ app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req
   const hasCreatedAt = columns.includes("created_at");
   const hasMasterId = columns.includes("master_task_id");
   const hasYoutube = columns.includes("youtube_url");
+  const hasSourceTemplate = columns.includes("source_template_id");
+  const hasSourceVersion = columns.includes("source_version");
+  const hasIsCustomized = columns.includes("is_customized");
 
   const scopedFamilyId = req.scope?.family_id ?? null;
   if (MULTITENANT_ENFORCE) {
@@ -1166,6 +1344,9 @@ app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req
   selectParts.push(hasUpdatedAt ? "t.updated_at" : "0 AS updated_at");
   selectParts.push(hasCreatedAt ? "t.created_at" : "0 AS created_at");
   selectParts.push(hasMasterId ? "t.master_task_id" : "NULL AS master_task_id");
+  selectParts.push(hasSourceTemplate ? "t.source_template_id" : "NULL AS source_template_id");
+  selectParts.push(hasSourceVersion ? "t.source_version" : "0 AS source_version");
+  selectParts.push(hasIsCustomized ? "t.is_customized" : "0 AS is_customized");
   selectParts.push(hasYoutube ? "t.youtube_url" : "NULL AS youtube_url");
   if (hasFamilyColumn) {
     selectParts.push("t.family_id");
@@ -1241,11 +1422,7 @@ app.post(
       return;
     }
 
-    const master = db
-      .prepare(
-        `SELECT id, title, description, icon, base_points, youtube_url, status FROM master_task WHERE id = ?`
-      )
-      .get(templateId);
+    const master = selectMasterTaskStmt.get(templateId);
     if (!master) {
       res.status(404).json({ error: "template_not_found" });
       return;
@@ -1272,10 +1449,18 @@ app.post(
       return;
     }
 
-    if (columns.includes("master_task_id") && columns.includes("family_id")) {
-      const duplicate = db
-        .prepare(`SELECT id FROM task WHERE family_id = ? AND master_task_id = ? LIMIT 1`)
-        .get(familyId, templateId);
+    if ((columns.includes("master_task_id") || columns.includes("source_template_id")) && columns.includes("family_id")) {
+      let duplicate = null;
+      if (columns.includes("source_template_id")) {
+        duplicate = db
+          .prepare(`SELECT id FROM task WHERE family_id = ? AND source_template_id = ? LIMIT 1`)
+          .get(familyId, templateId);
+      }
+      if (!duplicate && columns.includes("master_task_id")) {
+        duplicate = db
+          .prepare(`SELECT id FROM task WHERE family_id = ? AND master_task_id = ? LIMIT 1`)
+          .get(familyId, templateId);
+      }
       if (duplicate?.id) {
         res.status(409).json({ error: "already_adopted", taskId: duplicate.id });
         return;
@@ -1285,6 +1470,7 @@ app.post(
     const now = Date.now();
     const newId = crypto.randomUUID();
     const basePoints = coerceInteger(master.base_points, 0);
+    const masterVersion = Number(master.version ?? 1) || 1;
     const record = { id: newId };
     if (columns.includes("family_id")) record.family_id = familyId;
     if (columns.includes("title")) record.title = master.title ?? "";
@@ -1296,6 +1482,9 @@ app.post(
     if (columns.includes("status")) record.status = "active";
     if (columns.includes("source")) record.source = "master";
     if (columns.includes("master_task_id")) record.master_task_id = master.id;
+    if (columns.includes("source_template_id")) record.source_template_id = master.id;
+    if (columns.includes("source_version")) record.source_version = masterVersion;
+    if (columns.includes("is_customized")) record.is_customized = 0;
     if (columns.includes("sort_order")) record.sort_order = 0;
     if (columns.includes("youtube_url")) record.youtube_url = master.youtube_url ?? null;
     if (columns.includes("created_at")) record.created_at = now;
@@ -1307,6 +1496,103 @@ app.post(
     res.status(201).json({ taskId: newId });
   }
 );
+
+app.get("/api/admin/templates/available", authenticateAdmin, (req, res) => {
+  const rawFamilyId = (req.query?.familyId || req.query?.family_id || "").toString().trim();
+  if (!rawFamilyId) {
+    res.status(400).json({ error: "familyId required" });
+    return;
+  }
+  const kind = (req.query?.kind || "task").toString().trim().toLowerCase();
+  if (kind !== "task" && kind !== "reward") {
+    res.status(400).json({ error: "unsupported_kind" });
+    return;
+  }
+
+  if (req.auth?.role === "family" && req.auth.familyId !== rawFamilyId) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  if (req.auth?.role !== "master" && req.auth?.role !== "family") {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+
+  const familyId = rawFamilyId;
+
+  if (kind === "task") {
+    if (!tableExists("master_task")) {
+      res.json([]);
+      return;
+    }
+    const hasTaskTable = tableExists("task");
+    const sql = hasTaskTable
+      ? `SELECT mt.id, mt.title, mt.description, mt.icon, mt.base_points, mt.youtube_url, mt.version
+           FROM master_task mt
+          WHERE mt.status = 'active'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM task t
+               WHERE t.family_id = ?
+                 AND ((t.source_template_id IS NOT NULL AND t.source_template_id = mt.id)
+                   OR (t.master_task_id IS NOT NULL AND t.master_task_id = mt.id))
+            )
+          ORDER BY mt.updated_at DESC, mt.id DESC`
+      : `SELECT mt.id, mt.title, mt.description, mt.icon, mt.base_points, mt.youtube_url, mt.version
+           FROM master_task mt
+          WHERE mt.status = 'active'
+          ORDER BY mt.updated_at DESC, mt.id DESC`;
+    const rows = hasTaskTable
+      ? db.prepare(sql).all(familyId)
+      : db.prepare(sql).all();
+    const items = rows.map((row) => ({
+      id: row.id,
+      title: row.title ?? "",
+      description: row.description ?? null,
+      icon: row.icon ?? null,
+      points: Number(row.base_points ?? 0) || 0,
+      youtube_url: row.youtube_url ?? null,
+      version: Number(row.version ?? 1) || 1
+    }));
+    res.json(items);
+    return;
+  }
+
+  if (!tableExists("master_reward")) {
+    res.json([]);
+    return;
+  }
+  const hasRewardTable = tableExists("reward");
+  const rewardSql = hasRewardTable
+    ? `SELECT mr.id, mr.title, mr.description, mr.icon, mr.base_cost, mr.youtube_url, mr.version
+         FROM master_reward mr
+        WHERE mr.status = 'active'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM reward r
+             WHERE r.family_id = ?
+               AND ((r.source_template_id IS NOT NULL AND r.source_template_id = mr.id)
+                 OR (r.master_reward_id IS NOT NULL AND r.master_reward_id = mr.id))
+          )
+        ORDER BY mr.updated_at DESC, mr.id DESC`
+    : `SELECT mr.id, mr.title, mr.description, mr.icon, mr.base_cost, mr.youtube_url, mr.version
+         FROM master_reward mr
+        WHERE mr.status = 'active'
+        ORDER BY mr.updated_at DESC, mr.id DESC`;
+  const rows = hasRewardTable
+    ? db.prepare(rewardSql).all(familyId)
+    : db.prepare(rewardSql).all();
+  const items = rows.map((row) => ({
+    id: row.id,
+    title: row.title ?? "",
+    description: row.description ?? null,
+    icon: row.icon ?? null,
+    cost: Number(row.base_cost ?? 0) || 0,
+    youtube_url: row.youtube_url ?? null,
+    version: Number(row.version ?? 1) || 1
+  }));
+  res.json(items);
+});
 
 function buildTaskStatusUpdater(targetStatus) {
   return function handleTaskStatusUpdate(req, res) {
@@ -1448,6 +1734,8 @@ app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) =>
   const fields = [];
   const params = [];
   const isMasterLinked = !!(existing.master_task_id && String(existing.master_task_id).trim());
+  const hasCustomizationFlag = columns.includes("is_customized");
+  let markCustomized = false;
 
   if (!isMasterLinked && body.title !== undefined && columns.includes("title")) {
     const title = String(body.title).trim();
@@ -1503,6 +1791,9 @@ app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) =>
       fields.push("base_points = ?");
       params.push(normalized);
     }
+    if (isMasterLinked) {
+      markCustomized = true;
+    }
   }
 
   if (body.sort_order !== undefined && columns.includes("sort_order")) {
@@ -1530,6 +1821,9 @@ app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) =>
   if (!fields.length) {
     res.json({ ok: true, task: mapTaskRow(existing) });
     return;
+  }
+  if (markCustomized && hasCustomizationFlag) {
+    fields.push("is_customized = 1");
   }
 
   if (columns.includes("updated_at")) {
@@ -2801,18 +3095,18 @@ const insertFamilyStmt = db.prepare(
 );
 
 const selectMasterTaskStmt = db.prepare(
-  `SELECT id, title, description, icon, youtube_url, base_points, status, created_at, updated_at
+  `SELECT id, title, description, icon, youtube_url, base_points, status, version, created_at, updated_at
    FROM master_task
    WHERE id = ?`
 );
 const listMasterTasksStmt = db.prepare(
-  `SELECT id, title, description, icon, youtube_url, base_points, status, created_at, updated_at
+  `SELECT id, title, description, icon, youtube_url, base_points, status, version, created_at, updated_at
    FROM master_task
    ORDER BY created_at DESC, id DESC`
 );
 const insertMasterTaskStmt = db.prepare(
-  `INSERT INTO master_task (id, title, description, base_points, icon, youtube_url, status, created_at, updated_at)
-   VALUES (@id, @title, @description, @base_points, @icon, @youtube_url, @status, @created_at, @updated_at)`
+  `INSERT INTO master_task (id, title, description, base_points, icon, youtube_url, status, version, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_points, @icon, @youtube_url, @status, @version, @created_at, @updated_at)`
 );
 const updateMasterTaskStmt = db.prepare(
   `UPDATE master_task
@@ -2822,23 +3116,24 @@ const updateMasterTaskStmt = db.prepare(
           youtube_url = @youtube_url,
           base_points = @base_points,
           status = @status,
+          version = @version,
           updated_at = @updated_at
     WHERE id = @id`
 );
 
 const selectMasterRewardStmt = db.prepare(
-  `SELECT id, title, description, icon, youtube_url, base_cost, status, created_at, updated_at
+  `SELECT id, title, description, icon, youtube_url, base_cost, status, version, created_at, updated_at
    FROM master_reward
    WHERE id = ?`
 );
 const listMasterRewardsStmt = db.prepare(
-  `SELECT id, title, description, icon, youtube_url, base_cost, status, created_at, updated_at
+  `SELECT id, title, description, icon, youtube_url, base_cost, status, version, created_at, updated_at
    FROM master_reward
    ORDER BY created_at DESC, id DESC`
 );
 const insertMasterRewardStmt = db.prepare(
-  `INSERT INTO master_reward (id, title, description, base_cost, icon, youtube_url, status, created_at, updated_at)
-   VALUES (@id, @title, @description, @base_cost, @icon, @youtube_url, @status, @created_at, @updated_at)`
+  `INSERT INTO master_reward (id, title, description, base_cost, icon, youtube_url, status, version, created_at, updated_at)
+   VALUES (@id, @title, @description, @base_cost, @icon, @youtube_url, @status, @version, @created_at, @updated_at)`
 );
 const updateMasterRewardStmt = db.prepare(
   `UPDATE master_reward
@@ -2848,6 +3143,7 @@ const updateMasterRewardStmt = db.prepare(
           youtube_url = @youtube_url,
           base_cost = @base_cost,
           status = @status,
+          version = @version,
           updated_at = @updated_at
     WHERE id = @id`
 );
@@ -3346,8 +3642,11 @@ function mapRewardRow(row) {
   }
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
   const cost = Number(row.cost ?? row.price ?? 0) || 0;
+  const sourceTemplateId = row.source_template_id || row.master_reward_id || null;
   const masterRewardId = row.master_reward_id || null;
-  const source = masterRewardId ? "master" : row.source || null;
+  const source = sourceTemplateId ? "master" : row.source || null;
+  const sourceVersion = Number(row.source_version ?? 0) || 0;
+  const isCustomized = Number(row.is_customized ?? 0) ? 1 : 0;
   return {
     id: row.id,
     name: row.name || "",
@@ -3365,6 +3664,9 @@ function mapRewardRow(row) {
     campaign_id: row.campaign_id || null,
     source,
     master_reward_id: masterRewardId,
+    source_template_id: sourceTemplateId,
+    source_version: sourceVersion,
+    is_customized: isCustomized,
     created_at: Number(row.created_at ?? 0) || null,
     updated_at: Number(row.updated_at ?? 0) || null,
     family_id: row.family_id || null
@@ -5291,7 +5593,8 @@ app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) 
   let sql = `
     SELECT r.id, r.name, r.cost, r.description, r.image_url, r.youtube_url, r.status, r.tags, r.campaign_id, r.source,
            r.created_at, r.updated_at${REWARD_HAS_FAMILY_COLUMN ? ", r.family_id" : ""},
-           r.master_reward_id, mr.youtube_url AS master_youtube
+           r.master_reward_id, r.source_template_id, r.source_version, r.is_customized,
+           mr.youtube_url AS master_youtube
     FROM reward r
     LEFT JOIN master_reward mr ON mr.id = r.master_reward_id
   `;
@@ -5510,6 +5813,8 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
   }
 
   const isMasterLinked = !!(existing.master_reward_id && String(existing.master_reward_id).trim());
+  const hasCustomizationFlag = rewardColumns.includes("is_customized");
+  let markCustomized = false;
 
   if (!isMasterLinked && body.name !== undefined) {
     fields.push("name = ?");
@@ -5521,6 +5826,9 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
     if (!Number.isFinite(numeric)) return res.status(400).json({ error: "invalid_cost" });
     fields.push("cost = ?");
     params.push(Math.trunc(numeric));
+    if (isMasterLinked) {
+      markCustomized = true;
+    }
   }
   if (!isMasterLinked && body.description !== undefined) {
     fields.push("description = ?");
@@ -5574,6 +5882,9 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
   if (!fields.length) {
     res.json({ ok: true, reward: mapRewardRow(existing) });
     return;
+  }
+  if (markCustomized && hasCustomizationFlag) {
+    fields.push("is_customized = 1");
   }
   fields.push("updated_at = ?");
   const now = Date.now();
