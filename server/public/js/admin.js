@@ -1567,15 +1567,13 @@ function initAdmin() {
   }
 
   async function adminGET(path) {
-    let storedKey = '';
-    try {
-      storedKey = window.localStorage?.getItem(ADMIN_KEY_STORAGE) || '';
-    } catch {
-      storedKey = '';
+    const key = ensureAdminKey();
+    const headers = {};
+    if (key) {
+      headers['X-Admin-Key'] = key;
     }
-    const key = state.adminKey || storedKey || getAdminKey() || '';
     const res = await fetch(path, {
-      headers: { 'X-Admin-Key': key },
+      headers,
       credentials: 'same-origin'
     });
     if (!res.ok) {
@@ -2532,9 +2530,10 @@ details.member-fold .summary-value {
 
   async function loadAvailableTaskTemplates() {
     const familyId = requireFamilyId();
-    const list = await apiFetch(
-      `/api/admin/families/${encodeURIComponent(familyId)}/master-tasks/available`
-    );
+    const params = new URLSearchParams({ familyId, kind: 'task' });
+    const list = await apiFetch(`/api/admin/templates/available?${params.toString()}`, {
+      skipScope: true
+    });
     return Array.isArray(list) ? list : [];
   }
 
@@ -4689,7 +4688,10 @@ setupScanner({
         status: (item.status || (item.active ? 'active' : 'disabled') || 'active').toString().toLowerCase(),
         active: Number(item.active ?? (item.status === 'disabled' ? 0 : 1)) ? 1 : 0,
         source: item.source || null,
-        master_reward_id: item.master_reward_id || null
+        master_reward_id: item.master_reward_id || null,
+        source_template_id: item.source_template_id || item.master_reward_id || null,
+        source_version: Number(item.source_version ?? 0) || 0,
+        is_customized: Number(item.is_customized ?? 0) ? 1 : 0
       }));
       rewardsToggleInitialized = true;
       updateRewardsToggleButton();
@@ -4792,6 +4794,12 @@ setupScanner({
           origin.className = 'reward-origin-badge';
           origin.textContent = 'Master Template';
           info.appendChild(origin);
+        }
+        if (Number(item.is_customized)) {
+          const customBadge = document.createElement('div');
+          customBadge.className = 'reward-origin-badge is-customized';
+          customBadge.textContent = 'Customized';
+          info.appendChild(customBadge);
         }
 
         card.appendChild(info);
@@ -5230,6 +5238,21 @@ setupScanner({
           origin.className = 'template-origin-badge';
           origin.textContent = 'Master Template';
           titleCell.appendChild(origin);
+          if (Number(tpl.is_customized)) {
+            const custom = document.createElement('span');
+            custom.className = 'template-origin-badge is-customized';
+            custom.textContent = 'Customized';
+            titleCell.appendChild(custom);
+          }
+        }
+      } else if (Number(tpl.is_customized)) {
+        const titleCell = tr.querySelector('td:nth-child(2)');
+        if (titleCell) {
+          titleCell.appendChild(document.createElement('br'));
+          const custom = document.createElement('span');
+          custom.className = 'template-origin-badge is-customized';
+          custom.textContent = 'Customized';
+          titleCell.appendChild(custom);
         }
       }
 
@@ -5247,18 +5270,36 @@ setupScanner({
 
     try {
       const list = await loadAvailableTaskTemplates();
-      box.innerHTML = Array.isArray(list) && list.length
-        ? list
-            .map((t) => `
+      if (Array.isArray(list) && list.length) {
+        box.innerHTML = list
+          .map(
+            (t) => `
         <div class="flex items-center justify-between p-2 border rounded">
           <div>
             <div class="font-semibold">${t.title}</div>
             <div class="text-sm opacity-70">${t.points} pts${t.youtube_url ? ` · <a href="${t.youtube_url}" target="_blank">YouTube</a>` : ''}</div>
           </div>
           <button class="btn btn-sm" data-adopt="${t.id}">Add</button>
-        </div>`)
-            .join('')
-        : '<div class="opacity-70">No more templates to add.</div>';
+        </div>`
+          )
+          .join('');
+      } else {
+        const viewBtn = document.getElementById('btnViewDeactivated');
+        const parts = [
+          '<div class="opacity-70" style="margin-bottom:12px;">No more templates to add. You’ve already adopted all active master templates.</div>'
+        ];
+        if (viewBtn) {
+          parts.push('<button type="button" class="btn btn-sm" data-open-deactivated="true">View Deactivated</button>');
+        }
+        box.innerHTML = parts.join('');
+        const openDeactivated = box.querySelector('[data-open-deactivated]');
+        if (openDeactivated && viewBtn) {
+          openDeactivated.addEventListener('click', () => {
+            hide('#modal-task-templates');
+            viewBtn.click();
+          });
+        }
+      }
       show('#modal-task-templates');
     } catch (error) {
       console.warn('loadAvailableTaskTemplates failed', error);

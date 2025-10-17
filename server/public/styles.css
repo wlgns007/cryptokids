@@ -455,6 +455,12 @@
   color: #9a3412;
 }
 
+.template-origin-badge.is-customized,
+.reward-origin-badge.is-customized {
+  background: rgba(16, 185, 129, 0.16);
+  color: #047857;
+}
+
 .family-management-list,
 .family-create {
   background: #fff;

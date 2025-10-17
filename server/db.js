@@ -353,6 +353,81 @@ for (const table of scopedTables) {
 
 ensureColumnDefinition("task", "master_task_id", "TEXT");
 ensureColumnDefinition("reward", "master_reward_id", "TEXT");
+ensureColumnDefinition("master_task", "version", "INTEGER");
+ensureColumnDefinition("master_reward", "version", "INTEGER");
+ensureColumnDefinition("task", "source_template_id", "TEXT");
+ensureColumnDefinition("task", "source_version", "INTEGER");
+ensureColumnDefinition("task", "is_customized", "INTEGER");
+ensureColumnDefinition("reward", "source_template_id", "TEXT");
+ensureColumnDefinition("reward", "source_version", "INTEGER");
+ensureColumnDefinition("reward", "is_customized", "INTEGER");
+
+if (columnInfo('master_task').length) {
+  try {
+    db.exec(`
+      UPDATE master_task
+         SET version = COALESCE(NULLIF(version, ''), 1)
+       WHERE version IS NULL OR version = ''
+    `);
+  } catch (err) {
+    console.warn('[db] unable to backfill master_task.version', err?.message || err);
+  }
+}
+
+if (columnInfo('master_reward').length) {
+  try {
+    db.exec(`
+      UPDATE master_reward
+         SET version = COALESCE(NULLIF(version, ''), 1)
+       WHERE version IS NULL OR version = ''
+    `);
+  } catch (err) {
+    console.warn('[db] unable to backfill master_reward.version', err?.message || err);
+  }
+}
+
+if (columnInfo('task').length) {
+  try {
+    db.exec(`
+      UPDATE task
+         SET source_template_id = COALESCE(NULLIF(source_template_id, ''), master_task_id),
+             source_version = COALESCE(NULLIF(source_version, ''), 1),
+             is_customized = COALESCE(NULLIF(is_customized, ''), 0)
+       WHERE master_task_id IS NOT NULL
+    `);
+  } catch (err) {
+    console.warn('[db] unable to backfill task source metadata', err?.message || err);
+  }
+}
+
+if (columnInfo('reward').length) {
+  try {
+    db.exec(`
+      UPDATE reward
+         SET source_template_id = COALESCE(NULLIF(source_template_id, ''), master_reward_id),
+             source_version = COALESCE(NULLIF(source_version, ''), 1),
+             is_customized = COALESCE(NULLIF(is_customized, ''), 0)
+       WHERE master_reward_id IS NOT NULL
+    `);
+  } catch (err) {
+    console.warn('[db] unable to backfill reward source metadata', err?.message || err);
+  }
+}
+
+if (columnInfo('task').length) {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_task_source ON task(source_template_id, is_customized)');
+  } catch (err) {
+    console.warn('[db] unable to ensure task source metadata index', err?.message || err);
+  }
+}
+if (columnInfo('reward').length) {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_reward_source ON reward(source_template_id, is_customized)');
+  } catch (err) {
+    console.warn('[db] unable to ensure reward source metadata index', err?.message || err);
+  }
+}
 
 function ensureMasterCascadeTriggers() {
   const statements = [];
