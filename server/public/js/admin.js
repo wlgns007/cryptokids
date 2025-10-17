@@ -209,15 +209,14 @@ import { renderHeader } from './header.js';
     if (el) el.classList.add('hidden');
   }
 
+  function normalizeStatus(s) {
+    return String(s).toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+  }
+
   function clearBadge(el) {
     if (!el) return;
     el.textContent = '0';
     el.classList.add('hidden');
-  }
-
-  function normalizeStatus(value) {
-    const normalized = (value ?? '').toString().trim().toLowerCase();
-    return normalized === 'inactive' ? 'Inactive' : 'Active';
   }
 
   document.addEventListener('click', (event) => {
@@ -405,15 +404,20 @@ function initAdmin() {
   function setActiveTab(tab) {
     const desired = tab === 'families' ? 'families' : 'templates';
     state.activeTab = desired;
+    const templatesTab = document.getElementById('tabTemplates');
+    const familiesTab = document.getElementById('tabFamilies');
+    templatesTab?.classList.toggle('is-active', desired === 'templates');
+    familiesTab?.classList.toggle('is-active', desired === 'families');
+
     if (adminState.masterView !== desired) {
       adminState.masterView = desired;
+      if (adminState.role === 'master') {
+        persistAdminContextSnapshot();
+      }
     }
+
     applyMasterViewVisibility();
-    document.getElementById('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
-    document.getElementById('tabFamilies')?.classList.toggle('is-active', desired === 'families');
-    if (adminState.role === 'master') {
-      persistAdminContextSnapshot();
-    }
+
     if (desired === 'families') {
       adminState.showInactiveFamilies = !!state.showInactive;
       renderFamilyManagement();
@@ -442,28 +446,6 @@ function initAdmin() {
     renderPendingTemplates();
   }
 
-  document.getElementById('tabFamilies')?.addEventListener(
-    'click',
-    (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setActiveTab('families');
-    },
-    { passive: true }
-  );
-
-  document.getElementById('tabTemplates')?.addEventListener(
-    'click',
-    (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setActiveTab('templates');
-    },
-    { passive: true }
-  );
-
   document.addEventListener(
     'click',
     (event) => {
@@ -471,12 +453,27 @@ function initAdmin() {
       if (!(target instanceof HTMLElement)) return;
       const { id } = target;
       if (id === 'tabFamilies' || id === 'tabTemplates' || id === 'familiesToggle') {
+        event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
       }
     },
     true
   );
+
+  function bindMasterTabs() {
+    const familiesTab = document.getElementById('tabFamilies');
+    const templatesTab = document.getElementById('tabTemplates');
+    familiesTab?.addEventListener('click', () => setActiveTab('families'));
+    templatesTab?.addEventListener('click', () => setActiveTab('templates'));
+    setActiveTab(state.activeTab || 'templates');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bindMasterTabs, { once: true });
+  } else {
+    bindMasterTabs();
+  }
 
   function updateMasterScopeVisibility() {
     const isMaster = adminState.role === 'master';
@@ -1238,7 +1235,6 @@ function initAdmin() {
   }
 
   applyRoleVisibility();
-  setActiveTab(state.activeTab || 'templates');
 
   function clearAdminContext() {
     adminState.role = null;
@@ -1562,6 +1558,16 @@ function initAdmin() {
     }
   }
 
+  async function adminGET(url) {
+    return fetch(url, {
+      headers: { 'X-Admin-Key': state.adminKey || '' },
+      credentials: 'same-origin'
+    }).then((response) => {
+      if (!response.ok) throw new Error(`${response.status}`);
+      return response.json();
+    });
+  }
+
   async function fetchFamilies() {
     const status = state.showInactive ? 'inactive' : 'active';
     const url = `/api/admin/families?status=${status}`;
@@ -1793,32 +1799,28 @@ function initAdmin() {
   function mountFamiliesToggle(btn) {
     if (!btn || btn.dataset.bound === 'true') return;
     btn.dataset.bound = 'true';
-    btn.addEventListener(
-      'click',
-      async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        const previous = state.showInactive;
-        state.showInactive = !previous;
-        adminState.showInactiveFamilies = state.showInactive;
-        try {
-          const fams = await fetchFamilies();
-          state.families = Array.isArray(fams) ? fams : [];
-          assignFamilies(state.families);
-          if (adminState.role === 'master') {
-            persistAdminContextSnapshot();
-          }
-        } catch (error) {
-          console.warn('fetchFamilies failed', error);
-          state.showInactive = previous;
-          adminState.showInactiveFamilies = previous;
-        } finally {
-          renderFamilyManagement();
+    btn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const previous = state.showInactive;
+      state.showInactive = !previous;
+      adminState.showInactiveFamilies = state.showInactive;
+      try {
+        const fams = await fetchFamilies();
+        const list = Array.isArray(fams) ? fams : [];
+        state.families = list;
+        assignFamilies(list);
+        if (adminState.role === 'master') {
+          persistAdminContextSnapshot();
         }
-      },
-      { passive: true }
-    );
+      } catch (error) {
+        console.warn('fetchFamilies failed', error);
+        state.showInactive = previous;
+        adminState.showInactiveFamilies = previous;
+      }
+      renderFamilyManagement();
+    });
   }
 
   function renderFamilyManagement() {
@@ -1831,12 +1833,13 @@ function initAdmin() {
       familiesPanel.innerHTML = '';
       if (isMaster) {
         familiesPanel.innerHTML = `
-          <p class="muted family-panel-copy">Create or update families and control their status.</p>
-          <button id="familiesToggle" type="button" class="btn-link" aria-pressed="${
-            showInactive ? 'true' : 'false'
-          }">
-            ${showInactive ? 'View active families' : 'View inactive families'}
-          </button>
+          <div class="flex items-center mb-3">
+            <div class="text-sm text-slate-500">Create or update families and control their status.</div>
+            <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
+              ${showInactive ? 'View active families' : 'View inactive families'}
+            </button>
+          </div>
+          <div id="familiesTable"></div>
         `;
         const toggleButton = familiesPanel.querySelector('#familiesToggle');
         mountFamiliesToggle(toggleButton);
@@ -2491,17 +2494,6 @@ details.member-fold .summary-value {
       throw error;
     }
     return body;
-  }
-
-  async function adminGET(url) {
-    const response = await fetch(url, {
-      headers: { 'X-Admin-Key': state.adminKey || '' },
-      credentials: 'same-origin'
-    });
-    if (!response.ok) {
-      throw new Error(`${response.status}`);
-    }
-    return response.json();
   }
 
   async function loadAvailableTaskTemplates() {
