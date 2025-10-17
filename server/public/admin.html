@@ -1536,30 +1536,7 @@
             <button type="button" id="btnFamiliesRefresh">Refresh</button>
           </div>
           <div id="familyManagementPanel" class="stack family-management">
-            <div class="family-management-list">
-              <div class="family-list-header" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-                <h3>Existing families</h3>
-                <button type="button" id="btnToggleInactive" class="px-3 py-1 rounded border">View inactive families</button>
-              </div>
-              <div class="table-responsive">
-                <table class="family-table">
-                  <thead>
-                    <tr>
-                    <th scope="col">Family ID</th>
-                    <th scope="col">Name</th>
-                    <th scope="col">Email</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" class="actions">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="familyListTableBody">
-                    <tr id="familyListEmpty">
-                    <td colspan="5" class="muted">No families yet.</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <div id="existingFamiliesCard" class="family-management-list"></div>
             <section id="family-scope-panels" class="mt-4"></section>
             <div class="family-create">
               <h3>Create new family</h3>

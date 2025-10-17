@@ -333,8 +333,6 @@ function initAdmin() {
   state.showInactive = adminState.showInactiveFamilies;
   state.families = Array.isArray(adminState.families) ? [...adminState.families] : [];
   state.adminKey = state.adminKey || getAdminKey();
-  const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
-
   function cloneFamilyList(list) {
     return Array.isArray(list)
       ? list.map((family) => (family ? { ...family } : family)).filter(Boolean)
@@ -375,10 +373,7 @@ function initAdmin() {
   const familySearchForm = $k('familySearchForm');
   const familySearchInput = $k('familySearchInput');
   const familyManagementPanel = $k('familyManagementPanel');
-  const toggleInactiveButton = $k('btnToggleInactive');
   const familiesRefreshButton = $k('btnFamiliesRefresh');
-  const familyListTableBody = $k('familyListTableBody');
-  const familyListEmptyRow = $k('familyListEmpty');
   const familyCreateForm = $k('familyCreateForm');
   const familyCreateNameInput = $k('familyCreateName');
   const familyCreateFirstNameInput = $k('familyCreateFirstName');
@@ -1765,207 +1760,84 @@ function initAdmin() {
     });
   }
 
-  async function handleFamilyRowSave({ id, nameInput, emailInput, statusSelect, button }) {
-    if (!id || !nameInput || !statusSelect || !button) return;
-    const trimmedName = nameInput.value.trim();
-    const originalName = (nameInput.dataset.originalValue || '').trim();
-    const currentStatus = statusSelect.value;
-    const originalStatus = statusSelect.dataset.originalValue || '';
-    const payload = {};
-    if (trimmedName !== originalName) {
-      if (!trimmedName) {
-        toast('Family name is required.', 'error');
-        return;
-      }
-      payload.name = trimmedName;
+  function renderFamiliesTableHTML(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) {
+      const emptyText = state.showInactive ? 'No inactive families.' : 'No active families.';
+      return `
+        <table class="family-table table">
+          <tbody>
+            <tr>
+              <td colspan="4" class="muted">${escapeHtml(emptyText)}</td>
+            </tr>
+          </tbody>
+        </table>
+      `;
     }
-    if (currentStatus !== originalStatus) {
-      payload.status = currentStatus;
-    }
-    if (emailInput) {
-      const trimmedEmail = (emailInput.value || '').trim().toLowerCase();
-      const originalEmail = (emailInput.dataset.originalValue || '').trim().toLowerCase();
-      if (trimmedEmail !== originalEmail) {
-        if (!trimmedEmail) {
-          toast('Email is required.', 'error');
-          return;
-        }
-        if (!trimmedEmail.includes('@')) {
-          toast('Enter a valid email address.', 'error');
-          return;
-        }
-        payload.email = trimmedEmail;
-      }
-    }
-    if (!Object.keys(payload).length) {
-      button.disabled = true;
-      return;
-    }
-    const originalLabel = button.textContent;
-    button.disabled = true;
-    button.textContent = 'Saving...';
-    try {
-      await updateFamily(id, payload);
-      toast('Family updated.');
-      await refreshFamiliesFromServer({ silent: true });
-    } catch (error) {
-      if (error?.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-      } else {
-        const message = presentError(error?.body?.error || error?.message, 'Failed to update family');
-        toast(message, 'error');
-      }
-    } finally {
-      button.textContent = originalLabel;
-      button.disabled = true;
-    }
+
+    const rowsHtml = list
+      .map((row) => {
+        const rawId = row?.id != null ? String(row.id) : '';
+        const displayId = rawId || '—';
+        const name = row?.name ? String(row.name) : '';
+        const email = row?.email ? String(row.email) : '';
+        const status = row?.status ? String(row.status) : '';
+        return `
+          <tr class="cursor-pointer" data-family-id="${escapeHtml(rawId)}" data-family-name="${escapeHtml(name)}">
+            <td>${escapeHtml(displayId)}</td>
+            <td>${escapeHtml(name)}</td>
+            <td>${escapeHtml(email)}</td>
+            <td>${escapeHtml(status)}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    return `
+      <table class="family-table table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    `;
   }
 
-  function createFamilyRow(family, statusOptions) {
-    if (!familyListTableBody || !family) return;
-    const row = document.createElement('tr');
-    if (family.id) {
-      row.dataset.familyId = String(family.id);
-      row.dataset.familyName = family.name ? String(family.name) : '';
+  function renderExistingFamiliesCard() {
+    const host = document.getElementById('existingFamiliesCard');
+    if (!host) return;
+
+    const role = state.role ?? adminState.role ?? null;
+    const isMaster = role === 'master';
+
+    if (!isMaster) {
+      host.innerHTML = `
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-base font-semibold">Existing families</h3>
+        </div>
+        <div class="muted text-sm">Master access required.</div>
+      `;
+      return;
     }
-    if (family.id && family.id === adminState.currentFamilyId) {
-      row.classList.add('is-active');
-    }
-    const statusValue = (family.status ?? 'active').toString().trim().toLowerCase() || 'active';
-    const statusLabel = normalizeStatus(family.status);
-    if (statusValue === 'inactive') {
-      row.classList.add('is-inactive');
-    }
-    row.dataset.statusLabel = statusLabel;
 
-    const idCell = document.createElement('td');
-    idCell.textContent = family.id || '—';
-    row.appendChild(idCell);
+    const families = Array.isArray(state.families) ? state.families : [];
 
-    const nameCell = document.createElement('td');
-    const nameInput = document.createElement('input');
-    nameInput.type = 'text';
-    const originalName = family.name ? String(family.name) : '';
-    nameInput.value = originalName;
-    nameInput.dataset.originalValue = originalName;
-    nameInput.placeholder = 'Family name';
-    nameCell.appendChild(nameInput);
-    row.appendChild(nameCell);
-
-    const emailCell = document.createElement('td');
-    const emailInput = document.createElement('input');
-    emailInput.type = 'email';
-    const originalEmail = family.email ? String(family.email) : '';
-    emailInput.value = originalEmail;
-    emailInput.dataset.originalValue = originalEmail;
-    emailInput.placeholder = 'Email';
-    emailCell.appendChild(emailInput);
-    row.appendChild(emailCell);
-
-    const statusCell = document.createElement('td');
-    const statusSelect = document.createElement('select');
-    statusSelect.className = 'family-status-select';
-    statusSelect.dataset.originalValue = statusValue;
-    const deleteOptionValue = '__delete__';
-    for (const option of statusOptions) {
-      const opt = document.createElement('option');
-      opt.value = option;
-      opt.textContent = option.charAt(0).toUpperCase() + option.slice(1);
-      statusSelect.appendChild(opt);
-    }
-    const deleteOpt = document.createElement('option');
-    deleteOpt.value = deleteOptionValue;
-    deleteOpt.textContent = 'Delete permanently';
-    statusSelect.appendChild(deleteOpt);
-    if (statusSelect.value !== statusValue) {
-      statusSelect.value = statusValue;
-    }
-    statusCell.appendChild(statusSelect);
-    row.appendChild(statusCell);
-
-    const actionsCell = document.createElement('td');
-    actionsCell.className = 'actions';
-    const saveButton = document.createElement('button');
-    saveButton.type = 'button';
-    saveButton.textContent = 'Save';
-    saveButton.disabled = true;
-    actionsCell.appendChild(saveButton);
-    row.appendChild(actionsCell);
-
-    const evaluateDirtyState = () => {
-      if (statusSelect.value === deleteOptionValue) {
-        saveButton.disabled = true;
-        return;
-      }
-      const currentName = nameInput.value.trim();
-      const originalNameNormalized = (nameInput.dataset.originalValue || '').trim();
-      const currentStatus = statusSelect.value;
-      const originalStatus = statusSelect.dataset.originalValue || '';
-      const currentEmail = emailInput.value.trim().toLowerCase();
-      const originalEmailNormalized = (emailInput.dataset.originalValue || '').trim().toLowerCase();
-      const changed =
-        currentName !== originalNameNormalized ||
-        currentStatus !== originalStatus ||
-        currentEmail !== originalEmailNormalized;
-      saveButton.disabled = !changed;
-    };
-
-    nameInput.addEventListener('input', evaluateDirtyState);
-    emailInput.addEventListener('input', evaluateDirtyState);
-    statusSelect.addEventListener('change', async () => {
-      if (statusSelect.value === deleteOptionValue) {
-        statusSelect.value = statusSelect.dataset.originalValue || statusValue;
-        if (!confirm('Delete this family permanently?')) {
-          evaluateDirtyState();
-          return;
-        }
-        try {
-          await deleteFamily(family.id);
-          toast('Family deleted.');
-          await refreshFamiliesFromServer({ silent: false });
-        } catch (error) {
-          const message = presentError(error?.body?.error || error?.message, 'Delete failed');
-          toast(message, 'error');
-        }
-        return;
-      }
-      evaluateDirtyState();
-    });
-    saveButton.addEventListener('click', () =>
-      handleFamilyRowSave({ id: family.id, nameInput, emailInput, statusSelect, button: saveButton })
-    );
-
-    row.addEventListener(
-      'click',
-      async (event) => {
-        if (state.role !== 'master') return;
-        const target = event.target;
-        if (
-          target &&
-          (target.closest('input') ||
-            target.closest('button') ||
-            target.closest('select') ||
-            target.closest('a') ||
-            target.closest('label') ||
-            target.closest('textarea'))
-        ) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        const familyId = family.id || row.dataset.familyId;
-        if (!familyId) return;
-        try {
-          await setScopedFamily(familyId, family.name || row.dataset.familyName || '');
-        } catch (error) {
-          console.warn('Failed to set scoped family from row click', error);
-        }
-      },
-      { capture: true }
-    );
-
-    familyListTableBody.appendChild(row);
+    host.innerHTML = `
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-base font-semibold">Existing families</h3>
+        <button id="btnToggleInactive" type="button" class="px-3 py-1 rounded border">
+          ${state.showInactive ? 'View active families' : 'View inactive families'}
+        </button>
+      </div>
+      <div id="familiesTable" class="table-responsive">
+        ${renderFamiliesTableHTML(families)}
+      </div>
+    `;
   }
 
   function renderFamilyManagement(message = '') {
@@ -1975,13 +1847,7 @@ function initAdmin() {
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
 
-    const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
-    if (toggleInactiveButton) {
-      toggleInactiveButton.hidden = !isMaster;
-      toggleInactiveButton.disabled = !isMaster;
-      toggleInactiveButton.textContent = showInactive ? 'View active families' : 'View inactive families';
-    }
-
+    const note = message ? `<div class="text-sm text-rose-600 mb-2">${escapeHtml(message)}</div>` : '';
     if (host) {
       if (isMaster) {
         const copy = '<div class="text-sm text-slate-500">Master admins can review all families.</div>';
@@ -1992,18 +1858,14 @@ function initAdmin() {
       }
     }
 
+    renderExistingFamiliesCard();
+
+    if (!familyManagementPanel) {
+      renderScopePanels();
+      return;
+    }
+
     if (!isMaster) {
-      if (familyListTableBody) {
-        familyListTableBody.innerHTML = '';
-        if (familyListEmptyRow) {
-          const cell = familyListEmptyRow.querySelector('td');
-          if (cell) {
-            cell.colSpan = 5;
-            cell.textContent = 'Master access required.';
-          }
-          familyListTableBody.appendChild(familyListEmptyRow);
-        }
-      }
       if (familyCreateIdPreview) {
         familyCreateIdPreview.textContent = '—';
         familyCreateIdPreview.dataset.value = '';
@@ -2013,68 +1875,75 @@ function initAdmin() {
       return;
     }
 
-    if (toggleInactiveButton && toggleInactiveButton.dataset.bound !== 'true') {
-      toggleInactiveButton.dataset.bound = 'true';
-      toggleInactiveButton.addEventListener(
-        'click',
-        async (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          event.stopImmediatePropagation();
-          if (state.role !== 'master') {
-            renderFamilyManagement('Master key required.');
-            return;
-          }
-          state.showInactive = !state.showInactive;
-          adminState.showInactiveFamilies = state.showInactive;
-          renderFamilyManagement('');
-          try {
-            const ok = await refreshFamiliesFromServer({ silent: false });
-            if (!ok) {
-              renderFamilyManagement('Failed to load families.');
-            }
-          } catch (error) {
-            console.warn('refreshFamiliesFromServer failed', error);
-            const msg = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
-            renderFamilyManagement(msg);
-          }
-        },
-        { capture: true }
-      );
-    }
-
-    if (!familyManagementPanel) {
-      renderScopePanels();
-      return;
-    }
-
-    const families = Array.isArray(adminState.families) ? adminState.families : [];
-    if (familyListTableBody) {
-      familyListTableBody.innerHTML = '';
-      if (!families.length) {
-        const row = document.createElement('tr');
-        const cell = document.createElement('td');
-        cell.colSpan = 5;
-        cell.className = 'muted';
-        cell.textContent = showInactive ? 'No inactive families.' : 'No active families.';
-        row.appendChild(cell);
-        familyListTableBody.appendChild(row);
-      } else {
-        const statusSet = new Set(FAMILY_STATUS_OPTIONS);
-        for (const family of families) {
-          const normalizedStatus = (family?.status ?? 'active').toString().trim().toLowerCase() || 'active';
-          statusSet.add(normalizedStatus);
-        }
-        const statusOptions = Array.from(statusSet);
-        for (const family of families) {
-          createFamilyRow(family, statusOptions);
-        }
-      }
-    }
-
     refreshFamilyIdPreview();
     renderScopePanels();
   }
+
+  document.addEventListener(
+    'click',
+    async (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const btn = target.closest('#btnToggleInactive');
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const previous = state.showInactive;
+      state.showInactive = !state.showInactive;
+      renderExistingFamiliesCard();
+
+      if (state.role !== 'master') return;
+
+      try {
+        const families = await fetchFamiliesStrict();
+        setAdminState({ families, showInactiveFamilies: state.showInactive });
+      } catch (error) {
+        console.warn('Failed to load families', error);
+        state.showInactive = previous;
+        renderExistingFamiliesCard();
+        toast('Failed to load families');
+      }
+    },
+    true
+  );
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const row = target.closest('[data-family-id]');
+      if (!row) return;
+      const familiesPanel = document.getElementById('panel-families');
+      if (!familiesPanel || familiesPanel.classList.contains('hidden')) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const familyId = row.getAttribute('data-family-id');
+      if (!familyId) return;
+      const familyName = row.getAttribute('data-family-name') || '';
+      setScopedFamily(familyId, familyName).catch((error) =>
+        console.warn('Failed to set scoped family from table row', error)
+      );
+    },
+    true
+  );
+
+  document.getElementById('btnScopeGo')?.addEventListener('click', () => {
+    const select = document.getElementById('scopeSelect');
+    const fid = select && typeof select.value === 'string' ? select.value.trim() : '';
+    const option = select?.selectedOptions?.[0] || null;
+    const fname = option ? option.text : '';
+    if (!fid) {
+      toast('Select a family');
+      return;
+    }
+    setScopedFamily(fid, fname).catch((error) => console.warn('Failed to scope family from dropdown', error));
+  });
 
   function findFamilyEntry(familyId) {
     if (!familyId) return null;
