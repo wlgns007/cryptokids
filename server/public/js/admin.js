@@ -33,37 +33,60 @@ import { renderHeader } from './header.js';
   let adminKeyMemory = '';
 
   function getAdminKey() {
-    const remembered = (state.adminKey || adminKeyMemory || '').trim();
-    if (remembered) {
-      adminKeyMemory = remembered;
-      state.adminKey = remembered;
-      return remembered;
-    }
-
-    const readers = [
+    const sources = [
+      state.adminKey,
+      adminKeyMemory,
       () => window.localStorage?.getItem('adminKey'),
       () => window.localStorage?.getItem('ck_admin_key'),
       () => window.localStorage?.getItem(ADMIN_KEY_STORAGE),
       () => window.sessionStorage?.getItem('adminKey'),
       () => window.sessionStorage?.getItem('ck_admin_key'),
-      () => window.sessionStorage?.getItem(ADMIN_KEY_STORAGE)
+      () => window.sessionStorage?.getItem(ADMIN_KEY_STORAGE),
+      () => readCookie('ck_admin_key')
     ];
 
-    for (const read of readers) {
-      try {
-        const value = read?.();
-        if (typeof value === 'string' && value.trim()) {
-          adminKeyMemory = value.trim();
-          state.adminKey = adminKeyMemory;
-          return adminKeyMemory;
-        }
-      } catch {
-        // ignore storage errors
+    for (const source of sources) {
+      const value = typeof source === 'function' ? safeRead(source) : source;
+      if (typeof value === 'string' && value.trim()) {
+        adminKeyMemory = value.trim();
+        state.adminKey = adminKeyMemory;
+        return adminKeyMemory;
       }
     }
 
     state.adminKey = '';
+    adminKeyMemory = '';
     return '';
+  }
+
+  function safeRead(fn) {
+    try {
+      return fn();
+    } catch {
+      return '';
+    }
+  }
+
+  function readCookie(name) {
+    try {
+      const pattern = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`);
+      const match = pattern.exec(document.cookie || '');
+      return match ? decodeURIComponent(match[1]) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function mirrorAdminKeyToCookie(key) {
+    if (!key || typeof document === 'undefined') return;
+    const existing = readCookie('ck_admin_key');
+    if (existing === key) return;
+    document.cookie = `ck_admin_key=${encodeURIComponent(key)}; Path=/; SameSite=Lax`;
+  }
+
+  function clearAdminKeyCookie() {
+    if (typeof document === 'undefined') return;
+    document.cookie = 'ck_admin_key=; Path=/; Max-Age=0; SameSite=Lax';
   }
 
   function setAdminKey(val) {
@@ -100,6 +123,11 @@ import { renderHeader } from './header.js';
     }
     adminKeyMemory = value;
     state.adminKey = value;
+    if (value) {
+      mirrorAdminKeyToCookie(value);
+    } else {
+      clearAdminKeyCookie();
+    }
     return persisted;
   }
 
@@ -1616,9 +1644,12 @@ function initAdmin() {
   }
 
   async function adminGET(path) {
+    const key = getAdminKey();
+    if (key) mirrorAdminKeyToCookie(key);
     const res = await fetch(path, {
-      headers: { 'X-Admin-Key': getAdminKey() },
-      credentials: 'same-origin'
+      headers: { 'X-Admin-Key': key },
+      credentials: 'same-origin',
+      cache: 'no-store'
     });
     if (!res.ok) {
       throw new Error(String(res.status));
@@ -2488,6 +2519,7 @@ details.member-fold .summary-value {
     const stored = getAdminKey();
     if (stored && keyInput) {
       keyInput.value = stored;
+      mirrorAdminKeyToCookie(stored);
       return stored;
     }
     return stored;
@@ -2552,6 +2584,7 @@ details.member-fold .summary-value {
       'x-actor-role': 'admin',
       ...(extraHeaders || {})
     };
+    mirrorAdminKeyToCookie(key);
     if (!skipScope) {
       const scopeId = adminState.currentFamilyId || null;
       if (scopeId) {
@@ -2559,7 +2592,13 @@ details.member-fold .summary-value {
       }
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-    const res = await fetch(url, { credentials: 'same-origin', ...fetchOpts, headers });
+    const requestInit = {
+      credentials: 'same-origin',
+      ...fetchOpts,
+      cache: 'no-store',
+      headers
+    };
+    const res = await fetch(url, requestInit);
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
@@ -2580,34 +2619,104 @@ details.member-fold .summary-value {
   function renderEmptyTemplateOptions(kind, container, options = {}) {
     if (!container) return;
     const { modalSelector, viewButton } = options;
-    const label = kind === 'reward' ? 'Reward' : 'Task';
-    container.innerHTML =
-      '<div class="opacity-70" style="margin-bottom:12px;">No more templates to add. You’ve already adopted all active master templates.</div>';
-    const actions = document.createElement('div');
-    actions.className = 'flex gap-2 mt-3';
+    const modal = modalSelector ? document.querySelector(modalSelector) : container.closest('.modal');
+    const closeModal = () => {
+      if (modalSelector) {
+        hide(modalSelector);
+      } else if (modal?.id) {
+        hide(`#${modal.id}`);
+      } else if (modal) {
+        modal.classList.add('hidden');
+      }
+    };
 
-    const createBtn = document.createElement('button');
-    createBtn.type = 'button';
-    createBtn.className = 'btn-primary';
-    createBtn.textContent = `Create Custom ${label}`;
-    actions.appendChild(createBtn);
+    const label = kind === 'reward' ? 'Reward' : 'Task';
+    const createLabel = kind === 'reward' ? 'Create Custom Reward' : 'Create Custom Task';
+    const valuePrompt = kind === 'reward' ? 'Cost?' : 'Base points?';
+    const valueKey = kind === 'reward' ? 'cost' : 'points';
+
+    container.innerHTML = `
+      <p class="text-sm text-slate-600 mb-4">No more templates to add. You've already adopted all active master templates.</p>
+      <div class="flex gap-2 justify-end">
+        <button type="button" class="btn-primary" data-create>${createLabel}</button>
+        <button type="button" class="btn-secondary" data-close>Close</button>
+      </div>
+    `;
+
+    const createBtn = container.querySelector('[data-create]');
+    const closeBtn = container.querySelector('[data-close]');
+
+    const ensureFamilyId = () => {
+      const activeFamily = state.familyId || adminState.currentFamilyId || adminState.familyId;
+      return activeFamily ? String(activeFamily) : '';
+    };
+
+    createBtn?.addEventListener('click', async () => {
+      const familyId = ensureFamilyId();
+      if (!familyId) {
+        toast('Select a family scope to create templates.', 'error');
+        return;
+      }
+      const title = window.prompt(`${label} title?`);
+      if (!title) return;
+      const trimmedTitle = title.trim();
+      if (!trimmedTitle) return;
+      const defaultValue = kind === 'reward' ? '1' : '1';
+      const rawValue = window.prompt(valuePrompt, defaultValue);
+      if (rawValue === null) return;
+      const numericValue = Number(rawValue);
+      if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        toast(`${label} value must be a positive number.`, 'error');
+        return;
+      }
+
+      const key = getAdminKey();
+      if (key) mirrorAdminKeyToCookie(key);
+      const endpoint = kind === 'reward'
+        ? `/api/admin/families/${encodeURIComponent(familyId)}/rewards`
+        : `/api/admin/families/${encodeURIComponent(familyId)}/tasks`;
+      const payload = {
+        title: trimmedTitle,
+        status: 'active',
+        [valueKey]: numericValue
+      };
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Key': key
+          },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const message = body && typeof body === 'object' && body.error ? body.error : 'Create failed';
+          throw new Error(message);
+        }
+        closeModal();
+        if (kind === 'reward') {
+          await loadRewards?.();
+        } else {
+          await refreshEarnTemplates('active');
+        }
+      } catch (error) {
+        const message = error?.message || 'Create failed';
+        if (message !== ADMIN_KEY_REQUIRED_MSG) {
+          toast(message, 'error');
+        }
+      }
+    });
+
+    closeBtn?.addEventListener('click', closeModal);
 
     if (viewButton instanceof HTMLElement) {
-      const viewBtn = document.createElement('button');
-      viewBtn.type = 'button';
-      viewBtn.className = 'btn btn-sm';
-      viewBtn.textContent = viewButton.textContent || 'View Deactivated';
-      viewBtn.addEventListener('click', () => {
-        if (modalSelector) hide(modalSelector);
-        viewButton.click();
-      });
-      actions.appendChild(viewBtn);
+      viewButton.disabled = false;
+      viewButton.classList.remove('disabled');
     }
-
-    container.appendChild(actions);
-    createBtn.addEventListener('click', () =>
-      showCustomTemplateForm(kind, container, { modalSelector, viewButton })
-    );
   }
 
   function showCustomTemplateForm(kind, container, options = {}) {
@@ -2821,7 +2930,7 @@ details.member-fold .summary-value {
       return false;
     }
     try {
-      const payload = await apiFetch('/api/whoami', { skipScope: true });
+      const payload = await adminGET('/api/admin/whoami');
       const nextState = {
         role: payload.role ?? null,
         family_id: payload.family_id ?? payload.familyId ?? null
@@ -2895,9 +3004,16 @@ details.member-fold .summary-value {
     const msg = document.querySelector('#nf-msg');
     if (msg) msg.textContent = 'Creating...';
     try {
+      const key = getAdminKey();
+      if (key) mirrorAdminKeyToCookie(key);
       const res = await fetch('/api/admin/families/self-register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Key': key
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify({ familyName, adminName, email, adminKey })
       });
       const data = await res.json().catch(() => ({}));
@@ -2918,9 +3034,16 @@ details.member-fold .summary-value {
     const msg = document.querySelector('#fk-msg');
     if (msg) msg.textContent = 'Sending...';
     try {
+      const key = getAdminKey();
+      if (key) mirrorAdminKeyToCookie(key);
       const res = await fetch('/api/admin/families/forgot-admin-key', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Key': key
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify({ email })
       });
       if (!res.ok) throw new Error('Failed');
