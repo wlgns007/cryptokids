@@ -1249,7 +1249,7 @@
     </header>
 
     <main class="page-container">
-      <nav id="masterViewTabs" class="admin-tabs" data-admin-role="master" role="tablist" hidden>
+      <div id="masterViewTabs" class="admin-tabs tabs" data-admin-role="master" role="tablist" hidden>
         <button
           id="tabTemplates"
           type="button"
@@ -1270,15 +1270,15 @@
         >
           Families
         </button>
-      </nav>
-
-      <section
-        id="masterTemplatesSection"
-        class="card"
-        data-admin-role="master"
-        data-master-view="templates"
-        hidden
-      >
+      </div>
+      <section id="panel-templates" class="tab-panel" data-admin-role="master" data-master-view="templates">
+        <section
+          id="masterTemplatesSection"
+          class="card"
+          data-admin-role="master"
+          data-master-view="templates"
+          hidden
+        >
         <header class="card-header">
           <h2 class="card-title">Master Templates</h2>
         </header>
@@ -1454,9 +1454,12 @@
             </div>
           </div>
         </div>
+        </section>
       </section>
+      <section id="panel-families" class="tab-panel hidden" data-admin-role="family,master" data-master-view="families">
+        <div id="families-panel"><!-- JS will render the shell/list here --></div>
 
-      <section class="card" id="card-family-scope" data-collapsible data-admin-role="master" data-master-view="families" hidden>
+        <section class="card" id="card-family-scope" data-collapsible data-admin-role="master" data-master-view="families" hidden>
         <header class="card-header">
           <button class="card-toggle" aria-expanded="true">
             Family Scope
@@ -1517,10 +1520,10 @@
         </div>
         <p class="muted" id="pendingTemplatesStatus"></p>
         <ul id="pendingTemplatesList" class="pending-templates-list"></ul>
-      </section>
+        </section>
 
 
-      <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" data-master-view="families" hidden>
+        <section class="card collapsed" id="card-family-management" data-collapsible data-admin-role="master" data-master-view="families" hidden>
         <header class="card-header">
           <button class="card-toggle" aria-expanded="false">
             Family Management
@@ -1535,7 +1538,6 @@
           <div id="familyManagementPanel" class="stack family-management">
             <div class="family-management-list">
               <h3>Existing families</h3>
-              <div class="family-management-controls" id="families-panel"></div>
               <div class="table-responsive">
                 <table class="family-table">
                   <thead>
@@ -1992,6 +1994,7 @@
             </div>
           </div>
         </div>
+      </section>
       </section>
     </main>
   </div>

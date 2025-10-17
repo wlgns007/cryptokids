@@ -144,6 +144,10 @@
   transform: translateY(-1px);
 }
 
+.tab-panel.hidden {
+  display: none;
+}
+
 .tab:disabled {
   opacity: 0.5;
   cursor: not-allowed;
