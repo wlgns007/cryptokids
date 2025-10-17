@@ -12,6 +12,9 @@ import { renderHeader } from './header.js';
     familyId: null
   };
 
+  let refreshAdminAuth = async () => {};
+  let setActiveTab = () => {};
+
   if (typeof document !== 'undefined' && document.title) {
     document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
     const heroHeading = document.querySelector('h1');
@@ -30,32 +33,27 @@ import { renderHeader } from './header.js';
   const SUPPORTED_LANGS = ['en', 'ko'];
 
   // ---- safe helpers (defined before use) ----
-  let adminKeyMemory = '';
-
   function getAdminKey() {
-    const sources = [
+    const candidates = [
       state.adminKey,
-      adminKeyMemory,
       () => window.localStorage?.getItem('adminKey'),
       () => window.localStorage?.getItem('ck_admin_key'),
       () => window.localStorage?.getItem(ADMIN_KEY_STORAGE),
       () => window.sessionStorage?.getItem('adminKey'),
       () => window.sessionStorage?.getItem('ck_admin_key'),
-      () => window.sessionStorage?.getItem(ADMIN_KEY_STORAGE),
-      () => readCookie('ck_admin_key')
+      () => window.sessionStorage?.getItem(ADMIN_KEY_STORAGE)
     ];
 
-    for (const source of sources) {
-      const value = typeof source === 'function' ? safeRead(source) : source;
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'function' ? safeRead(candidate) : candidate;
       if (typeof value === 'string' && value.trim()) {
-        adminKeyMemory = value.trim();
-        state.adminKey = adminKeyMemory;
-        return adminKeyMemory;
+        const normalized = value.trim();
+        state.adminKey = normalized;
+        return normalized;
       }
     }
 
     state.adminKey = '';
-    adminKeyMemory = '';
     return '';
   }
 
@@ -121,7 +119,6 @@ import { renderHeader } from './header.js';
     } catch {
       persisted = false;
     }
-    adminKeyMemory = value;
     state.adminKey = value;
     if (value) {
       mirrorAdminKeyToCookie(value);
@@ -469,7 +466,7 @@ function initAdmin() {
     });
   }
 
-  function setActiveTab(tab) {
+  setActiveTab = (tab) => {
     const desired = tab === 'families' ? 'families' : 'templates';
     state.activeTab = desired;
     const templatesTab = document.getElementById('tabTemplates');
@@ -503,15 +500,13 @@ function initAdmin() {
           console.warn('fetchFamilies failed', error);
           state.families = [];
           assignFamilies([]);
-          const message = String(error) === 'Error: 403'
-            ? 'Master key required or header missing.'
-            : 'Failed to load families.';
+          const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
           renderFamilyManagement(message);
         });
     } else {
       renderMasterTemplates();
     }
-  }
+  };
 
   function renderMasterTemplates() {
     renderMasterTaskList();
@@ -1645,7 +1640,9 @@ function initAdmin() {
 
   async function adminGET(path) {
     const key = getAdminKey();
-    if (key) mirrorAdminKeyToCookie(key);
+    if (key && typeof document !== 'undefined' && !document.cookie.includes('ck_admin_key=')) {
+      document.cookie = `ck_admin_key=${encodeURIComponent(key)}; Path=/; SameSite=Lax`;
+    }
     const res = await fetch(path, {
       headers: { 'X-Admin-Key': key },
       credentials: 'same-origin',
@@ -1657,19 +1654,18 @@ function initAdmin() {
     return res.json();
   }
 
-  async function refreshAdminAuth() {
+  refreshAdminAuth = async () => {
     try {
       const me = await adminGET('/api/admin/whoami');
       state.isMaster = me.role === 'master';
-      const incomingFamilyId = me.familyId ?? me.family_id ?? null;
-      state.familyId = incomingFamilyId ?? state.familyId ?? null;
+      state.familyId = me.familyId ?? null;
       renderRoleBadge();
     } catch {
       state.isMaster = false;
       state.familyId = null;
       renderRoleBadge(true);
     }
-  }
+  };
 
   async function fetchFamilies() {
     const status = state.showInactive ? 'inactive' : 'active';
@@ -2301,7 +2297,7 @@ details.member-fold .summary-value {
       toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
       renderRoleBadge(value ? false : true);
       await refreshAdminAuth();
-      setActiveTab(state.activeTab || 'templates');
+      setActiveTab('templates');
       if (value) {
         const ok = await refreshAdminContext({ showToastOnError: true });
         if (ok) {
@@ -2326,7 +2322,7 @@ details.member-fold .summary-value {
       updateWhoamiBanner();
     }
     await refreshAdminAuth();
-    setActiveTab(state.activeTab || 'templates');
+    setActiveTab('templates');
     if (saved) {
       const ok = await refreshAdminContext({ silent: true });
       if (ok) {
@@ -2631,72 +2627,89 @@ details.member-fold .summary-value {
     };
 
     const label = kind === 'reward' ? 'Reward' : 'Task';
-    const createLabel = kind === 'reward' ? 'Create Custom Reward' : 'Create Custom Task';
-    const valuePrompt = kind === 'reward' ? 'Cost?' : 'Base points?';
     const valueKey = kind === 'reward' ? 'cost' : 'points';
+    const numericLabel = kind === 'reward' ? 'Cost' : 'Points';
 
     container.innerHTML = `
-      <p class="text-sm text-slate-600 mb-4">No more templates to add. You've already adopted all active master templates.</p>
-      <div class="flex gap-2 justify-end">
-        <button type="button" class="btn-primary" data-create>${createLabel}</button>
-        <button type="button" class="btn-secondary" data-close>Close</button>
-      </div>
+      <p class="text-sm text-slate-600">No more master templates remain. Create a custom ${label.toLowerCase()} for this family.</p>
+      <form class="stack" data-custom-template="${kind}">
+        <div class="flex gap-3 flex-wrap">
+          <label style="flex:1 1 180px; min-width:180px;">
+            <span class="block text-sm font-medium mb-1">Title</span>
+            <input name="title" type="text" required />
+          </label>
+          <label style="flex:0 0 160px; min-width:140px;">
+            <span class="block text-sm font-medium mb-1">${numericLabel}</span>
+            <input name="${valueKey}" type="number" min="0" step="1" value="0" required />
+          </label>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button type="submit" class="btn-primary">Create Custom ${label}</button>
+          <button type="button" class="btn-secondary" data-close>Cancel</button>
+        </div>
+      </form>
     `;
 
-    const createBtn = container.querySelector('[data-create]');
-    const closeBtn = container.querySelector('[data-close]');
+    const form = container.querySelector('form');
+    const cancelBtn = container.querySelector('[data-close]');
 
-    const ensureFamilyId = () => {
-      const activeFamily = state.familyId || adminState.currentFamilyId || adminState.familyId;
-      return activeFamily ? String(activeFamily) : '';
-    };
+    cancelBtn?.addEventListener('click', () => {
+      closeModal();
+    });
 
-    createBtn?.addEventListener('click', async () => {
-      const familyId = ensureFamilyId();
-      if (!familyId) {
-        toast('Select a family scope to create templates.', 'error');
-        return;
-      }
-      const title = window.prompt(`${label} title?`);
-      if (!title) return;
-      const trimmedTitle = title.trim();
-      if (!trimmedTitle) return;
-      const defaultValue = kind === 'reward' ? '1' : '1';
-      const rawValue = window.prompt(valuePrompt, defaultValue);
-      if (rawValue === null) return;
-      const numericValue = Number(rawValue);
-      if (!Number.isFinite(numericValue) || numericValue <= 0) {
-        toast(`${label} value must be a positive number.`, 'error');
-        return;
-      }
-
-      const key = getAdminKey();
-      if (key) mirrorAdminKeyToCookie(key);
-      const endpoint = kind === 'reward'
-        ? `/api/admin/families/${encodeURIComponent(familyId)}/rewards`
-        : `/api/admin/families/${encodeURIComponent(familyId)}/tasks`;
-      const payload = {
-        title: trimmedTitle,
-        status: 'active',
-        [valueKey]: numericValue
-      };
-
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) submitButton.disabled = true;
       try {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Admin-Key': key
-          },
-          credentials: 'same-origin',
-          cache: 'no-store',
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          const message = body && typeof body === 'object' && body.error ? body.error : 'Create failed';
-          throw new Error(message);
+        const formData = new FormData(form);
+        const title = String(formData.get('title') || '').trim();
+        if (!title) {
+          toast('Title is required.', 'error');
+          return;
         }
+        const rawValue = Number(formData.get(valueKey));
+        const numericValue = Number.isFinite(rawValue) && rawValue >= 0 ? Math.floor(rawValue) : 0;
+
+        let familyId;
+        try {
+          familyId = requireFamilyId();
+        } catch (error) {
+          const message = error?.message || 'Select a family scope to create templates.';
+          toast(message, 'error');
+          return;
+        }
+
+        const endpoint = kind === 'reward' ? 'rewards' : 'tasks';
+        const url = `/api/admin/families/${encodeURIComponent(familyId)}/${endpoint}`;
+        const payload = {
+          title,
+          status: 'active',
+          [valueKey]: numericValue
+        };
+
+        const { res, body } = await adminFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          skipScope: true
+        });
+
+        if (res.status === 401) {
+          toast(ADMIN_INVALID_MSG, 'error');
+          return;
+        }
+        if (res.status === 403) {
+          toast('Master key required.', 'error');
+          return;
+        }
+        if (!res.ok) {
+          const message = presentError(body?.error, 'Create failed');
+          toast(message, 'error');
+          return;
+        }
+
+        toast(kind === 'reward' ? 'Custom reward created.' : 'Custom task created.');
         closeModal();
         if (kind === 'reward') {
           await loadRewards?.();
@@ -2708,145 +2721,14 @@ details.member-fold .summary-value {
         if (message !== ADMIN_KEY_REQUIRED_MSG) {
           toast(message, 'error');
         }
+      } finally {
+        if (submitButton) submitButton.disabled = false;
       }
     });
-
-    closeBtn?.addEventListener('click', closeModal);
 
     if (viewButton instanceof HTMLElement) {
       viewButton.disabled = false;
       viewButton.classList.remove('disabled');
-    }
-  }
-
-  function showCustomTemplateForm(kind, container, options = {}) {
-    if (!container) return;
-    const { modalSelector, viewButton } = options;
-    const label = kind === 'reward' ? 'Reward' : 'Task';
-    const numericLabel = kind === 'reward' ? 'Cost' : 'Points';
-    const numericName = kind === 'reward' ? 'cost' : 'points';
-    container.innerHTML = `
-      <form class="stack" data-custom-form="${kind}">
-        <p class="opacity-70">Create a custom ${label.toLowerCase()} for this family.</p>
-        <label>Title
-          <input name="title" type="text" required />
-        </label>
-        <label>${numericLabel}
-          <input name="${numericName}" type="number" min="0" step="1" value="0" required />
-        </label>
-        <label>Description
-          <textarea name="description" rows="3" placeholder="Optional details"></textarea>
-        </label>
-        <label>Icon URL
-          <input name="icon" type="text" placeholder="https://..." />
-        </label>
-        <label>YouTube URL
-          <input name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
-        </label>
-        <div class="flex gap-2 mt-3">
-          <button type="submit" class="btn-primary">Create Custom ${label}</button>
-          <button type="button" class="btn" data-cancel-custom>Back</button>
-        </div>
-      </form>
-    `;
-
-    const form = container.querySelector('form');
-    if (!form) return;
-
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const success = await submitCustomTemplate(kind, form, modalSelector);
-      if (success) {
-        container.innerHTML = '';
-      }
-    });
-
-    const cancel = form.querySelector('[data-cancel-custom]');
-    cancel?.addEventListener('click', () =>
-      renderEmptyTemplateOptions(kind, container, { modalSelector, viewButton })
-    );
-  }
-
-  async function submitCustomTemplate(kind, form, modalSelector) {
-    const submitButton = form.querySelector('button[type="submit"]');
-    if (submitButton) submitButton.disabled = true;
-    try {
-      const formData = new FormData(form);
-      const title = String(formData.get('title') || '').trim();
-      if (!title) {
-        toast('Title is required.', 'error');
-        return false;
-      }
-      const numericName = kind === 'reward' ? 'cost' : 'points';
-      const numericRaw = formData.get(numericName);
-      const numericValue = Number(numericRaw);
-      const amount = Number.isFinite(numericValue) && numericValue >= 0 ? Math.floor(numericValue) : 0;
-      const description = String(formData.get('description') || '').trim();
-      const icon = String(formData.get('icon') || '').trim();
-      const youtubeUrl = String(formData.get('youtube_url') || '').trim();
-
-      let familyId;
-      try {
-        familyId = requireFamilyId();
-      } catch (error) {
-        const message = error?.message || 'Select a family first';
-        toast(message, 'error');
-        return false;
-      }
-
-      const payload = {
-        title,
-        description,
-        icon: icon || null,
-        youtube_url: youtubeUrl || null,
-        status: 'active'
-      };
-      if (kind === 'reward') {
-        payload.cost = amount;
-      } else {
-        payload.points = amount;
-      }
-
-      const endpoint = kind === 'reward' ? 'rewards' : 'tasks';
-      const url = `/api/admin/families/${encodeURIComponent(familyId)}/${endpoint}`;
-      const { res, body } = await adminFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        skipScope: true
-      });
-      if (res.status === 401) {
-        toast(ADMIN_INVALID_MSG, 'error');
-        return false;
-      }
-      if (res.status === 403) {
-        toast('Master key required or header missing.', 'error');
-        return false;
-      }
-      if (!res.ok) {
-        const message = presentError(body?.error, 'Create failed');
-        toast(message, 'error');
-        return false;
-      }
-
-      toast(kind === 'reward' ? 'Custom reward created.' : 'Custom task created.');
-      if (modalSelector) hide(modalSelector);
-      if (kind === 'reward') {
-        await loadRewards?.();
-      } else {
-        await refreshEarnTemplates('active');
-      }
-      return true;
-    } catch (error) {
-      const message = error?.message || 'Create failed';
-      if (message === 'family_id required') {
-        toast('Select a family scope to create templates.', 'error');
-      } else if (message !== ADMIN_KEY_REQUIRED_MSG) {
-        toast(message, 'error');
-      }
-      return false;
-    } finally {
-      if (submitButton) submitButton.disabled = false;
     }
   }
 
@@ -6018,12 +5900,14 @@ setupScanner({
     });
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', async () => {
     console.log('admin.js loaded ok');
     initI18n();
     loadAdminKey();
     setupCollapsibles();
     setupShortcuts();
     initAdmin();
+    await refreshAdminAuth();
+    setActiveTab('templates');
   });
 })();

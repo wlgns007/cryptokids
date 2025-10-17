@@ -235,7 +235,7 @@ test('DELETE /api/tasks/:id removes scoped task only', async (t) => {
   assert.equal(remainingB, undefined);
 });
 
-test('DELETE /api/families/:id cascades dependents', async (t) => {
+test('DELETE /api/admin/families/:id cascades dependents', async (t) => {
   const family = createFamily({ id: 'fam-del', name: 'Delete Me', adminKey: 'Key-Del' });
   const memberId = insertMember({ familyId: family.id, name: 'Kiddo' });
   const taskId = insertTask({ familyId: family.id, title: 'Homework' });
@@ -247,7 +247,7 @@ test('DELETE /api/families/:id cascades dependents', async (t) => {
     .run(`hist-${randomUUID()}`, family.id, 'Earned points', now);
 
   await withServer(t, async (baseUrl) => {
-    const res = await fetch(`${baseUrl}/api/families/${family.id}`, {
+    const res = await fetch(`${baseUrl}/api/admin/families/${family.id}`, {
       method: 'DELETE',
       headers: MASTER_HEADERS
     });

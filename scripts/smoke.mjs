@@ -104,7 +104,7 @@ async function withServer(baseUrl, extraEnv, fn) {
 }
 
 async function ensureFamily(baseUrl, masterKey, familyName) {
-  const listRes = await fetch(new URL("/api/families", baseUrl), {
+  const listRes = await fetch(new URL("/api/admin/families", baseUrl), {
     headers: { "X-ADMIN-KEY": masterKey }
   });
   await ensureOk(listRes, "list families");
@@ -116,7 +116,7 @@ async function ensureFamily(baseUrl, masterKey, familyName) {
     return existing;
   }
 
-  const createRes = await fetch(new URL("/api/families", baseUrl), {
+  const createRes = await fetch(new URL("/api/admin/families", baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -164,7 +164,7 @@ async function validateAdminKey(baseUrl, adminKey, expectedFamilyId) {
     return false;
   }
   try {
-    const res = await fetch(new URL("/api/whoami", baseUrl), {
+    const res = await fetch(new URL("/api/admin/whoami", baseUrl), {
       headers: {
         "X-ADMIN-KEY": adminKey
       }
@@ -605,7 +605,7 @@ export async function testF1() {
         }
 
         log("verifying whoami for master key");
-        const masterRes = await fetch(new URL("/api/whoami", BASE_URL), {
+        const masterRes = await fetch(new URL("/api/admin/whoami", BASE_URL), {
           headers: { "X-ADMIN-KEY": masterKey }
         });
         await ensureOk(masterRes, "master whoami");
@@ -615,7 +615,7 @@ export async function testF1() {
         }
 
         log("verifying whoami for seeded Jang admin key");
-        const jangRes = await fetch(new URL("/api/whoami", BASE_URL), {
+        const jangRes = await fetch(new URL("/api/admin/whoami", BASE_URL), {
           headers: { "X-ADMIN-KEY": JANG_ADMIN_KEY }
         });
         await ensureOk(jangRes, "jang whoami");
