@@ -64,6 +64,54 @@ router.get("/api/admin/families", (req, res) => {
   res.json(rows);
 });
 
+router.get("/api/admin/families/:familyId/members", (req, res) => {
+  const { familyId } = req.params;
+  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const rows = db
+    .prepare(
+      "SELECT id, name, nickname, balance, user_id, created_at, updated_at FROM member WHERE family_id = ? ORDER BY created_at ASC"
+    )
+    .all(familyId);
+  res.json(rows);
+});
+
+router.get("/api/admin/families/:familyId/tasks", (req, res) => {
+  const { familyId } = req.params;
+  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const rows = db
+    .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
+    .all(familyId);
+  res.json(rows);
+});
+
+router.get("/api/admin/families/:familyId/rewards", (req, res) => {
+  const { familyId } = req.params;
+  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const rows = db
+    .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
+    .all(familyId);
+  res.json(rows);
+});
+
+router.get("/api/admin/families/:familyId/holds", (req, res) => {
+  const { familyId } = req.params;
+  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const rows = db
+    .prepare("SELECT * FROM reward_hold WHERE family_id = ? ORDER BY created_at DESC")
+    .all(familyId);
+  res.json(rows);
+});
+
+router.get("/api/admin/families/:familyId/activity", (req, res) => {
+  const { familyId } = req.params;
+  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
+  const rows = db
+    .prepare("SELECT * FROM activity WHERE family_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(familyId, limit);
+  res.json(rows);
+});
+
 router.patch("/api/admin/families/:id", express.json(), (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
