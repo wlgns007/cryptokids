@@ -13,6 +13,19 @@ router.get("/api/whoami", (req, res) => {
   res.json(ctx);
 });
 
+router.get("/api/admin/whoami", (req, res) => {
+  const key = readAdminKey(req);
+  if (!key) return res.status(401).json({ error: "invalid" });
+  if (key === process.env.MASTER_ADMIN_KEY) {
+    return res.json({ role: "master" });
+  }
+  const fam = db.prepare("SELECT id FROM family WHERE admin_key = ?").get(key);
+  if (fam?.id) {
+    return res.json({ role: "family", familyId: String(fam.id) });
+  }
+  return res.status(401).json({ error: "invalid" });
+});
+
 // MASTER: list families or fetch by id
 router.get("/api/families", (req, res) => {
   const ctx = resolveAdminContext(db, readAdminKey(req));
@@ -38,6 +51,18 @@ router.get("/api/families", (req, res) => {
   }
   sql += " ORDER BY created_at DESC";
   const rows = db.prepare(sql).all();
+  res.json(rows);
+});
+
+router.get("/api/admin/families", (req, res) => {
+  const key = readAdminKey(req);
+  if (key !== process.env.MASTER_ADMIN_KEY) return res.sendStatus(403);
+
+  const status = (req.query.status || "active").toString().toLowerCase();
+  const normalized = status === "active" || status === "inactive" ? status : "";
+  const rows = db
+    .prepare(`SELECT * FROM family WHERE (@s = '' OR status = @s) ORDER BY created_at DESC`)
+    .all({ s: normalized });
   res.json(rows);
 });
 
@@ -245,6 +270,78 @@ router.post("/api/families/:familyId/tasks/from-master", express.json(), (req, r
   db.prepare(sql).run(...values);
 
   res.status(201).json({ id });
+});
+
+router.post("/api/admin/families/:familyId/tasks", express.json(), (req, res) => {
+  const key = readAdminKey(req);
+  const { familyId } = req.params;
+  const fam = db.prepare("SELECT id, admin_key FROM family WHERE id = ?").get(familyId);
+  if (!fam) return res.sendStatus(404);
+  if (key !== process.env.MASTER_ADMIN_KEY && key !== fam.admin_key) return res.sendStatus(403);
+
+  const body = req.body || {};
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) return res.status(400).json({ error: "title required" });
+
+  const pointsValue = Number(body.points);
+  const points = Number.isFinite(pointsValue) ? Math.max(pointsValue, 0) : 0;
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const icon = typeof body.icon === "string" && body.icon.trim() ? body.icon.trim() : null;
+  const youtube = typeof body.youtube_url === "string" && body.youtube_url.trim() ? body.youtube_url.trim() : null;
+  const status = typeof body.status === "string" && body.status.trim().toLowerCase() === "inactive" ? "inactive" : "active";
+
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO task(id,family_id,title,points,description,icon,youtube_url,status,is_customized,source_template_id,source_version,created_at,updated_at)
+    VALUES (@id,@family,@title,@points,@description,@icon,@youtube,@status,1,NULL,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+  `).run({
+    id,
+    family: fam.id,
+    title,
+    points,
+    description,
+    icon,
+    youtube,
+    status
+  });
+
+  res.json({ id });
+});
+
+router.post("/api/admin/families/:familyId/rewards", express.json(), (req, res) => {
+  const key = readAdminKey(req);
+  const { familyId } = req.params;
+  const fam = db.prepare("SELECT id, admin_key FROM family WHERE id = ?").get(familyId);
+  if (!fam) return res.sendStatus(404);
+  if (key !== process.env.MASTER_ADMIN_KEY && key !== fam.admin_key) return res.sendStatus(403);
+
+  const body = req.body || {};
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) return res.status(400).json({ error: "title required" });
+
+  const costValue = Number(body.cost);
+  const cost = Number.isFinite(costValue) ? Math.max(costValue, 0) : 0;
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const icon = typeof body.icon === "string" && body.icon.trim() ? body.icon.trim() : null;
+  const youtube = typeof body.youtube_url === "string" && body.youtube_url.trim() ? body.youtube_url.trim() : null;
+  const status = typeof body.status === "string" && body.status.trim().toLowerCase() === "inactive" ? "inactive" : "active";
+
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO reward(id,family_id,title,cost,description,icon,youtube_url,status,is_customized,source_template_id,source_version,created_at,updated_at)
+    VALUES (@id,@family,@title,@cost,@description,@icon,@youtube,@status,1,NULL,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+  `).run({
+    id,
+    family: fam.id,
+    title,
+    cost,
+    description,
+    icon,
+    youtube,
+    status
+  });
+
+  res.json({ id });
 });
 
 router.delete("/api/families/:id", (req, res) => {
