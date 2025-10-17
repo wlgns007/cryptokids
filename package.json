@@ -13,7 +13,8 @@
     "lint:fix": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs --fix .",
     "legacy:inspect": "node scripts/legacy-tenant-clean.js --archive",
     "legacy:execute": "node scripts/legacy-tenant-clean.js --archive --execute",
-    "legacy:execute:cleanup": "node scripts/legacy-tenant-clean.js --archive --execute --cleanup-orphans"
+    "legacy:execute:cleanup": "node scripts/legacy-tenant-clean.js --archive --execute --cleanup-orphans",
+    "verify:clean": "bash scripts/verify-clean.sh"
   },
   "keywords": [],
   "author": "",

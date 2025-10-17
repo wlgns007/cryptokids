@@ -53,7 +53,7 @@ test('default family is hidden from listings and rejected by scope', async (t) =
   await withServer(t, async (baseUrl) => {
     const masterHeaders = { 'X-ADMIN-KEY': 'Murasaki' };
 
-    const listRes = await fetch(new URL('/api/families', baseUrl), { headers: masterHeaders });
+    const listRes = await fetch(new URL('/api/admin/families', baseUrl), { headers: masterHeaders });
     assert.equal(listRes.status, 200);
     const families = await listRes.json();
     assert.ok(Array.isArray(families), 'families payload should be an array');
@@ -63,7 +63,7 @@ test('default family is hidden from listings and rejected by scope', async (t) =
       'non-default families should still appear'
     );
 
-    const defaultRes = await fetch(new URL('/api/families?id=default', baseUrl), { headers: masterHeaders });
+    const defaultRes = await fetch(new URL('/api/admin/families?id=default', baseUrl), { headers: masterHeaders });
     assert.equal(defaultRes.status, 400);
     const defaultBody = await defaultRes.json();
     assert.deepEqual(defaultBody, { error: 'default family is reserved' });
