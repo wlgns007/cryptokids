@@ -1,4 +1,4 @@
-// index.js — CryptoKids / Parents Shop API (ESM)
+// index.js — CleverKids / Parents Shop API (ESM)
 // Node 22+
 // npm i express better-sqlite3
 

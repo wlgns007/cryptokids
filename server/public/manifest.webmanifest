@@ -1,7 +1,7 @@
 {
-  "name": "CryptoKids",
-  "short_name": "CryptoKids",
-  "start_url": "/child.html?v=__BUILD__",
+  "name": "CleverKids",
+  "short_name": "CleverKids",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",

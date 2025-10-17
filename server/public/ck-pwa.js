@@ -1,5 +1,5 @@
 (() => {
-  const CK_SW_VERSION = '1.0.0';
+  const CK_SW_VERSION = 'cleverkids-app-v1';
   const INSTALL_SUPPRESS_MS = 7 * 24 * 60 * 60 * 1000;
   const EVENT_STORE_KEY = 'ck_pwa_events_v1';
   const SRC_KEY = 'ck_pwa_src';

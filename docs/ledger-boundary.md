@@ -1,4 +1,4 @@
-# CryptoKids Ledger Boundary Contract
+# CleverKids Ledger Boundary Contract
 
 This document defines the server contract for all ledger verbs. Every verb is
 exposed as an HTTP endpoint under the `/ck` namespace. Responses are JSON

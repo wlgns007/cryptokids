@@ -1,4 +1,4 @@
-// admin.js — CryptoKids Admin (public rewards API version)
+// admin.js — CleverKids Admin (public rewards API version)
 
 if (window.__CK_ADMIN_INIT__) {
   console.warn('[admin] already initialized — skipping rebinds');
