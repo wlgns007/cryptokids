@@ -3,6 +3,26 @@ import { renderHeader } from './header.js';
 (() => {
   'use strict';
 
+  const root = typeof window !== 'undefined' ? window : globalThis;
+  root.toast = root.toast || function toast(msg, type = 'info') {
+    try {
+      const el = typeof document !== 'undefined' ? document.getElementById('ck-toast') : null;
+      if (el) {
+        el.textContent = msg;
+        el.className = `toast toast-${type}`;
+        el.style.display = 'block';
+        setTimeout(() => {
+          el.style.display = 'none';
+        }, 2500);
+        return;
+      }
+    } catch (error) {
+      console.warn('Toast rendering failed', error);
+    }
+    const logger = type === 'error' && root.console?.error ? root.console.error : root.console?.log;
+    logger?.call(root.console, '[CK]', msg);
+  };
+
   const state = {
     activeTab: 'templates',
     adminKey: '',
@@ -1762,10 +1782,29 @@ function initAdmin() {
 
   function renderFamiliesTableHTML(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    if (!list.length) {
+    const buildRow = (row) => {
+      const rawId = row?.id != null ? String(row.id) : '';
+      const displayId = rawId || '—';
+      const name = row?.name ? String(row.name) : '';
+      const email = row?.email ? String(row.email) : '';
+      const status = row?.status ? String(row.status) : '';
+      return `
+          <tr class="cursor-pointer"
+              data-family-id="${escapeHtml(rawId)}"
+              data-family-name="${escapeHtml(name)}">
+            <td>${escapeHtml(displayId)}</td>
+            <td>${escapeHtml(name)}</td>
+            <td>${escapeHtml(email)}</td>
+            <td>${escapeHtml(status)}</td>
+          </tr>
+        `;
+    };
+
+    const rowsHtml = list.map(buildRow).join('');
+    if (!rowsHtml) {
       const emptyText = state.showInactive ? 'No inactive families.' : 'No active families.';
       return `
-        <table class="family-table table">
+        <table class="table">
           <tbody>
             <tr>
               <td colspan="4" class="muted">${escapeHtml(emptyText)}</td>
@@ -1775,35 +1814,11 @@ function initAdmin() {
       `;
     }
 
-    const rowsHtml = list
-      .map((row) => {
-        const rawId = row?.id != null ? String(row.id) : '';
-        const displayId = rawId || '—';
-        const name = row?.name ? String(row.name) : '';
-        const email = row?.email ? String(row.email) : '';
-        const status = row?.status ? String(row.status) : '';
-        return `
-          <tr class="cursor-pointer" data-family-id="${escapeHtml(rawId)}" data-family-name="${escapeHtml(name)}">
-            <td>${escapeHtml(displayId)}</td>
-            <td>${escapeHtml(name)}</td>
-            <td>${escapeHtml(email)}</td>
-            <td>${escapeHtml(status)}</td>
-          </tr>
-        `;
-      })
-      .join('');
-
     return `
-      <table class="family-table table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
+      <table class="table">
+        <tbody>
+        ${rowsHtml}
+        </tbody>
       </table>
     `;
   }
@@ -1834,9 +1849,7 @@ function initAdmin() {
           ${state.showInactive ? 'View active families' : 'View inactive families'}
         </button>
       </div>
-      <div id="familiesTable" class="table-responsive">
-        ${renderFamiliesTableHTML(families)}
-      </div>
+      <div id="familiesTable">${renderFamiliesTableHTML(families)}</div>
     `;
   }
 
@@ -1892,9 +1905,10 @@ function initAdmin() {
 
       const previous = state.showInactive;
       state.showInactive = !state.showInactive;
-      renderExistingFamiliesCard();
-
-      if (state.role !== 'master') return;
+      if (state.role !== 'master') {
+        renderExistingFamiliesCard();
+        return;
+      }
 
       try {
         const families = await fetchFamiliesStrict();
@@ -1902,9 +1916,10 @@ function initAdmin() {
       } catch (error) {
         console.warn('Failed to load families', error);
         state.showInactive = previous;
-        renderExistingFamiliesCard();
-        toast('Failed to load families');
+        toast('Failed to load families', 'error');
       }
+
+      renderExistingFamiliesCard();
     },
     true
   );
@@ -1923,12 +1938,39 @@ function initAdmin() {
       event.stopPropagation();
       event.stopImmediatePropagation();
 
-      const familyId = row.getAttribute('data-family-id');
+      const { familyId, familyName } = row.dataset || {};
       if (!familyId) return;
-      const familyName = row.getAttribute('data-family-name') || '';
-      setScopedFamily(familyId, familyName).catch((error) =>
-        console.warn('Failed to set scoped family from table row', error)
-      );
+      setScopedFamily(familyId, familyName);
+    },
+    true
+  );
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const btn = target.closest('[data-scope-jump]');
+      if (!btn) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      if (!state.scopedFamilyId) {
+        toast('Select a family first', 'error');
+        return;
+      }
+
+      const panelId = btn.getAttribute('data-scope-jump');
+      if (!panelId) return;
+      const panel = document.getElementById(panelId);
+      if (!panel) {
+        toast('Scoped panels are still loading', 'error');
+        return;
+      }
+      expandForJump(panel);
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     },
     true
   );
@@ -1939,7 +1981,7 @@ function initAdmin() {
     const option = select?.selectedOptions?.[0] || null;
     const fname = option ? option.text : '';
     if (!fid) {
-      toast('Select a family');
+      toast('Select a family first', 'error');
       return;
     }
     setScopedFamily(fid, fname).catch((error) => console.warn('Failed to scope family from dropdown', error));
@@ -1994,9 +2036,8 @@ function initAdmin() {
     }
     if (adminState.currentFamilyId !== normalized) {
       setAdminState({ currentFamilyId: normalized });
-    } else {
-      renderScopePanels();
     }
+    renderScopePanels();
     await reloadScopedData();
   }
 
@@ -2006,11 +2047,10 @@ function initAdmin() {
     if (familyScopeSelect) {
       familyScopeSelect.value = '';
     }
+    renderScopePanels();
     if (adminState.currentFamilyId) {
       setAdminState({ currentFamilyId: null });
       await reloadScopedData();
-    } else {
-      renderScopePanels();
     }
   }
 
@@ -2094,6 +2134,7 @@ function initAdmin() {
       renderScopedActivity(activity);
     } catch (error) {
       console.warn('Failed to load scoped family data', error);
+      toast('Failed to load scoped data', 'error');
       ['fmmBody', 'issueBody', 'holdsBody', 'rewardsBody', 'earnBody', 'activityBody'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) {
@@ -6192,44 +6233,12 @@ setupScanner({
     });
   }
 
-  function setupScopeShortcutButtons() {
-    const mapping = [
-      ['btnShortcutFamilyManagement', 'panel-fmm'],
-      ['btnShortcutMemberManagement', 'panel-fmm'],
-      ['btnShortcutIssue', 'panel-issue'],
-      ['btnShortcutHolds', 'panel-holds'],
-      ['btnShortcutRewards', 'panel-rewards'],
-      ['btnShortcutEarn', 'panel-earn'],
-      ['btnShortcutActivity', 'panel-activity']
-    ];
-
-    mapping.forEach(([buttonId, panelId]) => {
-      const btn = document.getElementById(buttonId);
-      if (!btn || btn.dataset.scopeBound === 'true') return;
-      btn.dataset.scopeBound = 'true';
-      btn.addEventListener('click', (event) => {
-        event.preventDefault();
-        if (!state.scopedFamilyId) {
-          toast('Select a family first');
-          return;
-        }
-        const panel = document.getElementById(panelId);
-        if (!panel) {
-          toast('Scoped panels are still loading', 'error');
-          return;
-        }
-        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    });
-  }
-
   document.addEventListener('DOMContentLoaded', async () => {
     console.log('admin.js loaded ok');
     initI18n();
     loadAdminKey();
     setupCollapsibles();
     setupShortcuts();
-    setupScopeShortcutButtons();
     initAdmin();
     await refreshAdminAuth();
     setActiveTab('templates');
