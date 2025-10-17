@@ -1490,13 +1490,13 @@
           </div>
           <p class="muted scope-note" id="masterScopeNotice" hidden>Select a family to manage data.</p>
           <div class="shortcut-row">
-            <button class="shortcut" data-jump="#card-family-management">Family Management</button>
-            <button class="shortcut" data-jump="#card-member-management">Family Member Management</button>
-            <button class="shortcut" data-jump="#card-issue-points">Issue Points</button>
-            <button class="shortcut" data-jump="#card-holds">Holding Rewards To Be Redeemed</button>
-            <button class="shortcut" data-jump="#card-rewards-menu">Rewards Menu</button>
-            <button class="shortcut" data-jump="#card-edit-earn">Edit Earn Points Menu</button>
-            <button class="shortcut" data-jump="#card-activity">Activity</button>
+            <button class="shortcut" id="btnShortcutFamilyManagement">Family Management</button>
+            <button class="shortcut" id="btnShortcutMemberManagement">Family Member Management</button>
+            <button class="shortcut" id="btnShortcutIssue">Issue Points</button>
+            <button class="shortcut" id="btnShortcutHolds">Holding Rewards To Be Redeemed</button>
+            <button class="shortcut" id="btnShortcutRewards">Rewards Menu</button>
+            <button class="shortcut" id="btnShortcutEarn">Edit Earn Points Menu</button>
+            <button class="shortcut" id="btnShortcutActivity">Activity</button>
           </div>
         </div>
       </section>
@@ -1537,7 +1537,10 @@
           </div>
           <div id="familyManagementPanel" class="stack family-management">
             <div class="family-management-list">
-              <h3>Existing families</h3>
+              <div class="family-list-header" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h3>Existing families</h3>
+                <button type="button" id="btnToggleInactive" class="px-3 py-1 rounded border">View inactive families</button>
+              </div>
               <div class="table-responsive">
                 <table class="family-table">
                   <thead>
@@ -1557,6 +1560,7 @@
                 </table>
               </div>
             </div>
+            <section id="family-scope-panels" class="mt-4"></section>
             <div class="family-create">
               <h3>Create new family</h3>
               <form id="familyCreateForm" class="family-create-form">

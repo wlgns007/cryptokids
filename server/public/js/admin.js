@@ -9,7 +9,9 @@ import { renderHeader } from './header.js';
     families: [],
     showInactive: false,
     role: null,
-    familyId: null
+    familyId: null,
+    scopedFamilyId: null,
+    scopedFamilyName: ''
   };
 
   let refreshAdminAuth = async () => {};
@@ -91,6 +93,15 @@ import { renderHeader } from './header.js';
   function clearAdminKeyCookie() {
     if (typeof document === 'undefined') return;
     document.cookie = 'ck_admin_key=; Path=/; Max-Age=0; SameSite=Lax';
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function setAdminKey(val) {
@@ -364,6 +375,7 @@ function initAdmin() {
   const familySearchForm = $k('familySearchForm');
   const familySearchInput = $k('familySearchInput');
   const familyManagementPanel = $k('familyManagementPanel');
+  const toggleInactiveButton = $k('btnToggleInactive');
   const familiesRefreshButton = $k('btnFamiliesRefresh');
   const familyListTableBody = $k('familyListTableBody');
   const familyListEmptyRow = $k('familyListEmpty');
@@ -1379,6 +1391,18 @@ function initAdmin() {
       adminState.currentFamilyId = normalizeScopeId(adminState.currentFamilyId);
     }
     window.currentFamilyId = adminState.currentFamilyId || null;
+    state.scopedFamilyId = adminState.currentFamilyId || null;
+    if (state.scopedFamilyId) {
+      const entry = findFamilyEntry(state.scopedFamilyId);
+      if (entry && entry.name) {
+        state.scopedFamilyName = String(entry.name);
+      } else if (!state.scopedFamilyName) {
+        state.scopedFamilyName = '';
+      }
+    } else {
+      state.scopedFamilyName = '';
+    }
+
     if (persist) {
       persistAdminContextSnapshot();
     }
@@ -1800,7 +1824,10 @@ function initAdmin() {
   function createFamilyRow(family, statusOptions) {
     if (!familyListTableBody || !family) return;
     const row = document.createElement('tr');
-    if (family.id) row.dataset.familyId = String(family.id);
+    if (family.id) {
+      row.dataset.familyId = String(family.id);
+      row.dataset.familyName = family.name ? String(family.name) : '';
+    }
     if (family.id && family.id === adminState.currentFamilyId) {
       row.classList.add('is-active');
     }
@@ -1908,66 +1935,64 @@ function initAdmin() {
       handleFamilyRowSave({ id: family.id, nameInput, emailInput, statusSelect, button: saveButton })
     );
 
+    row.addEventListener(
+      'click',
+      async (event) => {
+        if (state.role !== 'master') return;
+        const target = event.target;
+        if (
+          target &&
+          (target.closest('input') ||
+            target.closest('button') ||
+            target.closest('select') ||
+            target.closest('a') ||
+            target.closest('label') ||
+            target.closest('textarea'))
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        const familyId = family.id || row.dataset.familyId;
+        if (!familyId) return;
+        try {
+          await setScopedFamily(familyId, family.name || row.dataset.familyName || '');
+        } catch (error) {
+          console.warn('Failed to set scoped family from row click', error);
+        }
+      },
+      { capture: true }
+    );
+
     familyListTableBody.appendChild(row);
   }
 
   function renderFamilyManagement(message = '') {
     const host = qs('families-panel');
-    if (!host) return;
-
     const role = state.role ?? adminState.role ?? null;
     const isMaster = role === 'master';
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
 
     const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
-    if (isMaster) {
-      host.innerHTML = `
-        <div class="flex items-center mb-3">
-          <div class="text-sm text-slate-500">Master admins can review all families.</div>
-          <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
-            ${showInactive ? 'View active families' : 'View inactive families'}
-          </button>
-        </div>
-        ${note}
-      `;
-      host
-        .querySelector('#familiesToggle')
-        ?.addEventListener(
-          'click',
-          async (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            if (state.role !== 'master') {
-              renderFamilyManagement('Master key required.');
-              return;
-            }
-            state.showInactive = !state.showInactive;
-            adminState.showInactiveFamilies = state.showInactive;
-            renderFamilyManagement('');
-            try {
-              const fams = await fetchFamilies();
-              const list = Array.isArray(fams) ? fams : [];
-              state.families = list;
-              assignFamilies(list);
-              if (state.role === 'master') {
-                persistAdminContextSnapshot();
-              }
-              renderFamilyManagement('');
-            } catch (error) {
-              console.warn('fetchFamilies failed', error);
-              const msg = String(error) === 'Error: 403'
-                ? 'Master key required.'
-                : 'Failed to load families.';
-              renderFamilyManagement(msg);
-            }
-          },
-          { capture: true }
-        );
-    } else {
-      const fallback = '<p class="muted family-panel-copy">Master access required to manage families.</p>';
-      host.innerHTML = `${note}${fallback}`;
+    if (toggleInactiveButton) {
+      toggleInactiveButton.hidden = !isMaster;
+      toggleInactiveButton.disabled = !isMaster;
+      toggleInactiveButton.textContent = showInactive ? 'View active families' : 'View inactive families';
+    }
+
+    if (host) {
+      if (isMaster) {
+        const copy = '<div class="text-sm text-slate-500">Master admins can review all families.</div>';
+        host.innerHTML = `${note}${copy}`;
+      } else {
+        const fallback = '<p class="muted family-panel-copy">Master access required to manage families.</p>';
+        host.innerHTML = `${note}${fallback}`;
+      }
+    }
+
+    if (!isMaster) {
       if (familyListTableBody) {
         familyListTableBody.innerHTML = '';
         if (familyListEmptyRow) {
@@ -1984,10 +2009,44 @@ function initAdmin() {
         familyCreateIdPreview.dataset.value = '';
       }
       updateFamilyCreateButtonState();
+      renderScopePanels();
       return;
     }
 
-    if (!familyManagementPanel) return;
+    if (toggleInactiveButton && toggleInactiveButton.dataset.bound !== 'true') {
+      toggleInactiveButton.dataset.bound = 'true';
+      toggleInactiveButton.addEventListener(
+        'click',
+        async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          if (state.role !== 'master') {
+            renderFamilyManagement('Master key required.');
+            return;
+          }
+          state.showInactive = !state.showInactive;
+          adminState.showInactiveFamilies = state.showInactive;
+          renderFamilyManagement('');
+          try {
+            const ok = await refreshFamiliesFromServer({ silent: false });
+            if (!ok) {
+              renderFamilyManagement('Failed to load families.');
+            }
+          } catch (error) {
+            console.warn('refreshFamiliesFromServer failed', error);
+            const msg = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+            renderFamilyManagement(msg);
+          }
+        },
+        { capture: true }
+      );
+    }
+
+    if (!familyManagementPanel) {
+      renderScopePanels();
+      return;
+    }
 
     const families = Array.isArray(adminState.families) ? adminState.families : [];
     if (familyListTableBody) {
@@ -2014,6 +2073,335 @@ function initAdmin() {
     }
 
     refreshFamilyIdPreview();
+    renderScopePanels();
+  }
+
+  function findFamilyEntry(familyId) {
+    if (!familyId) return null;
+    return (adminState.families || []).find((family) => family && family.id === familyId) || null;
+  }
+
+  function findFamilyName(familyId) {
+    const entry = findFamilyEntry(familyId);
+    return entry?.name ? String(entry.name) : '';
+  }
+
+  function pickValue(row, ...keys) {
+    if (!row) return undefined;
+    for (const key of keys) {
+      if (key in row && row[key] != null) {
+        return row[key];
+      }
+    }
+    return undefined;
+  }
+
+  function formatNumber(value) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num.toLocaleString();
+    return value != null ? String(value) : '';
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  }
+
+  async function setScopedFamily(familyId, familyName = '') {
+    const normalized = normalizeScopeId(familyId);
+    if (!normalized) return;
+    const entry = findFamilyEntry(normalized);
+    const resolvedName = familyName || entry?.name || '';
+    state.scopedFamilyId = normalized;
+    state.scopedFamilyName = resolvedName;
+    if (familyScopeSelect) {
+      const options = Array.from(familyScopeSelect.options || []);
+      const match = options.find((opt) => normalizeScopeId(opt.value) === normalized);
+      if (match && familyScopeSelect.value !== match.value) {
+        familyScopeSelect.value = match.value;
+      }
+    }
+    if (adminState.currentFamilyId !== normalized) {
+      setAdminState({ currentFamilyId: normalized });
+    } else {
+      renderScopePanels();
+    }
+    await reloadScopedData();
+  }
+
+  async function clearScopedFamily() {
+    state.scopedFamilyId = null;
+    state.scopedFamilyName = '';
+    if (familyScopeSelect) {
+      familyScopeSelect.value = '';
+    }
+    if (adminState.currentFamilyId) {
+      setAdminState({ currentFamilyId: null });
+      await reloadScopedData();
+    } else {
+      renderScopePanels();
+    }
+  }
+
+  async function renderScopePanels() {
+    const host = document.getElementById('family-scope-panels');
+    if (!host) return;
+
+    const scopedId = state.scopedFamilyId || null;
+    if (!scopedId) {
+      host.innerHTML = '';
+      return;
+    }
+
+    const scopeName = state.scopedFamilyName || findFamilyName(scopedId);
+    const chipLabel = scopeName || scopedId;
+
+    host.innerHTML = `
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm">
+          <span class="px-2 py-1 rounded bg-slate-100">Viewing: ${escapeHtml(chipLabel)} (${escapeHtml(scopedId)})</span>
+        </div>
+        <button id="btnClearScope" class="px-2 py-1 rounded border">Clear</button>
+      </div>
+
+      <div class="grid gap-4">
+        <div id="panel-fmm" class="card">
+          <h4 class="card-title">Family Member Management</h4>
+          <div class="card-body" id="fmmBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+        <div id="panel-issue" class="card">
+          <h4 class="card-title">Issue Points</h4>
+          <div class="card-body" id="issueBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+        <div id="panel-holds" class="card">
+          <h4 class="card-title">Holding Rewards To Be Redeemed</h4>
+          <div class="card-body" id="holdsBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+        <div id="panel-rewards" class="card">
+          <h4 class="card-title">Rewards Menu</h4>
+          <div class="card-body" id="rewardsBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+        <div id="panel-earn" class="card">
+          <h4 class="card-title">Edit Earn Points Menu</h4>
+          <div class="card-body" id="earnBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+        <div id="panel-activity" class="card">
+          <h4 class="card-title">Activity</h4>
+          <div class="card-body" id="activityBody"><div class="text-sm text-slate-500">Loading…</div></div>
+        </div>
+      </div>
+    `;
+
+    const token = `${scopedId}:${Date.now()}`;
+    host.dataset.scopeToken = token;
+
+    host
+      .querySelector('#btnClearScope')
+      ?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        clearScopedFamily().catch((error) => console.warn('Failed to clear scoped family', error));
+      });
+
+    try {
+      const [members, tasks, rewards, holds, activity] = await Promise.all([
+        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/members`),
+        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/tasks`),
+        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/rewards`),
+        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/holds`),
+        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/activity?limit=50`)
+      ]);
+
+      if (host.dataset.scopeToken !== token) return;
+
+      renderScopedMembers(members);
+      renderScopedIssuePoints(tasks, members);
+      renderScopedHolds(holds);
+      renderScopedRewards(rewards);
+      renderScopedEarn(tasks);
+      renderScopedActivity(activity);
+    } catch (error) {
+      console.warn('Failed to load scoped family data', error);
+      ['fmmBody', 'issueBody', 'holdsBody', 'rewardsBody', 'earnBody', 'activityBody'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.innerHTML = '<div class="text-rose-600 text-sm">Failed to load scoped data.</div>';
+        }
+      });
+    }
+  }
+
+  function renderScopedMembers(members = []) {
+    const body = document.getElementById('fmmBody');
+    if (!body) return;
+    const list = Array.isArray(members) ? members : [];
+    if (!list.length) {
+      body.innerHTML = '<div class="muted text-sm">No members found.</div>';
+      return;
+    }
+    const rows = list
+      .map((member) => {
+        const name = escapeHtml(String(pickValue(member, 'name', 'fullName') || '—'));
+        const nickname = escapeHtml(String(pickValue(member, 'nickname') || '—'));
+        const balance = escapeHtml(formatNumber(pickValue(member, 'balance', 'tokens', 'points')) || '0');
+        const id = escapeHtml(String(pickValue(member, 'id', 'userId', 'user_id') || ''));
+        return `<tr><td>${id || '—'}</td><td>${name}</td><td>${nickname}</td><td class="text-right">${balance}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>ID</th><th>Name</th><th>Nickname</th><th class="text-right">Balance</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderScopedIssuePoints(tasks = [], members = []) {
+    const body = document.getElementById('issueBody');
+    if (!body) return;
+    const list = Array.isArray(tasks) ? tasks : [];
+    const active = list.filter((task) => {
+      const status = (pickValue(task, 'status', 'state') || 'active').toString().toLowerCase();
+      return status !== 'inactive';
+    });
+    if (!active.length) {
+      const count = Array.isArray(members) ? members.length : 0;
+      const suffix = count ? ` for ${count} member${count === 1 ? '' : 's'}.` : '.';
+      body.innerHTML = `<div class="muted text-sm">No active earn tasks available${suffix}</div>`;
+      return;
+    }
+    const rows = active
+      .map((task) => {
+        const title = escapeHtml(String(pickValue(task, 'title', 'name') || 'Untitled'));
+        const points = escapeHtml(formatNumber(pickValue(task, 'points', 'pointValue', 'base_points')) || '0');
+        const type = escapeHtml(String(pickValue(task, 'type', 'category') || 'task'));
+        const status = escapeHtml(String(pickValue(task, 'status', 'state') || 'active'));
+        return `<tr><td>${title}</td><td class="text-right">${points}</td><td>${type}</td><td>${status}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>Task</th><th class="text-right">Points</th><th>Type</th><th>Status</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderScopedHolds(holds = []) {
+    const body = document.getElementById('holdsBody');
+    if (!body) return;
+    const list = Array.isArray(holds) ? holds : [];
+    if (!list.length) {
+      body.innerHTML = '<div class="muted text-sm">No pending holds.</div>';
+      return;
+    }
+    const rows = list
+      .map((hold) => {
+        const created = escapeHtml(formatDateTime(pickValue(hold, 'createdAt', 'created_at')) || '');
+        const userId = escapeHtml(String(pickValue(hold, 'userId', 'user_id') || '—'));
+        const item = escapeHtml(String(pickValue(hold, 'itemName', 'rewardName', 'name') || 'Reward'));
+        const cost = escapeHtml(formatNumber(pickValue(hold, 'quotedCost', 'quoted_cost', 'cost')) || '0');
+        const status = escapeHtml(String(pickValue(hold, 'status') || 'pending'));
+        return `<tr><td>${created}</td><td>${userId}</td><td>${item}</td><td class="text-right">${cost}</td><td>${status}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>Created</th><th>Member</th><th>Reward</th><th class="text-right">Cost</th><th>Status</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderScopedRewards(rewards = []) {
+    const body = document.getElementById('rewardsBody');
+    if (!body) return;
+    const list = Array.isArray(rewards) ? rewards : [];
+    if (!list.length) {
+      body.innerHTML = '<div class="muted text-sm">No rewards configured.</div>';
+      return;
+    }
+    const rows = list
+      .map((reward) => {
+        const name = escapeHtml(String(pickValue(reward, 'name', 'title') || 'Reward'));
+        const cost = escapeHtml(formatNumber(pickValue(reward, 'cost', 'price')) || '0');
+        const status = escapeHtml(String(pickValue(reward, 'status') || 'active'));
+        const updated = escapeHtml(formatDateTime(pickValue(reward, 'updatedAt', 'updated_at')) || '');
+        return `<tr><td>${name}</td><td class="text-right">${cost}</td><td>${status}</td><td>${updated}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>Name</th><th class="text-right">Cost</th><th>Status</th><th>Updated</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderScopedEarn(tasks = []) {
+    const body = document.getElementById('earnBody');
+    if (!body) return;
+    const list = Array.isArray(tasks) ? tasks : [];
+    if (!list.length) {
+      body.innerHTML = '<div class="muted text-sm">No earn tasks configured.</div>';
+      return;
+    }
+    const rows = list
+      .map((task) => {
+        const title = escapeHtml(String(pickValue(task, 'title', 'name') || 'Untitled'));
+        const points = escapeHtml(formatNumber(pickValue(task, 'points', 'pointValue', 'base_points')) || '0');
+        const status = escapeHtml(String(pickValue(task, 'status', 'state') || 'active'));
+        const updated = escapeHtml(formatDateTime(pickValue(task, 'updatedAt', 'updated_at')) || '');
+        return `<tr><td>${title}</td><td class="text-right">${points}</td><td>${status}</td><td>${updated}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>Task</th><th class="text-right">Points</th><th>Status</th><th>Updated</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderScopedActivity(activity = []) {
+    const body = document.getElementById('activityBody');
+    if (!body) return;
+    const list = Array.isArray(activity) ? activity : [];
+    if (!list.length) {
+      body.innerHTML = '<div class="muted text-sm">No recent activity.</div>';
+      return;
+    }
+    const rows = list
+      .map((entry) => {
+        const created = escapeHtml(formatDateTime(pickValue(entry, 'createdAt', 'created_at')) || '');
+        const kind = escapeHtml(String(pickValue(entry, 'kind', 'type') || 'event'));
+        const userId = escapeHtml(String(pickValue(entry, 'userId', 'user_id') || '—'));
+        const amount = escapeHtml(formatNumber(pickValue(entry, 'amount', 'points', 'tokens')) || '');
+        const note = escapeHtml(String(pickValue(entry, 'note', 'description') || ''));
+        return `<tr><td>${created}</td><td>${kind}</td><td>${userId}</td><td class="text-right">${amount}</td><td>${note}</td></tr>`;
+      })
+      .join('');
+    body.innerHTML = `
+      <table class="family-table compact">
+        <thead>
+          <tr><th>When</th><th>Type</th><th>Member</th><th class="text-right">Amount</th><th>Note</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
   }
 
   function ensureMemberPanelStyles() {
@@ -2354,8 +2742,12 @@ details.member-fold .summary-value {
 
   familyScopeSelect?.addEventListener('change', async () => {
     const selected = normalizeScopeId(familyScopeSelect.value);
-    setAdminState({ currentFamilyId: selected });
-    await reloadScopedData();
+    if (!selected) {
+      await clearScopedFamily();
+      return;
+    }
+    const entry = findFamilyEntry(selected);
+    await setScopedFamily(selected, entry?.name || '');
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -5931,12 +6323,44 @@ setupScanner({
     });
   }
 
+  function setupScopeShortcutButtons() {
+    const mapping = [
+      ['btnShortcutFamilyManagement', 'panel-fmm'],
+      ['btnShortcutMemberManagement', 'panel-fmm'],
+      ['btnShortcutIssue', 'panel-issue'],
+      ['btnShortcutHolds', 'panel-holds'],
+      ['btnShortcutRewards', 'panel-rewards'],
+      ['btnShortcutEarn', 'panel-earn'],
+      ['btnShortcutActivity', 'panel-activity']
+    ];
+
+    mapping.forEach(([buttonId, panelId]) => {
+      const btn = document.getElementById(buttonId);
+      if (!btn || btn.dataset.scopeBound === 'true') return;
+      btn.dataset.scopeBound = 'true';
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (!state.scopedFamilyId) {
+          toast('Select a family first');
+          return;
+        }
+        const panel = document.getElementById(panelId);
+        if (!panel) {
+          toast('Scoped panels are still loading', 'error');
+          return;
+        }
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', async () => {
     console.log('admin.js loaded ok');
     initI18n();
     loadAdminKey();
     setupCollapsibles();
     setupShortcuts();
+    setupScopeShortcutButtons();
     initAdmin();
     await refreshAdminAuth();
     setActiveTab('templates');
