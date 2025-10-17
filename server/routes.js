@@ -112,7 +112,7 @@ router.post("/api/families/self-register", async (req, res) => {
   try {
     await sendMail(
       email.trim(),
-      "CryptoKids — Family registration",
+      "CleverKids — Family registration",
       `<p>Hello ${adminName ? adminName : ''},</p>
        <p>Your family <b>${familyName}</b> has been registered.</p>
        <p>Your admin key: <code>${adminKey}</code></p>
@@ -136,7 +136,7 @@ router.post("/api/families/forgot-admin-key", async (req, res) => {
   try {
     await sendMail(
       email.trim(),
-      "CryptoKids — Your admin key",
+      "CleverKids — Your admin key",
       `<p>Your family "${row.name}" admin key:</p><p><code>${row.admin_key}</code></p>`
     );
   } catch (e) {

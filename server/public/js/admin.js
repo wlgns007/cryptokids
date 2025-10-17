@@ -3,6 +3,10 @@ import { renderHeader } from './header.js';
 (() => {
   'use strict';
 
+  if (typeof document !== 'undefined' && document.title) {
+    document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
+  }
+
   // ---- constants FIRST (avoid TDZ) ----
   const ADMIN_KEY_STORAGE = 'ck.adminKey';
   const ADMIN_KEY_INPUT_SELECTOR = '#adminKey';
@@ -224,7 +228,30 @@ function initAdmin() {
     masterView: 'templates',
     showInactiveFamilies: false
   };
+  adminState.showInactiveFamilies = !!adminState.showInactiveFamilies;
   const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
+
+  function assignFamilies(families) {
+    const incoming = Array.isArray(families) ? families : [];
+    adminState.families = incoming
+      .map((family) => {
+        if (!family) return null;
+        const id = normalizeScopeId(family.id);
+        if (!id) return null;
+        return { ...family, id };
+      })
+      .filter(Boolean);
+  }
+
+  function persistAdminContextSnapshot() {
+    saveAdminContext({
+      role: adminState.role,
+      family_id: adminState.familyId,
+      currentFamilyId: adminState.currentFamilyId,
+      masterView: adminState.masterView,
+      showInactiveFamilies: adminState.showInactiveFamilies
+    });
+  }
 
   const whoamiBanner = $k('adminWhoami');
   const whoamiRoleLabel = $k('adminRoleLabel');
@@ -366,13 +393,7 @@ function initAdmin() {
     }
     applyMasterViewVisibility();
     if (adminState.role === 'master') {
-      saveAdminContext({
-        role: adminState.role,
-        family_id: adminState.familyId,
-        currentFamilyId: adminState.currentFamilyId,
-        masterView: adminState.masterView,
-        showInactiveFamilies: adminState.showInactiveFamilies
-      });
+      persistAdminContextSnapshot();
     }
   }
 
@@ -1092,7 +1113,8 @@ function initAdmin() {
         role: parsed.role ?? null,
         family_id: normalizeScopeId(parsed.family_id),
         currentFamilyId: normalizeScopeId(parsed.currentFamilyId),
-        masterView: parsed.masterView === 'families' ? 'families' : 'templates'
+        masterView: parsed.masterView === 'families' ? 'families' : 'templates',
+        showInactiveFamilies: !!parsed.showInactiveFamilies
       };
     } catch (error) {
       console.warn('Unable to parse stored admin context', error);
@@ -1196,15 +1218,7 @@ function initAdmin() {
     }
     const hasCurrentFamilyId = Object.prototype.hasOwnProperty.call(partial, 'currentFamilyId');
     if (Object.prototype.hasOwnProperty.call(partial, 'families')) {
-      const incoming = Array.isArray(partial.families) ? partial.families : [];
-      adminState.families = incoming
-        .map((family) => {
-          if (!family) return null;
-          const id = normalizeScopeId(family.id);
-          if (!id) return null;
-          return { ...family, id };
-        })
-        .filter(Boolean);
+      assignFamilies(partial.families);
       if (!hasCurrentFamilyId && adminState.role === 'master') {
         if (!adminState.families.some((family) => family && family.id === adminState.currentFamilyId)) {
           adminState.currentFamilyId = null;
@@ -1220,13 +1234,7 @@ function initAdmin() {
     }
     window.currentFamilyId = adminState.currentFamilyId || null;
     if (persist) {
-      saveAdminContext({
-        role: adminState.role,
-        family_id: adminState.familyId,
-        currentFamilyId: adminState.currentFamilyId,
-        masterView: adminState.masterView,
-        showInactiveFamilies: adminState.showInactiveFamilies
-      });
+      persistAdminContextSnapshot();
     }
     updateWhoamiBanner();
     applyRoleVisibility();
@@ -1470,11 +1478,9 @@ function initAdmin() {
     }
   }
 
-  async function fetchFamiliesStrict() {
-    const params = new URLSearchParams();
+  async function fetchFamilies() {
     const status = adminState.showInactiveFamilies ? 'inactive' : 'active';
-    params.set('status', status);
-    const url = `/api/admin/families?${params.toString()}`;
+    const url = `/api/admin/families?status=${status}`;
     const { res, body } = await adminFetch(url, { skipScope: true });
     if (res.status === 401) {
       const error = new Error(ADMIN_INVALID_MSG);
@@ -1487,8 +1493,12 @@ function initAdmin() {
       error.code = res.status;
       throw error;
     }
-    if (!Array.isArray(body)) return [];
-    return body
+    return Array.isArray(body) ? body : [];
+  }
+
+  async function fetchFamiliesStrict() {
+    const families = await fetchFamilies();
+    return families
       .map((family) => {
         if (!family) return null;
         const id = normalizeScopeId(family.id);
@@ -1707,10 +1717,37 @@ function initAdmin() {
     familyListTableBody.appendChild(row);
   }
 
+  function mountFamiliesToggle(btnEl) {
+    if (!btnEl || btnEl.dataset.familiesToggleBound === 'true') return;
+    btnEl.dataset.familiesToggleBound = 'true';
+    btnEl.addEventListener(
+      'click',
+      async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (btnEl.disabled) return;
+        adminState.showInactiveFamilies = !adminState.showInactiveFamilies;
+        try {
+          const families = await fetchFamiliesStrict();
+          assignFamilies(families);
+          persistAdminContextSnapshot();
+          renderFamilyManagement();
+        } catch (error) {
+          adminState.showInactiveFamilies = !adminState.showInactiveFamilies;
+          const message = presentError(error?.body?.error || error?.message, 'Failed to load families');
+          toast(message, 'error');
+          renderFamilyManagement();
+        }
+      },
+      { passive: true }
+    );
+  }
+
   function renderFamilyManagement() {
     if (!familyManagementPanel) return;
     const isMaster = adminState.role === 'master';
     if (familyToggleInactiveButton) {
+      mountFamiliesToggle(familyToggleInactiveButton);
       familyToggleInactiveButton.hidden = !isMaster;
       familyToggleInactiveButton.disabled = !isMaster;
       familyToggleInactiveButton.textContent = adminState.showInactiveFamilies
@@ -2100,13 +2137,6 @@ details.member-fold .summary-value {
     const selected = normalizeScopeId(familyScopeSelect.value);
     setAdminState({ currentFamilyId: selected });
     await reloadScopedData();
-  });
-
-  familyToggleInactiveButton?.addEventListener('click', async () => {
-    if (familyToggleInactiveButton.disabled) return;
-    const includeInactive = !adminState.showInactiveFamilies;
-    setAdminState({ showInactiveFamilies: includeInactive });
-    await refreshFamiliesFromServer({ silent: true });
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');

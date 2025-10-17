@@ -38,7 +38,7 @@ export function renderHeader({
   <div class="ck-header-outer ${variant === 'band' ? 'ck-header--band' : ''}">
     <header class="ck-header">
       <div class="ck-header-left">
-        <a class="ck-brand" href="/">CK WALLET</a>
+        <a class="ck-brand" href="/">CLEVERKIDS</a>
         <div id="lang-controls" class="ck-lang-wrap"></div>
       </div>
       <div class="ck-header-right">

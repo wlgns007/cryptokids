@@ -1,7 +1,7 @@
 // ---- language packs (extend as needed) ----
 const MESSAGES = {
   en: {
-    'app.title': 'CryptoKids Admin',
+    'app.title': 'CleverKids Admin',
     'tabs.memberMgmt': 'Family Member Management',
     'tabs.registerMember': 'Register New Family Member',
     'tabs.existingMembers': 'Existing Family Members',
@@ -29,7 +29,7 @@ const MESSAGES = {
     invalid_youtube: 'Invalid YouTube URL'
   },
   ko: {
-    'app.title': '크립토키즈 관리자',
+    'app.title': '클레버키즈 관리자',
     'tabs.memberMgmt': '가족 구성원 관리',
     'tabs.registerMember': '신규 가족 구성원 등록',
     'tabs.existingMembers': '기존 가족 구성원',

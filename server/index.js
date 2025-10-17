@@ -1,4 +1,4 @@
-// CryptoKids Parents Shop API (refactored)
+// CleverKids Parents Shop API (refactored)
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, join, sep } from "node:path";
@@ -4098,7 +4098,7 @@ function renderSpendApprovalPage({ hold = null, balance = null, cost = null, aft
   const adminHint = hasHold
     ? canApprove
       ? ""
-      : `<p class="muted">Approve or cancel this reward in the <a href="/admin" target="_blank" rel="noopener">CryptoKids admin console</a>.</p>`
+      : `<p class="muted">Approve or cancel this reward in the <a href="/admin" target="_blank" rel="noopener">CleverKids admin console</a>.</p>`
     : `<p class="muted">Ask the child to open the shop again and generate a fresh QR code.</p>`;
 
   const actionCost = cost !== null ? `${cost} points` : "the required points";

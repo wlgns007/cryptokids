@@ -1,5 +1,9 @@
 import { renderHeader } from './js/header.js';
 
+if (typeof document !== 'undefined' && document.title) {
+  document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
+}
+
 const SUPPORTED_LANGS = ['en', 'ko'];
 let ckI18nApi = {};
 
