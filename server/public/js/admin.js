@@ -190,6 +190,17 @@ import { renderHeader } from './header.js';
     if (el) el.classList.add('hidden');
   }
 
+  function clearBadge(el) {
+    if (!el) return;
+    el.textContent = '0';
+    el.classList.add('hidden');
+  }
+
+  function normalizeStatus(value) {
+    const normalized = (value ?? '').toString().trim().toLowerCase();
+    return normalized === 'inactive' ? 'Inactive' : 'Active';
+  }
+
   document.addEventListener('click', (event) => {
     const target = event.target.closest('[data-close]');
     if (!target) return;
@@ -433,8 +444,13 @@ function initAdmin() {
     const { items = [], loading, error } = pendingTemplatesState;
     const canShow = canShowPendingBanner() && (loading || error || (Array.isArray(items) && items.length > 0));
     pendingBanner.hidden = !canShow;
-    if (pendingCount) pendingCount.textContent = String(Array.isArray(items) ? items.length : 0);
+    if (pendingCount) {
+      const count = Array.isArray(items) ? items.length : 0;
+      pendingCount.textContent = String(count);
+      pendingCount.classList.toggle('hidden', count === 0);
+    }
     if (!canShow) {
+      clearBadge(pendingCount);
       if (pendingStatus) pendingStatus.textContent = loading ? 'Loading templates…' : '';
       if (pendingList) pendingList.innerHTML = '';
       return;
@@ -1584,9 +1600,12 @@ function initAdmin() {
     if (family.id && family.id === adminState.currentFamilyId) {
       row.classList.add('is-active');
     }
-    if (normalizedStatus === 'inactive') {
+    const statusValue = (family.status ?? 'active').toString().trim().toLowerCase() || 'active';
+    const statusLabel = normalizeStatus(family.status);
+    if (statusValue === 'inactive') {
       row.classList.add('is-inactive');
     }
+    row.dataset.statusLabel = statusLabel;
 
     const idCell = document.createElement('td');
     idCell.textContent = family.id || '—';
@@ -1615,8 +1634,7 @@ function initAdmin() {
     const statusCell = document.createElement('td');
     const statusSelect = document.createElement('select');
     statusSelect.className = 'family-status-select';
-    const normalizedStatus = (family.status ?? 'active').toString().trim().toLowerCase() || 'active';
-    statusSelect.dataset.originalValue = normalizedStatus;
+    statusSelect.dataset.originalValue = statusValue;
     const deleteOptionValue = '__delete__';
     for (const option of statusOptions) {
       const opt = document.createElement('option');
@@ -1628,8 +1646,8 @@ function initAdmin() {
     deleteOpt.value = deleteOptionValue;
     deleteOpt.textContent = 'Delete permanently';
     statusSelect.appendChild(deleteOpt);
-    if (statusSelect.value !== normalizedStatus) {
-      statusSelect.value = normalizedStatus;
+    if (statusSelect.value !== statusValue) {
+      statusSelect.value = statusValue;
     }
     statusCell.appendChild(statusSelect);
     row.appendChild(statusCell);
@@ -1665,7 +1683,7 @@ function initAdmin() {
     emailInput.addEventListener('input', evaluateDirtyState);
     statusSelect.addEventListener('change', async () => {
       if (statusSelect.value === deleteOptionValue) {
-        statusSelect.value = statusSelect.dataset.originalValue || normalizedStatus;
+        statusSelect.value = statusSelect.dataset.originalValue || statusValue;
         if (!confirm('Delete this family permanently?')) {
           evaluateDirtyState();
           return;
@@ -1728,7 +1746,7 @@ function initAdmin() {
         const cell = document.createElement('td');
         cell.colSpan = 5;
         cell.className = 'muted';
-        cell.textContent = 'No families yet.';
+        cell.textContent = adminState.showInactiveFamilies ? 'No inactive families.' : 'No active families.';
         row.appendChild(cell);
         familyListTableBody.appendChild(row);
       } else {
@@ -2326,7 +2344,7 @@ details.member-fold .summary-value {
       };
     }
     const headers = {
-      'x-admin-key': key,
+      'X-Admin-Key': key,
       'x-actor-role': 'admin',
       ...(extraHeaders || {})
     };
@@ -2491,7 +2509,7 @@ details.member-fold .summary-value {
       if (showToastOnError) {
         toast(error?.message || 'Admin key validation failed', 'error');
       }
-      clearBadge();
+      clearBadge(pendingCount);
       if (masterCard) masterCard.style.display = 'none';
       if (quickFamilyTable) quickFamilyTable.innerHTML = '';
       clearAdminContext();
