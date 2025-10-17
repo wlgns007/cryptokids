@@ -3,6 +3,13 @@ import { renderHeader } from './header.js';
 (() => {
   'use strict';
 
+  const state = {
+    activeTab: 'templates',
+    adminKey: '',
+    families: [],
+    showInactive: false
+  };
+
   if (typeof document !== 'undefined' && document.title) {
     document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
     const heroHeading = document.querySelector('h1');
@@ -28,12 +35,15 @@ import { renderHeader } from './header.js';
       const stored = window.localStorage?.getItem(ADMIN_KEY_STORAGE);
       if (stored != null) {
         adminKeyMemory = stored;
+        state.adminKey = stored;
         return stored;
       }
     } catch {
       // ignore storage errors
     }
-    return adminKeyMemory || '';
+    const fallback = adminKeyMemory || '';
+    state.adminKey = fallback;
+    return fallback;
   }
 
   function setAdminKey(val) {
@@ -49,6 +59,7 @@ import { renderHeader } from './header.js';
       persisted = false;
     }
     adminKeyMemory = value;
+    state.adminKey = value;
     return persisted;
   }
 
@@ -233,7 +244,17 @@ function initAdmin() {
     showInactiveFamilies: false
   };
   adminState.showInactiveFamilies = !!adminState.showInactiveFamilies;
+  state.activeTab = adminState.masterView || 'templates';
+  state.showInactive = adminState.showInactiveFamilies;
+  state.families = Array.isArray(adminState.families) ? [...adminState.families] : [];
+  state.adminKey = state.adminKey || getAdminKey();
   const FAMILY_STATUS_OPTIONS = ['active', 'inactive'];
+
+  function cloneFamilyList(list) {
+    return Array.isArray(list)
+      ? list.map((family) => (family ? { ...family } : family)).filter(Boolean)
+      : [];
+  }
 
   function assignFamilies(families) {
     const incoming = Array.isArray(families) ? families : [];
@@ -245,6 +266,7 @@ function initAdmin() {
         return { ...family, id };
       })
       .filter(Boolean);
+    state.families = cloneFamilyList(adminState.families);
   }
 
   function persistAdminContextSnapshot() {
@@ -295,15 +317,6 @@ function initAdmin() {
   const scopeDependentSections = Array.from(document.querySelectorAll('[data-requires-scope="true"]'));
   const templateTabs = Array.from(document.querySelectorAll('[data-template-tab]'));
   const templatePanels = Array.from(document.querySelectorAll('[data-template-panel]'));
-
-  masterViewTabs.forEach((btn) => {
-    if (!btn) return;
-    const view = btn.dataset.viewTab || '';
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      setMasterView(view);
-    });
-  });
 
   const masterTaskForm = $k('masterTaskForm');
   const masterTaskTitle = $k('masterTaskTitle');
@@ -389,16 +402,81 @@ function initAdmin() {
     });
   }
 
-  function setMasterView(view) {
-    const desired = view === 'families' ? 'families' : 'templates';
+  function setActiveTab(tab) {
+    const desired = tab === 'families' ? 'families' : 'templates';
+    state.activeTab = desired;
     if (adminState.masterView !== desired) {
       adminState.masterView = desired;
     }
     applyMasterViewVisibility();
+    document.getElementById('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
+    document.getElementById('tabFamilies')?.classList.toggle('is-active', desired === 'families');
     if (adminState.role === 'master') {
       persistAdminContextSnapshot();
     }
+    if (desired === 'families') {
+      adminState.showInactiveFamilies = !!state.showInactive;
+      renderFamilyManagement();
+      fetchFamilies()
+        .then((fams) => {
+          const list = Array.isArray(fams) ? fams : [];
+          state.families = list;
+          assignFamilies(list);
+          if (adminState.role === 'master') {
+            persistAdminContextSnapshot();
+          }
+          renderFamilyManagement();
+        })
+        .catch((error) => {
+          console.warn('fetchFamilies failed', error);
+          renderFamilyManagement();
+        });
+    } else {
+      renderMasterTemplates();
+    }
   }
+
+  function renderMasterTemplates() {
+    renderMasterTaskList();
+    renderMasterRewardList();
+    renderPendingTemplates();
+  }
+
+  document.getElementById('tabFamilies')?.addEventListener(
+    'click',
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setActiveTab('families');
+    },
+    { passive: true }
+  );
+
+  document.getElementById('tabTemplates')?.addEventListener(
+    'click',
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setActiveTab('templates');
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const { id } = target;
+      if (id === 'tabFamilies' || id === 'tabTemplates' || id === 'familiesToggle') {
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+      }
+    },
+    true
+  );
 
   function updateMasterScopeVisibility() {
     const isMaster = adminState.role === 'master';
@@ -410,16 +488,7 @@ function initAdmin() {
       if (!section) return;
       section.classList.toggle('is-scope-disabled', isMaster && !hasScope);
     });
-    const familiesTab = masterViewTabs.find((btn) => btn?.dataset.viewTab === 'families');
-    if (familiesTab) {
-      familiesTab.disabled = isMaster && !hasScope;
-    }
-    const resetView = isMaster && !hasScope && adminState.masterView === 'families';
-    if (resetView) {
-      setMasterView('templates');
-    } else {
-      applyMasterViewVisibility();
-    }
+    applyMasterViewVisibility();
   }
 
   function setMasterTemplatesTab(tab) {
@@ -1169,15 +1238,17 @@ function initAdmin() {
   }
 
   applyRoleVisibility();
-  setMasterView('templates');
+  setActiveTab(state.activeTab || 'templates');
 
   function clearAdminContext() {
     adminState.role = null;
     adminState.familyId = null;
-    adminState.families = [];
+    assignFamilies([]);
     adminState.currentFamilyId = null;
     adminState.masterView = 'templates';
+    state.activeTab = 'templates';
     adminState.showInactiveFamilies = false;
+    state.showInactive = false;
     window.currentFamilyId = null;
     saveAdminContext(null);
     updateWhoamiBanner();
@@ -1197,6 +1268,7 @@ function initAdmin() {
 
   function setAdminState(partial = {}, { persist = true } = {}) {
     const previousRole = adminState.role;
+    const previousView = adminState.masterView;
     const previousFamilyScope = adminState.currentFamilyId;
     if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
       const nextRole = partial.role ?? null;
@@ -1257,6 +1329,15 @@ function initAdmin() {
     }
     if (!adminState.currentFamilyId && previousFamilyScope) {
       renderPendingTemplates();
+    }
+    const viewChanged = previousView !== adminState.masterView;
+    state.showInactive = adminState.showInactiveFamilies;
+    if (!Object.prototype.hasOwnProperty.call(partial, 'families')) {
+      state.families = cloneFamilyList(adminState.families);
+    }
+    state.activeTab = adminState.masterView;
+    if (viewChanged) {
+      setActiveTab(adminState.masterView);
     }
   }
 
@@ -1482,9 +1563,9 @@ function initAdmin() {
   }
 
   async function fetchFamilies() {
-    const status = adminState.showInactiveFamilies ? 'inactive' : 'active';
+    const status = state.showInactive ? 'inactive' : 'active';
     const url = `/api/admin/families?status=${status}`;
-    const body = await adminGET(url, { skipScope: true });
+    const body = await adminGET(url);
     return Array.isArray(body) ? body : [];
   }
 
@@ -1709,9 +1790,42 @@ function initAdmin() {
     familyListTableBody.appendChild(row);
   }
 
+  function mountFamiliesToggle(btn) {
+    if (!btn || btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener(
+      'click',
+      async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        const previous = state.showInactive;
+        state.showInactive = !previous;
+        adminState.showInactiveFamilies = state.showInactive;
+        try {
+          const fams = await fetchFamilies();
+          state.families = Array.isArray(fams) ? fams : [];
+          assignFamilies(state.families);
+          if (adminState.role === 'master') {
+            persistAdminContextSnapshot();
+          }
+        } catch (error) {
+          console.warn('fetchFamilies failed', error);
+          state.showInactive = previous;
+          adminState.showInactiveFamilies = previous;
+        } finally {
+          renderFamilyManagement();
+        }
+      },
+      { passive: true }
+    );
+  }
+
   function renderFamilyManagement() {
     if (!familyManagementPanel) return;
     const isMaster = adminState.role === 'master';
+    const showInactive = !!state.showInactive;
+    adminState.showInactiveFamilies = showInactive;
     const familiesPanel = document.getElementById('families-panel');
     if (familiesPanel) {
       familiesPanel.innerHTML = '';
@@ -1719,40 +1833,13 @@ function initAdmin() {
         familiesPanel.innerHTML = `
           <p class="muted family-panel-copy">Create or update families and control their status.</p>
           <button id="familiesToggle" type="button" class="btn-link" aria-pressed="${
-            adminState.showInactiveFamilies ? 'true' : 'false'
+            showInactive ? 'true' : 'false'
           }">
-            ${adminState.showInactiveFamilies ? 'View active families' : 'View inactive families'}
+            ${showInactive ? 'View active families' : 'View inactive families'}
           </button>
         `;
         const toggleButton = familiesPanel.querySelector('#familiesToggle');
-        if (toggleButton) {
-          toggleButton.addEventListener('click', async (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            if (toggleButton.disabled) return;
-            const previousState = adminState.showInactiveFamilies;
-            adminState.showInactiveFamilies = !previousState;
-            toggleButton.disabled = true;
-            toggleButton.textContent = 'Loading...';
-            try {
-              const families = await fetchFamiliesStrict();
-              assignFamilies(families);
-              persistAdminContextSnapshot();
-            } catch (error) {
-              adminState.showInactiveFamilies = previousState;
-              const message = presentError(error?.body?.error || error?.message, 'Failed to load families');
-              toast(message, 'error');
-            } finally {
-              toggleButton.disabled = adminState.role !== 'master';
-              const finalLabel = adminState.showInactiveFamilies
-                ? 'View active families'
-                : 'View inactive families';
-              toggleButton.textContent = finalLabel;
-              renderFamilyManagement();
-            }
-          });
-        }
+        mountFamiliesToggle(toggleButton);
       } else {
         familiesPanel.innerHTML =
           '<p class="muted family-panel-copy">Master access required to manage families.</p>';
@@ -1786,7 +1873,7 @@ function initAdmin() {
         const cell = document.createElement('td');
         cell.colSpan = 5;
         cell.className = 'muted';
-        cell.textContent = adminState.showInactiveFamilies ? 'No inactive families.' : 'No active families.';
+        cell.textContent = showInactive ? 'No inactive families.' : 'No active families.';
         row.appendChild(cell);
         familyListTableBody.appendChild(row);
       } else {
@@ -2406,23 +2493,15 @@ details.member-fold .summary-value {
     return body;
   }
 
-  async function adminGET(url, { skipScope = false } = {}) {
-    const { res, body } = await adminFetch(url, { skipScope });
-    if (res.status === 401) {
-      const error = new Error(ADMIN_INVALID_MSG);
-      error.code = 'UNAUTHORIZED';
-      error.status = res.status;
-      error.body = body;
-      throw error;
+  async function adminGET(url) {
+    const response = await fetch(url, {
+      headers: { 'X-Admin-Key': state.adminKey || '' },
+      credentials: 'same-origin'
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status}`);
     }
-    if (!res.ok) {
-      const message = presentError(body?.error, res.statusText || 'Request failed');
-      const error = new Error(message);
-      error.status = res.status;
-      error.body = body;
-      throw error;
-    }
-    return body;
+    return response.json();
   }
 
   async function loadAvailableTaskTemplates() {
