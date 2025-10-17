@@ -513,7 +513,7 @@ function initAdmin() {
             renderFamilyManagement(message);
           });
       } else if (state.role === 'family') {
-        renderFamilyManagement('This section lists all families (master only).');
+        renderFamilyManagement('This list is master-only. Use the panels below for your family.');
       } else {
         renderFamilyManagement('Enter a valid admin key.');
       }
@@ -534,7 +534,7 @@ function initAdmin() {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       const { id } = target;
-      if (id === 'tabFamilies' || id === 'tabTemplates' || id === 'familiesToggle') {
+      if (id === 'tabFamilies' || id === 'tabTemplates') {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1514,6 +1514,11 @@ function initAdmin() {
       return;
     }
     const role = state.role ?? adminState.role ?? null;
+    if (!role) {
+      const hasKey = Boolean(state.adminKey || getAdminKey());
+      pill.textContent = hasKey ? 'Admin' : 'No admin';
+      return;
+    }
     if (role === 'master') {
       pill.textContent = 'Master';
       return;
@@ -1673,20 +1678,19 @@ function initAdmin() {
   }
 
   refreshAdminAuth = async () => {
-    let role = null;
-    let familyId = null;
     try {
       const me = await adminGET('/api/admin/whoami');
-      role = typeof me?.role === 'string' ? me.role : null;
-      familyId = me?.familyId ?? null;
+      const role = typeof me?.role === 'string' ? me.role : null;
+      const familyId = me?.familyId ?? me?.family_id ?? null;
+      state.role = role;
+      state.familyId = familyId;
+      setAdminState({ role, family_id: familyId }, { persist: false });
     } catch {
-      role = null;
-      familyId = null;
+      state.role = null;
+      state.familyId = null;
+      setAdminState({ role: null, family_id: null }, { persist: false });
     }
-    state.role = role;
-    state.familyId = familyId;
-    setAdminState({ role, family_id: familyId }, { persist: false });
-    renderRoleBadge(!role);
+    renderRoleBadge();
   };
 
   async function fetchFamilies() {
@@ -5480,15 +5484,46 @@ setupScanner({
   btnReloadActive?.addEventListener('click', () => refreshEarnTemplates('active'));
   btnViewDeactivated?.addEventListener('click', () => refreshEarnTemplates('inactive'));
 
-  document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
-    const box = document.querySelector('#tpl-list');
-    if (!box) return;
-    box.innerHTML = '<div class="opacity-70">Loading...</div>';
+  function getTaskTemplateModalParts() {
+    const modal = document.getElementById('modal-task-templates');
+    if (!modal) {
+      return { modal: null, list: null, title: null, footer: null };
+    }
+    return {
+      modal,
+      list: modal.querySelector('#tpl-list'),
+      title: modal.querySelector('#tpl-modal-title'),
+      footer: modal.querySelector('#tpl-modal-footer')
+    };
+  }
+
+  function openAddTemplateModalForFamily() {
+    const { list, title, footer } = getTaskTemplateModalParts();
+    if (!list) return;
+    if (title) title.textContent = 'Create Task';
+    if (footer) footer.hidden = true;
+
+    renderCustomTemplateForm('task', list, { modalSelector: '#modal-task-templates' });
+    show('#modal-task-templates');
+
+    const titleInput = list.querySelector('#customTitle');
+    if (titleInput instanceof HTMLElement) {
+      titleInput.focus();
+    }
+  }
+
+  async function openAddTemplateModalForMaster() {
+    const { list, title, footer } = getTaskTemplateModalParts();
+    if (!list) return;
+    if (title) title.textContent = 'Select a Master Task';
+    if (footer) footer.hidden = false;
+    list.innerHTML = '<div class="opacity-70">Loading...</div>';
+    show('#modal-task-templates');
 
     try {
-      const list = await loadAvailableTaskTemplates();
-      if (Array.isArray(list) && list.length) {
-        box.innerHTML = list
+      const templates = await loadAvailableTaskTemplates();
+      if (Array.isArray(templates) && templates.length) {
+        list.innerHTML = templates
           .map(
             (t) => `
         <div class="flex items-center justify-between p-2 border rounded">
@@ -5502,23 +5537,33 @@ setupScanner({
           .join('');
       } else {
         const viewBtn = document.getElementById('btn-view-deactivated');
-        renderCustomTemplateForm('task', box, {
+        if (footer) footer.hidden = true;
+        renderCustomTemplateForm('task', list, {
           modalSelector: '#modal-task-templates',
           viewButton: viewBtn || undefined
         });
       }
-      show('#modal-task-templates');
     } catch (error) {
       console.warn('loadAvailableTaskTemplates failed', error);
       const message = error?.message || 'Failed to load master templates';
       if (message === 'family_id required') {
-        box.innerHTML = '<div class="opacity-70">Select a family scope to adopt templates.</div>';
+        list.innerHTML = '<div class="opacity-70">Select a family scope to adopt templates.</div>';
         toast('Select a family scope to adopt templates.', 'error');
       } else {
-        box.innerHTML = '<div class="opacity-70">Failed to load templates.</div>';
+        list.innerHTML = '<div class="opacity-70">Failed to load templates.</div>';
         toast(message, 'error');
       }
+      if (footer) footer.hidden = false;
     }
+  }
+
+  const addTaskTemplateButton = document.querySelector('#btn-add-task-template');
+  addTaskTemplateButton?.addEventListener('click', async () => {
+    if (state.role === 'family') {
+      openAddTemplateModalForFamily();
+      return;
+    }
+    await openAddTemplateModalForMaster();
   });
 
   document.addEventListener('click', async (e) => {
