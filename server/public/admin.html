@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CleverKids · Admin</title>
+  <title>CleverKids Admin</title>
   <link rel="manifest" href="/ck-wallet-manifest.v1.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/ck-wallet-apple-touch-180.v1.png">
@@ -1046,8 +1046,20 @@
     .family-management-controls {
       margin-bottom: 12px;
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .family-management-controls p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .family-management-controls button {
+      margin-left: auto;
     }
 
     #historyModal .filters {
@@ -1502,13 +1514,10 @@
           <div class="section-actions" style="display:flex; justify-content:flex-end;">
             <button type="button" id="btnFamiliesRefresh">Refresh</button>
           </div>
-          <p class="muted">Create or update families and control their status.</p>
           <div id="familyManagementPanel" class="stack family-management">
             <div class="family-management-list">
               <h3>Existing families</h3>
-              <div class="family-management-controls">
-                <button type="button" id="familyToggleInactive" class="btn-link">View inactive families</button>
-              </div>
+              <div class="family-management-controls" id="families-panel"></div>
               <div class="table-responsive">
                 <table class="family-table">
                   <thead>
