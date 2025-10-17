@@ -286,6 +286,24 @@
       gap: 6px;
     }
 
+    .admin-whoami-chips {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .admin-whoami-chips .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.12);
+      color: var(--fg);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
     .admin-whoami-scope-picker {
       display: grid;
       gap: 4px;
@@ -1026,6 +1044,9 @@
 
     .family-management-controls {
       margin-bottom: 12px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
     }
 
     #historyModal .filters {
@@ -1205,7 +1226,10 @@
         <div class="admin-whoami" id="adminWhoami" hidden>
           <div class="admin-whoami-role" id="adminRoleLabel">&nbsp;</div>
           <div class="admin-whoami-scope">
-            <div id="familyScopeSummary" class="admin-whoami-summary" hidden></div>
+            <div class="admin-whoami-chips">
+              <div id="familyScopeSummary" class="admin-whoami-summary chip" hidden></div>
+              <div id="familyIdChip" class="admin-whoami-summary chip" hidden></div>
+            </div>
           </div>
         </div>
       </div>
@@ -1482,10 +1506,7 @@
             <div class="family-management-list">
               <h3>Existing families</h3>
               <div class="family-management-controls">
-                <label class="toggle" style="display:flex; align-items:center; gap:8px;">
-                  <input type="checkbox" id="familyIncludeInactive">
-                  <span>View inactive families</span>
-                </label>
+                <button type="button" id="familyToggleInactive" class="btn-link">View inactive families</button>
               </div>
               <div class="table-responsive">
                 <table class="family-table">
@@ -1557,10 +1578,10 @@
           <div class="stack">
             <label>
               <span data-i18n="user_id">User ID</span>
-              <input id="memberUserId" type="text" placeholder="e.g., leo" autocomplete="off">
+              <input id="memberUserId" type="text" placeholder="Enter name or ID" autocomplete="off">
             </label>
             <div id="memberInfoPanel" class="stack" style="border:1px solid var(--line); border-radius:12px; padding:12px; background:rgba(37,99,235,0.04);">
-              <div id="memberInfoDetails" class="muted">Enter a user ID and click Member Info to view details.</div>
+              <div id="memberInfoDetails" class="muted">Enter a name or ID and click Member Info to view details.</div>
               <div id="memberBalanceContainer" class="stack member-balance-container" hidden>
                 <details id="memberBalanceDetails" class="member-fold">
                   <summary>
@@ -2008,6 +2029,20 @@
             <tbody></tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="memberChooserModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close="#memberChooserModal"></div>
+    <div class="modal-card">
+      <header>
+        <h3>Select Member</h3>
+        <button class="modal-close" type="button" aria-label="Close" data-close="#memberChooserModal">×</button>
+      </header>
+      <div class="stack" id="memberChooserBody" style="gap:12px;">
+        <p id="memberChooserMessage" class="muted">We found multiple matches. Choose a member to continue.</p>
+        <div id="memberChooserList" class="stack" style="gap:8px;"></div>
       </div>
     </div>
   </div>

@@ -363,6 +363,23 @@ app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
 app.use(coreRoutes);
 
+app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
+  const statusParam = (req.query?.status || "").toString().trim().toLowerCase();
+  const status = statusParam === "active" || statusParam === "inactive" ? statusParam : null;
+
+  let sql =
+    "SELECT id, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
+  const params = [];
+  if (status) {
+    sql += " AND status = ?";
+    params.push(status);
+  }
+  sql += " ORDER BY created_at DESC";
+
+  const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
+  res.json(rows);
+});
+
 app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
   const name = (body.name ?? "").toString().trim();
@@ -473,6 +490,41 @@ app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
     return;
   }
   res.json({ id, name, status });
+});
+
+app.delete("/api/admin/families/:id", authenticateAdmin, requireMaster, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "family id required" });
+    return;
+  }
+  if (id === "default") {
+    res.status(400).json({ error: "cannot delete default family" });
+    return;
+  }
+
+  const hardMode = (req.query?.hard ?? "").toString().trim().toLowerCase();
+  if (hardMode !== "true") {
+    res.status(400).json({ error: "hard=true required" });
+    return;
+  }
+
+  const existing = selectFamilyByIdStmt.get(id);
+  if (!existing) {
+    res.status(404).json({ error: "family not found" });
+    return;
+  }
+
+  const removed = hardDeleteFamilyCascade(id);
+  try {
+    if (removed.family > 0) {
+      db.exec("VACUUM");
+    }
+  } catch (err) {
+    console.warn("[admin] vacuum after hard delete failed", err?.message || err);
+  }
+
+  res.json({ removed });
 });
 
 app.post("/api/master/tasks", authenticateAdmin, requireMaster, (req, res) => {
@@ -910,6 +962,102 @@ app.post("/api/family/dismiss", authenticateAdmin, resolveFamilyScope, (req, res
   }
 });
 
+app.get(
+  "/api/admin/list-earn-templates",
+  authenticateAdmin,
+  resolveFamilyScopeOptional,
+  (req, res) => {
+    if (!tableExists("task")) {
+      res.json([]);
+      return;
+    }
+
+    const columns = getTableColumns("task");
+    const hasFamilyColumn = columns.includes("family_id");
+    const hasStatus = columns.includes("status");
+    const hasSortOrder = columns.includes("sort_order");
+    const hasUpdatedAt = columns.includes("updated_at");
+    const hasCreatedAt = columns.includes("created_at");
+    const hasMasterId = columns.includes("master_task_id");
+    const hasYoutube = columns.includes("youtube_url");
+    const hasSource = columns.includes("source");
+
+    if (MULTITENANT_ENFORCE && !hasFamilyColumn) {
+      res.status(500).json({ error: "task_missing_family_scope" });
+      return;
+    }
+
+    const scopeFamily = req.scope?.family_id || null;
+    const queryFamily = (req.query?.familyId || req.query?.family_id || "").toString().trim();
+    const familyId = scopeFamily || (queryFamily ? queryFamily : null);
+    if (!familyId) {
+      res.status(400).json({ error: "family_id required" });
+      return;
+    }
+
+    const statusParam = (req.query?.status || "").toString().trim().toLowerCase();
+    const status = statusParam === "inactive" ? "inactive" : "active";
+
+    const joinMaster = tableExists("master_task");
+    const selectParts = [
+      "t.id",
+      columns.includes("title") ? "t.title" : columns.includes("name") ? "t.name AS title" : "t.id AS title",
+      columns.includes("name") ? "t.name" : columns.includes("title") ? "t.title AS name" : "t.id AS name",
+      columns.includes("description") ? "t.description" : "NULL AS description",
+      columns.includes("icon") ? "t.icon" : "NULL AS icon",
+      columns.includes("points") ? "t.points" : columns.includes("base_points") ? "t.base_points AS points" : "0 AS points",
+      hasStatus ? "t.status" : "'active' AS status",
+      hasSource ? "t.source" : "NULL AS source",
+      hasMasterId ? "t.master_task_id" : "NULL AS master_task_id",
+      hasFamilyColumn ? "t.family_id" : "NULL AS family_id",
+      hasCreatedAt ? "t.created_at" : "0 AS created_at",
+      hasUpdatedAt ? "t.updated_at" : "0 AS updated_at",
+      hasSortOrder ? "t.sort_order" : "0 AS sort_order",
+      hasYoutube ? "t.youtube_url" : "NULL AS youtube_url"
+    ];
+    if (joinMaster) {
+      selectParts.push("mt.youtube_url AS master_youtube");
+    }
+
+    let sql = `SELECT ${selectParts.join(", ")} FROM task t`;
+    if (joinMaster) {
+      sql += " LEFT JOIN master_task mt ON mt.id = t.master_task_id";
+    }
+    sql += " WHERE 1=1";
+
+    const params = [];
+    if (hasFamilyColumn) {
+      sql += " AND t.family_id = ?";
+      params.push(familyId);
+    }
+
+    if (hasStatus) {
+      sql += " AND t.status = ?";
+      params.push(status);
+    } else if (status === "inactive") {
+      res.json([]);
+      return;
+    }
+
+    if (hasSortOrder) {
+      const order = ["t.sort_order ASC"];
+      if (hasUpdatedAt) {
+        order.push("t.updated_at DESC");
+      } else {
+        order.push("t.id DESC");
+      }
+      sql += ` ORDER BY ${order.join(", ")}`;
+    } else if (hasUpdatedAt) {
+      sql += " ORDER BY t.updated_at DESC";
+    } else {
+      sql += " ORDER BY t.id DESC";
+    }
+
+    const rows = db.prepare(sql).all(...params);
+    res.json(rows.map(mapTaskRow));
+  }
+);
+
 app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
   if (!tableExists("task")) {
     res.json([]);
@@ -1014,6 +1162,185 @@ app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req
   const rows = db.prepare(sql).all(...params);
   res.json(rows.map(mapTaskRow));
 });
+
+app.post(
+  "/api/admin/templates/:templateId/adopt",
+  authenticateAdmin,
+  resolveFamilyScopeOptional,
+  (req, res) => {
+    const templateId = (req.params?.templateId ?? "").toString().trim();
+    if (!templateId) {
+      res.status(400).json({ error: "templateId required" });
+      return;
+    }
+
+    if (!tableExists("master_task")) {
+      res.status(404).json({ error: "template_not_found" });
+      return;
+    }
+
+    const scopeFamily = req.scope?.family_id || null;
+    const queryFamily = (req.query?.familyId || req.query?.family_id || "").toString().trim();
+    const familyId = scopeFamily || (queryFamily ? queryFamily : null);
+    if (!familyId) {
+      res.status(400).json({ error: "family_id required" });
+      return;
+    }
+
+    const master = db
+      .prepare(
+        `SELECT id, title, description, icon, base_points, youtube_url, status FROM master_task WHERE id = ?`
+      )
+      .get(templateId);
+    if (!master) {
+      res.status(404).json({ error: "template_not_found" });
+      return;
+    }
+
+    const masterStatus = (master.status || "active").toString().trim().toLowerCase() || "active";
+    if (masterStatus !== "active") {
+      res.status(409).json({ error: "template_inactive" });
+      return;
+    }
+
+    if (!tableExists("task")) {
+      res.status(500).json({ error: "task_table_missing" });
+      return;
+    }
+
+    const columns = getTableColumns("task");
+    if (!columns.includes("id")) {
+      res.status(500).json({ error: "task_table_missing" });
+      return;
+    }
+    if (MULTITENANT_ENFORCE && !columns.includes("family_id")) {
+      res.status(500).json({ error: "task_missing_family_scope" });
+      return;
+    }
+
+    if (columns.includes("master_task_id") && columns.includes("family_id")) {
+      const duplicate = db
+        .prepare(`SELECT id FROM task WHERE family_id = ? AND master_task_id = ? LIMIT 1`)
+        .get(familyId, templateId);
+      if (duplicate?.id) {
+        res.status(409).json({ error: "already_adopted", taskId: duplicate.id });
+        return;
+      }
+    }
+
+    const now = Date.now();
+    const newId = crypto.randomUUID();
+    const basePoints = coerceInteger(master.base_points, 0);
+    const record = { id: newId };
+    if (columns.includes("family_id")) record.family_id = familyId;
+    if (columns.includes("title")) record.title = master.title ?? "";
+    if (columns.includes("name")) record.name = master.title ?? "";
+    if (columns.includes("description")) record.description = master.description ?? null;
+    if (columns.includes("icon")) record.icon = master.icon ?? null;
+    if (columns.includes("points")) record.points = basePoints;
+    if (columns.includes("base_points")) record.base_points = basePoints;
+    if (columns.includes("status")) record.status = "active";
+    if (columns.includes("source")) record.source = "master";
+    if (columns.includes("master_task_id")) record.master_task_id = master.id;
+    if (columns.includes("sort_order")) record.sort_order = 0;
+    if (columns.includes("youtube_url")) record.youtube_url = master.youtube_url ?? null;
+    if (columns.includes("created_at")) record.created_at = now;
+    if (columns.includes("updated_at")) record.updated_at = now;
+
+    insertRecord("task", record);
+    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: master.id });
+
+    res.status(201).json({ taskId: newId });
+  }
+);
+
+function buildTaskStatusUpdater(targetStatus) {
+  return function handleTaskStatusUpdate(req, res) {
+    if (!tableExists("task")) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const columns = getTableColumns("task");
+    if (!columns.includes("status")) {
+      res.status(400).json({ error: "status_not_supported" });
+      return;
+    }
+
+    const id = (req.params?.id ?? "").toString().trim();
+    if (!id) {
+      res.status(400).json({ error: "invalid_id" });
+      return;
+    }
+
+    const scopeFamily = req.scope?.family_id || null;
+    const queryFamily = (req.query?.familyId || req.query?.family_id || "").toString().trim();
+    const requestedFamily = scopeFamily || (queryFamily ? queryFamily : null);
+
+    const joinMaster = tableExists("master_task");
+    let selectSql = "SELECT t.*";
+    if (joinMaster) {
+      selectSql += ", mt.youtube_url AS master_youtube";
+    }
+    selectSql += " FROM task t";
+    if (joinMaster) {
+      selectSql += " LEFT JOIN master_task mt ON mt.id = t.master_task_id";
+    }
+    selectSql += " WHERE t.id = ?";
+    const selectParams = [id];
+    if (columns.includes("family_id") && requestedFamily) {
+      selectSql += " AND t.family_id = ?";
+      selectParams.push(requestedFamily);
+    }
+
+    const existing = db.prepare(selectSql).get(...selectParams);
+    if (!existing) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const normalizedStatus = targetStatus;
+    const now = Date.now();
+    const updateFields = ["status = ?"];
+    const updateParams = [normalizedStatus];
+    if (columns.includes("updated_at")) {
+      updateFields.push("updated_at = ?");
+      updateParams.push(now);
+    }
+
+    let updateSql = `UPDATE task SET ${updateFields.join(", ")} WHERE id = ?`;
+    const guardParams = [...updateParams, id];
+    const guardFamilyId = columns.includes("family_id")
+      ? requestedFamily || existing.family_id || null
+      : null;
+    if (guardFamilyId) {
+      updateSql += " AND family_id = ?";
+      guardParams.push(guardFamilyId);
+    }
+
+    const info = db.prepare(updateSql).run(...guardParams);
+    const refreshed = db.prepare(selectSql).get(...selectParams);
+    if (!info.changes && !refreshed) {
+      res.status(409).json({ error: "no_change" });
+      return;
+    }
+    res.json({ task: mapTaskRow(refreshed) });
+  };
+}
+
+app.patch(
+  "/api/admin/tasks/:id/deactivate",
+  authenticateAdmin,
+  resolveFamilyScopeOptional,
+  buildTaskStatusUpdater("inactive")
+);
+
+app.patch(
+  "/api/admin/tasks/:id/reactivate",
+  authenticateAdmin,
+  resolveFamilyScopeOptional,
+  buildTaskStatusUpdater("active")
+);
 
 app.patch("/api/tasks/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
   if (!tableExists("task")) {
@@ -2015,6 +2342,7 @@ const ensureTables = db.transaction(() => {
   ensureColumn(db, "task", "created_at", "INTEGER");
   ensureColumn(db, "task", "updated_at", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_task_status ON task(status)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_family_status ON task(family_id, status)");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
@@ -2490,6 +2818,67 @@ const updateFamilyStmt = db.prepare(
 const updateFamilyAdminKeyStmt = db.prepare(
   `UPDATE family SET admin_key = @admin_key, updated_at = @updated_at WHERE id = @id`
 );
+const ledgerTableColumns = db.prepare("PRAGMA table_info('ledger')").all().map((col) => col.name);
+const LEDGER_MEMBER_COLUMN = ledgerTableColumns.includes("member_id") ? "member_id" : "user_id";
+const deleteFamilyByIdStmt = db.prepare(
+  `DELETE FROM family WHERE id = @familyId`
+);
+const deleteMembersByFamilyStmt = db.prepare(
+  `DELETE FROM member WHERE family_id = @familyId`
+);
+const deleteTasksByFamilyStmt = db.prepare(
+  `DELETE FROM task WHERE family_id = @familyId`
+);
+const deleteLedgerByFamilyStmt = db.prepare(
+  `DELETE FROM ledger WHERE family_id = @familyId OR ${LEDGER_MEMBER_COLUMN} IN (SELECT id FROM member WHERE family_id = @familyId)`
+);
+function deleteMemberTasksForFamily(payload) {
+  if (!tableExists("member_task")) {
+    return 0;
+  }
+  const columns = db.prepare("PRAGMA table_info('member_task')").all().map((col) => col.name);
+  let memberColumn = null;
+  if (columns.includes("member_id")) {
+    memberColumn = "member_id";
+  } else if (columns.includes("memberId")) {
+    memberColumn = "memberId";
+  }
+  if (!memberColumn) {
+    return 0;
+  }
+  const countStmt = db.prepare(
+    `SELECT COUNT(*) AS count FROM member_task WHERE ${memberColumn} IN (SELECT id FROM member WHERE family_id = @familyId)`
+  );
+  const prior = countStmt.get(payload)?.count ?? 0;
+  if (!prior) {
+    return 0;
+  }
+  const stmt = db.prepare(
+    `DELETE FROM member_task WHERE ${memberColumn} IN (SELECT id FROM member WHERE family_id = @familyId)`
+  );
+  stmt.run(payload);
+  return Number(prior) || 0;
+}
+
+const runHardDeleteFamilyTxn = db.transaction((payload) => {
+  const removed = {
+    family: 0,
+    members: 0,
+    tasks: 0,
+    ledger: 0,
+    member_task: 0
+  };
+  removed.member_task = deleteMemberTasksForFamily(payload);
+  removed.ledger = deleteLedgerByFamilyStmt.run(payload).changes;
+  removed.tasks = deleteTasksByFamilyStmt.run(payload).changes;
+  removed.members = deleteMembersByFamilyStmt.run(payload).changes;
+  removed.family = deleteFamilyByIdStmt.run(payload).changes;
+  return removed;
+});
+
+function hardDeleteFamilyCascade(familyId) {
+  return runHardDeleteFamilyTxn({ familyId });
+}
 
 function ensureMemberFamilyColumn() {
   try {
@@ -2568,6 +2957,7 @@ const insertMemberStmt = db.prepare(`
 const insertMemberForFamilyStmt = insertMemberStmt;
 
 const MEMBER_HAS_FAMILY_COLUMN = tableHasColumn("member", "family_id");
+const MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,62}$/i;
 
 function ensureDefaultMembers() {
   ensureMemberTable();
@@ -4097,60 +4487,104 @@ app.get("/summary/:userId", (req, res) => {
   });
 });
 
-app.get("/api/admin/resolve-member", authenticateAdmin, resolveFamilyScopeOptional, (req, res) => {
-  const userQuery = (req.query?.user || "").toString().trim();
-  if (!userQuery) {
-    return res.status(400).json({ error: "user required" });
+function mapResolvedMember(row, fallbackFamilyId = null) {
+  if (!row) return null;
+  const familyId = row.family_id ?? row.familyId ?? fallbackFamilyId ?? null;
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    familyId: familyId ?? null
+  };
+}
+
+app.get("/api/admin/resolve-member", (req, res) => {
+  const rawQuery = (req.query?.q ?? req.query?.user ?? "").toString().trim();
+  if (!rawQuery) {
+    res.status(400).json({ error: "q required" });
+    return;
   }
 
-  const requestedFamilyId = (req.query?.family_id || "").toString().trim();
-  let scopeFamilyId = req.scope?.family_id ?? null;
+  const requestedFamilyId = normalizeNullableString(req.query?.familyId ?? req.query?.family_id);
+  const headerFamilyId = normalizeNullableString(req.get?.("x-act-as-family") ?? req.headers?.["x-act-as-family"]);
+  let scopeFamilyId = requestedFamilyId ?? headerFamilyId;
+  let role = null;
 
-  if (req.auth?.role === "family") {
-    scopeFamilyId = req.auth.familyId ?? req.auth.family_id ?? scopeFamilyId;
-    if (MULTITENANT_ENFORCE && !scopeFamilyId) {
-      return res.status(403).json({ error: "forbidden" });
+  const adminKey = readAdminKey(req);
+  if (adminKey) {
+    const ctx = resolveAdminContext(db, adminKey);
+    if (!ctx || ctx.role === "none") {
+      res.status(403).json({ error: "invalid key" });
+      return;
     }
-  } else if (req.auth?.role === "master") {
-    if (requestedFamilyId) {
-      scopeFamilyId = requestedFamilyId;
+    role = ctx.role;
+    if (ctx.role === "family") {
+      scopeFamilyId = ctx.familyId ?? ctx.family_id ?? scopeFamilyId ?? null;
+      if (MULTITENANT_ENFORCE && !scopeFamilyId) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
+    } else if (ctx.role === "master") {
+      scopeFamilyId = requestedFamilyId ?? ctx.familyId ?? ctx.family_id ?? null;
+    } else {
+      res.status(403).json({ error: "forbidden" });
+      return;
     }
-    if (MULTITENANT_ENFORCE && !scopeFamilyId) {
-      return res.status(400).json({ error: "family_id required" });
-    }
-    scopeFamilyId = scopeFamilyId || null;
-  } else {
-    return res.status(403).json({ error: "forbidden" });
+  } else if (req.headers["x-admin-key"]) {
+    // An admin key header was supplied but did not validate.
+    res.status(403).json({ error: "invalid key" });
+    return;
   }
 
-  const selectColumns = "SELECT id, name, family_id FROM member";
-  let match = null;
+  if (!role && MULTITENANT_ENFORCE && !scopeFamilyId) {
+    res.status(400).json({ error: "familyId required" });
+    return;
+  }
 
+  const selectColumns = MEMBER_HAS_FAMILY_COLUMN
+    ? "SELECT id, name, family_id FROM member"
+    : "SELECT id, name FROM member";
+
+  const normalizedId = normId(rawQuery);
+  if (MEMBER_ID_PATTERN.test(rawQuery)) {
+    let directRow = null;
+    if (MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId) {
+      directRow = db
+        .prepare(`${selectColumns} WHERE lower(id) = lower(@id) AND family_id = @familyId LIMIT 1`)
+        .get({ id: rawQuery, familyId: scopeFamilyId });
+    } else {
+      directRow = db
+        .prepare(`${selectColumns} WHERE lower(id) = lower(@id) LIMIT 1`)
+        .get({ id: rawQuery });
+    }
+    if (!directRow && normalizedId && normalizedId !== rawQuery) {
+      const altParams = MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId
+        ? { id: normalizedId, familyId: scopeFamilyId }
+        : { id: normalizedId };
+      const sql = MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId
+        ? `${selectColumns} WHERE id = @id AND family_id = @familyId LIMIT 1`
+        : `${selectColumns} WHERE id = @id LIMIT 1`;
+      directRow = db.prepare(sql).get(altParams);
+    }
+    if (directRow) {
+      res.set("Cache-Control", "no-store");
+      res.json([mapResolvedMember(directRow, scopeFamilyId)]);
+      return;
+    }
+  }
+
+  const nameParams = MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId
+    ? { name: rawQuery, nameLower: rawQuery.toLowerCase(), familyId: scopeFamilyId }
+    : { name: rawQuery, nameLower: rawQuery.toLowerCase() };
+
+  let nameSql = `${selectColumns} WHERE (name = @name OR lower(name) = @nameLower)`;
   if (MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId) {
-    match = db.prepare(`${selectColumns} WHERE id = ? AND family_id = ?`).get(userQuery, scopeFamilyId);
-  } else {
-    match = db.prepare(`${selectColumns} WHERE id = ?`).get(userQuery);
+    nameSql += " AND family_id = @familyId";
   }
+  nameSql += " ORDER BY name COLLATE NOCASE LIMIT 25";
 
-  if (match) {
-    return res.json(match);
-  }
-
-  let rows = [];
-  if (MEMBER_HAS_FAMILY_COLUMN && scopeFamilyId) {
-    rows = db.prepare(`${selectColumns} WHERE name = ? AND family_id = ?`).all(userQuery, scopeFamilyId);
-  } else {
-    rows = db.prepare(`${selectColumns} WHERE name = ?`).all(userQuery);
-  }
-
-  if (rows.length === 1) {
-    return res.json(rows[0]);
-  }
-  if (rows.length > 1) {
-    return res.status(409).json({ error: "multiple matches", matches: rows });
-  }
-
-  return res.status(404).json({ error: "not found" });
+  const rows = db.prepare(nameSql).all(nameParams).map((row) => mapResolvedMember(row, scopeFamilyId));
+  res.set("Cache-Control", "no-store");
+  res.json(rows);
 });
 
 app.get("/api/admin/members", authenticateAdmin, resolveFamilyScope, (req, res) => {
@@ -4815,44 +5249,14 @@ app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) 
   res.json(rows);
 });
 
-app.get("/api/child/resolve-user", (req, res) => {
-  const raw = (req.query?.user ?? "").toString().trim();
-  if (!raw) {
-    res.status(400).json({ error: "user required" });
-    return;
-  }
-
-  let row = db.prepare(`SELECT id, family_id, name FROM "member" WHERE id = ?`).get(raw);
-  if (!row) {
-    row = db.prepare(`SELECT id, family_id, name FROM "member" WHERE lower(id) = lower(?)`).get(raw);
-  }
-  if (row) {
-    res.json(row);
-    return;
-  }
-
-  const matches = db
-    .prepare(`SELECT id, family_id, name FROM "member" WHERE lower(name) = lower(?)`)
-    .all(raw);
-  if (matches.length === 1) {
-    res.json(matches[0]);
-    return;
-  }
-  if (matches.length > 1) {
-    res.status(409).json({
-      error: "multiple matches",
-      matches: matches.map((m) => ({ id: m.id, family_id: m.family_id, name: m.name || "" }))
-    });
-    return;
-  }
-
-  res.status(404).json({ error: "not found" });
-});
-
 app.get("/api/child/rewards", (req, res) => {
-  const userId = (req.query?.userId ?? "").toString().trim();
-  if (!userId) {
-    res.status(400).json({ error: "userId required" });
+  if (req.query?.name || req.query?.userId || req.query?.user_id) {
+    res.status(400).json({ error: "memberId required" });
+    return;
+  }
+  const memberId = normId(req.query?.memberId ?? req.query?.member_id ?? "");
+  if (!memberId) {
+    res.status(400).json({ error: "memberId required" });
     return;
   }
   const stmt = ensureChildRewardsStmt();
@@ -4860,7 +5264,7 @@ app.get("/api/child/rewards", (req, res) => {
     res.status(500).json({ error: "rewards_unavailable" });
     return;
   }
-  const familyId = familyIdByMember(userId);
+  const familyId = familyIdByMember(memberId);
   if (!familyId) {
     res.status(404).json({ error: "member not found" });
     return;
@@ -4876,9 +5280,13 @@ app.get("/api/child/rewards", (req, res) => {
 });
 
 app.get("/api/child/tasks", (req, res) => {
-  const userId = (req.query?.userId ?? "").toString().trim();
-  if (!userId) {
-    res.status(400).json({ error: "userId required" });
+  if (req.query?.name || req.query?.userId || req.query?.user_id) {
+    res.status(400).json({ error: "memberId required" });
+    return;
+  }
+  const memberId = normId(req.query?.memberId ?? req.query?.member_id ?? "");
+  if (!memberId) {
+    res.status(400).json({ error: "memberId required" });
     return;
   }
   const stmt = ensureChildTasksStmt();
@@ -4886,7 +5294,7 @@ app.get("/api/child/tasks", (req, res) => {
     res.status(500).json({ error: "tasks_unavailable" });
     return;
   }
-  const familyId = familyIdByMember(userId);
+  const familyId = familyIdByMember(memberId);
   if (!familyId) {
     res.status(404).json({ error: "member not found" });
     return;

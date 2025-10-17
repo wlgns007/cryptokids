@@ -51,6 +51,14 @@ function ensureSupportTables() {
     );
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_history_family ON history(family_id)');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS member_task (
+      member_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      PRIMARY KEY (member_id, task_id)
+    );
+  `);
 }
 
 ensureSupportTables();
@@ -65,6 +73,8 @@ function resetTables() {
     DELETE FROM task;
     DELETE FROM reward;
     DELETE FROM member;
+    DELETE FROM ledger;
+    DELETE FROM member_task;
     DELETE FROM holds;
     DELETE FROM history;
     DELETE FROM master_task;
@@ -167,8 +177,8 @@ test('admin earn templates respects active and inactive modes', async (t) => {
   insertTask({ familyId: family.id, title: 'Dishes', status: 'inactive', points: 5, created: timestamp - 5000, updated: timestamp - 5000 });
 
   await withServer(t, async (baseUrl) => {
-    const qsActive = new URLSearchParams({ family_id: family.id, mode: 'active' }).toString();
-    const activeRes = await fetch(`${baseUrl}/api/admin/earn-templates?${qsActive}`, {
+    const qsActive = new URLSearchParams({ familyId: family.id, status: 'active' }).toString();
+    const activeRes = await fetch(`${baseUrl}/api/admin/list-earn-templates?${qsActive}`, {
       headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
     });
     assert.equal(activeRes.status, 200, 'active request should succeed');
@@ -179,8 +189,8 @@ test('admin earn templates respects active and inactive modes', async (t) => {
     assert.equal(activeRows[0].status, 'active');
     assert.equal(activeRows[0].master_task_id, masterTaskId);
 
-    const qsInactive = new URLSearchParams({ family_id: family.id, mode: 'inactive' }).toString();
-    const inactiveRes = await fetch(`${baseUrl}/api/admin/earn-templates?${qsInactive}`, {
+    const qsInactive = new URLSearchParams({ familyId: family.id, status: 'inactive' }).toString();
+    const inactiveRes = await fetch(`${baseUrl}/api/admin/list-earn-templates?${qsInactive}`, {
       headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
     });
     assert.equal(inactiveRes.status, 200, 'inactive request should succeed');
@@ -254,4 +264,202 @@ test('DELETE /api/families/:id cascades dependents', async (t) => {
   assert.equal(holdRow, undefined);
   const historyRow = db.prepare('SELECT id FROM history WHERE family_id = ?').get(family.id);
   assert.equal(historyRow, undefined);
+});
+
+test('DELETE /api/admin/families/:id?hard=true removes all scoped data', async (t) => {
+  const family = createFamily({ id: 'fam-hard', name: 'Hard Delete', adminKey: 'Key-Hard' });
+  const memberId = insertMember({ familyId: family.id, name: 'Hard Kid' });
+  const taskId = insertTask({ familyId: family.id, title: 'Hard Task' });
+
+  db.prepare(`INSERT INTO member_task (member_id, task_id) VALUES (?, ?)`)
+    .run(memberId, taskId);
+
+  const ledgerId = `ledger-${randomUUID()}`;
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO ledger (id, user_id, verb, amount, balance_after, status, created_at, updated_at, family_id)
+     VALUES (?, ?, 'earn', ?, ?, 'posted', ?, ?, ?)`
+  ).run(ledgerId, memberId, 25, 25, now, now, family.id);
+
+  await withServer(t, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/admin/families/${family.id}?hard=true`, {
+      method: 'DELETE',
+      headers: MASTER_HEADERS
+    });
+    assert.equal(res.status, 200, 'hard delete should succeed');
+    const body = await res.json();
+    assert.deepEqual(body, {
+      removed: {
+        family: 1,
+        members: 1,
+        tasks: 1,
+        ledger: 1,
+        member_task: 1
+      }
+    });
+  });
+
+  const familyCount = db.prepare('SELECT COUNT(*) AS count FROM family WHERE id = ?').get(family.id).count;
+  assert.equal(familyCount, 0, 'family row should be deleted');
+  const memberCount = db.prepare('SELECT COUNT(*) AS count FROM member WHERE family_id = ?').get(family.id).count;
+  assert.equal(memberCount, 0, 'members should be deleted');
+  const taskCount = db.prepare('SELECT COUNT(*) AS count FROM task WHERE family_id = ?').get(family.id).count;
+  assert.equal(taskCount, 0, 'tasks should be deleted');
+  const ledgerColumns = db.prepare("PRAGMA table_info('ledger')").all().map((col) => col.name);
+  const ledgerMemberColumn = ledgerColumns.includes('member_id') ? 'member_id' : 'user_id';
+  const ledgerCount = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM ledger WHERE family_id = ? OR ${ledgerMemberColumn} IN (SELECT id FROM member WHERE family_id = ?)`
+    )
+    .get(family.id, family.id).count;
+  assert.equal(ledgerCount, 0, 'ledger entries should be deleted');
+  const memberTaskCols = db.prepare("PRAGMA table_info('member_task')").all().map((col) => col.name);
+  const memberTaskMemberColumn = memberTaskCols.includes('member_id')
+    ? 'member_id'
+    : memberTaskCols.includes('memberId')
+      ? 'memberId'
+      : 'member_id';
+  const memberTaskCount = db
+    .prepare(`SELECT COUNT(*) AS count FROM member_task WHERE ${memberTaskMemberColumn} = ?`)
+    .get(memberId).count;
+  assert.equal(memberTaskCount, 0, 'member_task rows should be deleted');
+});
+
+test('adopting a master task surfaces in the active template list', async (t) => {
+  const family = createFamily({ id: 'fam-adopt', name: 'Adopt Clan', adminKey: 'Key-Adopt' });
+  const masterTaskId = `mt-${randomUUID()}`;
+  const timestamp = Date.now();
+  db.prepare(
+    `INSERT INTO master_task (id, title, description, base_points, icon, youtube_url, status, created_at, updated_at)
+     VALUES (?, ?, '', 15, NULL, NULL, 'active', ?, ?)`
+  ).run(masterTaskId, 'Master Clean Room', timestamp, timestamp);
+
+  await withServer(t, async (baseUrl) => {
+    const adoptParams = new URLSearchParams({ familyId: family.id }).toString();
+    const adoptRes = await fetch(`${baseUrl}/api/admin/templates/${masterTaskId}/adopt?${adoptParams}`, {
+      method: 'POST',
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    assert.ok([200, 201].includes(adoptRes.status), 'adoption should succeed');
+    const adoptBody = await adoptRes.json();
+    assert.ok(adoptBody.taskId, 'response should include taskId');
+
+    const listParams = new URLSearchParams({ familyId: family.id, status: 'active' }).toString();
+    const listRes = await fetch(`${baseUrl}/api/admin/list-earn-templates?${listParams}`, {
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    assert.equal(listRes.status, 200, 'active listing should succeed');
+    const rows = await listRes.json();
+    assert.ok(Array.isArray(rows));
+    assert.ok(rows.some((row) => row.id === adoptBody.taskId && row.status === 'active'));
+  });
+});
+
+test('task status toggles between active and inactive lists', async (t) => {
+  const family = createFamily({ id: 'fam-toggle', name: 'Toggle Crew', adminKey: 'Key-Toggle' });
+  const taskId = insertTask({ familyId: family.id, title: 'Practice Piano', status: 'active' });
+
+  await withServer(t, async (baseUrl) => {
+    const patchParams = new URLSearchParams({ familyId: family.id }).toString();
+    const deactivateRes = await fetch(`${baseUrl}/api/admin/tasks/${taskId}/deactivate?${patchParams}`, {
+      method: 'PATCH',
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    assert.equal(deactivateRes.status, 200, 'deactivate should succeed');
+
+    const activeParams = new URLSearchParams({ familyId: family.id, status: 'active' }).toString();
+    const activeRes = await fetch(`${baseUrl}/api/admin/list-earn-templates?${activeParams}`, {
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    const activeRows = await activeRes.json();
+    assert.ok(Array.isArray(activeRows));
+    assert.equal(activeRows.length, 0, 'task should disappear from active list');
+
+    const inactiveParams = new URLSearchParams({ familyId: family.id, status: 'inactive' }).toString();
+    const inactiveRes = await fetch(`${baseUrl}/api/admin/list-earn-templates?${inactiveParams}`, {
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    const inactiveRows = await inactiveRes.json();
+    assert.ok(Array.isArray(inactiveRows));
+    assert.equal(inactiveRows.length, 1, 'task should appear in inactive list');
+    assert.equal(inactiveRows[0].id, taskId);
+    assert.equal(inactiveRows[0].status, 'inactive');
+
+    const reactivateRes = await fetch(`${baseUrl}/api/admin/tasks/${taskId}/reactivate?${patchParams}`, {
+      method: 'PATCH',
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    assert.equal(reactivateRes.status, 200, 'reactivate should succeed');
+
+    const activeAfter = await fetch(`${baseUrl}/api/admin/list-earn-templates?${activeParams}`, {
+      headers: { ...MASTER_HEADERS, 'X-Act-As-Family': family.id }
+    });
+    const activeAfterRows = await activeAfter.json();
+    assert.ok(Array.isArray(activeAfterRows));
+    assert.equal(activeAfterRows.length, 1, 'task should return to active list');
+    assert.equal(activeAfterRows[0].id, taskId);
+    assert.equal(activeAfterRows[0].status, 'active');
+  });
+});
+
+test('GET /api/admin/families respects status filters', async (t) => {
+  const activeFamily = createFamily({ id: 'fam-active', name: 'Active Fam', adminKey: 'Key-Active', status: 'active' });
+  const inactiveFamily = createFamily({ id: 'fam-inactive', name: 'Inactive Fam', adminKey: 'Key-Inactive', status: 'inactive' });
+
+  await withServer(t, async (baseUrl) => {
+    const inactiveRes = await fetch(`${baseUrl}/api/admin/families?status=inactive`, {
+      headers: MASTER_HEADERS
+    });
+    assert.equal(inactiveRes.status, 200, 'inactive query should succeed');
+    const inactiveRows = await inactiveRes.json();
+    assert.ok(Array.isArray(inactiveRows));
+    assert.ok(inactiveRows.every((row) => row.status === 'inactive'));
+    assert.ok(inactiveRows.some((row) => row.id === inactiveFamily.id));
+    assert.ok(!inactiveRows.some((row) => row.id === activeFamily.id));
+
+    const activeRes = await fetch(`${baseUrl}/api/admin/families?status=active`, {
+      headers: MASTER_HEADERS
+    });
+    assert.equal(activeRes.status, 200, 'active query should succeed');
+    const activeRows = await activeRes.json();
+    assert.ok(Array.isArray(activeRows));
+    assert.ok(activeRows.some((row) => row.id === activeFamily.id));
+    assert.ok(!activeRows.some((row) => row.id === inactiveFamily.id));
+  });
+});
+
+test('resolve-member handles zero, single, and multiple matches', async (t) => {
+  const family = createFamily({ id: 'fam-resolve', name: 'Resolver Clan', adminKey: 'Key-Resolve' });
+  const uniqueId = insertMember({ id: 'kid-unique', familyId: family.id, name: 'Unique Kid' });
+  insertMember({ id: 'kid-alex-a', familyId: family.id, name: 'Alex Example' });
+  insertMember({ id: 'kid-alex-b', familyId: family.id, name: 'Alex Example' });
+
+  await withServer(t, async (baseUrl) => {
+    const scopeParam = new URLSearchParams({ familyId: family.id }).toString();
+    const noneRes = await fetch(`${baseUrl}/api/admin/resolve-member?q=Nope&${scopeParam}`, {
+      headers: MASTER_HEADERS
+    });
+    assert.equal(noneRes.status, 200, 'missing members should still succeed');
+    const none = await noneRes.json();
+    assert.ok(Array.isArray(none));
+    assert.equal(none.length, 0);
+
+    const idRes = await fetch(`${baseUrl}/api/admin/resolve-member?q=${uniqueId}&${scopeParam}`, {
+      headers: MASTER_HEADERS
+    });
+    assert.equal(idRes.status, 200, 'ID lookup should succeed');
+    const idMatches = await idRes.json();
+    assert.ok(Array.isArray(idMatches));
+    assert.equal(idMatches.length, 1);
+    assert.equal(idMatches[0].id, uniqueId);
+
+    const manyRes = await fetch(`${baseUrl}/api/admin/resolve-member?q=${encodeURIComponent('Alex Example')}&${scopeParam}`, {
+      headers: MASTER_HEADERS
+    });
+    assert.equal(manyRes.status, 200, 'name lookup should succeed');
+    const manyMatches = await manyRes.json();
+    assert.ok(Array.isArray(manyMatches));
+    assert.equal(manyMatches.length, 2);
+    assert.ok(manyMatches.every((entry) => entry.name === 'Alex Example'));
+  });
 });

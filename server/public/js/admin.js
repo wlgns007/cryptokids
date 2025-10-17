@@ -222,13 +222,14 @@ function initAdmin() {
   const familyScopeWrapper = $k('familyScopeWrapper');
   const familyScopeSelect = $k('familyScopeSelect');
   const familyScopeSummary = $k('familyScopeSummary');
+  const familyIdChip = $k('familyIdChip');
   const familySearchForm = $k('familySearchForm');
   const familySearchInput = $k('familySearchInput');
   const familyManagementPanel = $k('familyManagementPanel');
   const familiesRefreshButton = $k('btnFamiliesRefresh');
   const familyListTableBody = $k('familyListTableBody');
   const familyListEmptyRow = $k('familyListEmpty');
-  const familyIncludeInactiveToggle = $k('familyIncludeInactive');
+  const familyToggleInactiveButton = $k('familyToggleInactive');
   const familyCreateForm = $k('familyCreateForm');
   const familyCreateNameInput = $k('familyCreateName');
   const familyCreateFirstNameInput = $k('familyCreateFirstName');
@@ -1360,6 +1361,7 @@ function initAdmin() {
       whoamiBanner.hidden = true;
       if (familyScopeWrapper) familyScopeWrapper.hidden = true;
       if (familyScopeSummary) familyScopeSummary.hidden = true;
+      if (familyIdChip) familyIdChip.hidden = true;
       return;
     }
 
@@ -1417,17 +1419,33 @@ function initAdmin() {
           ? `Family scope: ${findFamilyLabel(currentFamilyId)}`
           : 'Select a family to manage data.';
       }
+      if (familyIdChip) {
+        if (currentFamilyId) {
+          familyIdChip.hidden = false;
+          familyIdChip.textContent = `Family ID: ${currentFamilyId}`;
+        } else {
+          familyIdChip.hidden = true;
+        }
+      }
     } else {
       if (familyScopeWrapper) {
         familyScopeWrapper.hidden = true;
       }
+      const scopeLabel = adminState.currentFamilyId || familyId || '';
       if (familyScopeSummary) {
-        const scopeLabel = adminState.currentFamilyId || familyId;
         if (scopeLabel) {
           familyScopeSummary.hidden = false;
           familyScopeSummary.textContent = `Family scope: ${findFamilyLabel(scopeLabel)}`;
         } else {
           familyScopeSummary.hidden = true;
+        }
+      }
+      if (familyIdChip) {
+        if (scopeLabel) {
+          familyIdChip.hidden = false;
+          familyIdChip.textContent = `Family ID: ${scopeLabel}`;
+        } else {
+          familyIdChip.hidden = true;
         }
       }
       if (familyScopeSelect) {
@@ -1438,10 +1456,9 @@ function initAdmin() {
 
   async function fetchFamiliesStrict() {
     const params = new URLSearchParams();
-    if (adminState.showInactiveFamilies) {
-      params.set('include_inactive', '1');
-    }
-    const url = params.toString() ? `/api/families?${params.toString()}` : '/api/families';
+    const status = adminState.showInactiveFamilies ? 'inactive' : 'active';
+    params.set('status', status);
+    const url = `/api/admin/families?${params.toString()}`;
     const { res, body } = await adminFetch(url, { skipScope: true });
     if (res.status === 401) {
       const error = new Error(ADMIN_INVALID_MSG);
@@ -1675,9 +1692,13 @@ function initAdmin() {
   function renderFamilyManagement() {
     if (!familyManagementPanel) return;
     const isMaster = adminState.role === 'master';
-    if (familyIncludeInactiveToggle) {
-      familyIncludeInactiveToggle.checked = !!adminState.showInactiveFamilies;
-      familyIncludeInactiveToggle.disabled = !isMaster;
+    if (familyToggleInactiveButton) {
+      familyToggleInactiveButton.hidden = !isMaster;
+      familyToggleInactiveButton.disabled = !isMaster;
+      familyToggleInactiveButton.textContent = adminState.showInactiveFamilies
+        ? 'View active families'
+        : 'View inactive families';
+      familyToggleInactiveButton.setAttribute('aria-pressed', adminState.showInactiveFamilies ? 'true' : 'false');
     }
     if (!isMaster) {
       if (familyListTableBody) {
@@ -2063,9 +2084,10 @@ details.member-fold .summary-value {
     await reloadScopedData();
   });
 
-  familyIncludeInactiveToggle?.addEventListener('change', async () => {
-    const include = !!familyIncludeInactiveToggle.checked;
-    setAdminState({ showInactiveFamilies: include });
+  familyToggleInactiveButton?.addEventListener('click', async () => {
+    if (familyToggleInactiveButton.disabled) return;
+    const includeInactive = !adminState.showInactiveFamilies;
+    setAdminState({ showInactiveFamilies: includeInactive });
     await refreshFamiliesFromServer({ silent: true });
   });
 
@@ -2076,7 +2098,8 @@ details.member-fold .summary-value {
     if (!quickFamilyTable) return;
     quickFamilyTable.innerHTML = '<div class="muted">Loading families…</div>';
     try {
-      const rows = await apiFetch('/api/families', { skipScope: true });
+      const params = new URLSearchParams({ status: 'active' });
+      const rows = await apiFetch(`/api/admin/families?${params.toString()}`, { skipScope: true });
       if (!Array.isArray(rows) || rows.length === 0) {
         quickFamilyTable.innerHTML = '<div class="muted">No families yet.</div>';
         return;
@@ -2345,12 +2368,22 @@ details.member-fold .summary-value {
       throw new Error('masterTaskId required');
     }
     const familyId = requireFamilyId();
-    await apiFetch(`/api/families/${encodeURIComponent(familyId)}/tasks/from-master`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ master_task_id: masterTaskId })
-    });
-    await reloadEarnPointsTable('active');
+    const params = new URLSearchParams({ familyId });
+    const { res, body } = await adminFetch(
+      `/api/admin/templates/${encodeURIComponent(masterTaskId)}/adopt?${params.toString()}`,
+      {
+        method: 'POST'
+      }
+    );
+    if (res.status === 401) {
+      toast(ADMIN_INVALID_MSG, 'error');
+      throw new Error(ADMIN_INVALID_MSG);
+    }
+    if (!res.ok) {
+      const message = presentError(body?.error, 'Adoption failed');
+      throw new Error(message);
+    }
+    await refreshEarnTemplates('active');
   }
 
   async function fetchFamilyDetail(familyId) {
@@ -2572,6 +2605,8 @@ details.member-fold .summary-value {
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
+  const MEMBER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,}$/i;
+
   function buildDateParts(year, month, day) {
     const y = Number(year);
     const m = Number(month);
@@ -2680,6 +2715,9 @@ details.member-fold .summary-value {
   const memberEditDobInput = $('memberEditDob');
   const memberEditSexSelect = $('memberEditSex');
   const memberEditSaveBtn = $('btnMemberEditSave');
+  const memberChooserModal = $('memberChooserModal');
+  const memberChooserList = $('memberChooserList');
+  const memberChooserMessage = $('memberChooserMessage');
 
   const refundModal = $('refundModal');
   const refundForm = $('refundForm');
@@ -2772,18 +2810,118 @@ details.member-fold .summary-value {
     if (memberActionInput && memberActionInput.value !== next) memberActionInput.value = next;
   }
 
+  function normalizeResolvedMember(match, fallbackFamilyId = null) {
+    if (!match || typeof match !== 'object') return null;
+    const id = (match.id ?? '').toString().trim();
+    if (!id) return null;
+    const familyValue = match.family_id ?? match.familyId ?? fallbackFamilyId;
+    const familyId = familyValue ? String(familyValue).trim() : null;
+    return {
+      id,
+      name: (match.name ?? '').toString(),
+      family_id: familyId && familyId.length ? familyId : null
+    };
+  }
+
+  function promptMemberChoice(matches = [], { message } = {}) {
+    if (!memberChooserModal || !memberChooserList) {
+      toast('Multiple matches — pick one.');
+      return Promise.reject(new Error('Multiple matches — pick one.'));
+    }
+    const entries = (Array.isArray(matches) ? matches : [])
+      .map((m) => normalizeResolvedMember(m))
+      .filter(Boolean);
+    if (!entries.length) {
+      return Promise.reject(new Error('Member not found.'));
+    }
+
+    toast('Multiple matches — pick one.');
+    memberChooserList.innerHTML = '';
+    for (const entry of entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn member-choice';
+      button.dataset.memberId = entry.id;
+      const labelParts = [];
+      if (entry.name && entry.name.trim()) labelParts.push(entry.name.trim());
+      labelParts.push(entry.id);
+      if (entry.family_id && entry.family_id !== readCurrentFamilyId()) {
+        labelParts.push(`· ${entry.family_id}`);
+      }
+      button.textContent = labelParts.join(' ');
+      memberChooserList.appendChild(button);
+    }
+    if (memberChooserMessage) {
+      memberChooserMessage.textContent = message || 'Multiple matches — pick one.';
+    }
+
+    return new Promise((resolve, reject) => {
+      const handleSelect = (event) => {
+        const button = event.target.closest('button[data-member-id]');
+        if (!button) return;
+        event.preventDefault();
+        const selectedId = button.dataset.memberId;
+        const selected = entries.find((entry) => entry.id === selectedId);
+        cleanup();
+        if (selected) {
+          resolve(selected);
+        } else {
+          reject(new Error('Member not found.'));
+        }
+      };
+
+      const handleBackdrop = (event) => {
+        const isBackdrop = event.target.classList?.contains('modal-backdrop');
+        const closeTarget = event.target.closest?.('[data-close]');
+        if (isBackdrop || closeTarget) {
+          event.preventDefault();
+          cleanup();
+          reject(new Error('Selection cancelled'));
+        }
+      };
+
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cleanup();
+          reject(new Error('Selection cancelled'));
+        }
+      };
+
+      const cleanup = () => {
+        memberChooserList.removeEventListener('click', handleSelect);
+        memberChooserModal.removeEventListener('click', handleBackdrop);
+        window.removeEventListener('keydown', handleKeydown);
+        memberChooserList.innerHTML = '';
+        memberChooserModal.classList.add('hidden');
+        memberChooserModal.setAttribute('aria-hidden', 'true');
+      };
+
+      memberChooserList.addEventListener('click', handleSelect);
+      memberChooserModal.addEventListener('click', handleBackdrop);
+      window.addEventListener('keydown', handleKeydown);
+
+      memberChooserModal.classList.remove('hidden');
+      memberChooserModal.setAttribute('aria-hidden', 'false');
+      const firstButton = memberChooserList.querySelector('button');
+      firstButton?.focus({ preventScroll: true });
+    });
+  }
+
   function getMemberIdInfo() {
     const rawPrimary = (memberIdInput?.value || '').trim();
     const rawSearch = memberActionInput && memberActionInput !== memberIdInput
       ? (memberActionInput.value || '').trim()
       : '';
     const raw = rawPrimary || rawSearch;
-    return { raw, normalized: raw.toLowerCase() };
+    if (!raw) return { raw: '', normalized: '' };
+    const normalized = MEMBER_ID_PATTERN.test(raw) ? raw.toLowerCase() : raw;
+    return { raw, normalized };
   }
 
   function normalizeMemberInput() {
     const info = getMemberIdInfo();
-    if (info.raw && info.raw !== info.normalized) {
+    if (info.raw && MEMBER_ID_PATTERN.test(info.raw) && info.raw !== info.normalized) {
       syncMemberInputs(info.normalized);
       return { raw: info.normalized, normalized: info.normalized };
     }
@@ -3066,8 +3204,8 @@ details.member-fold .summary-value {
 
   function requireMemberId({ silent = false } = {}) {
     const info = normalizeMemberInput();
-    if (!info.normalized) {
-      if (!silent) toast('Enter user id', 'error');
+    if (!info.normalized || !MEMBER_ID_PATTERN.test(info.normalized)) {
+      if (!silent) toast('Enter a member ID', 'error');
       memberIdInput?.focus();
       return null;
     }
@@ -3077,32 +3215,49 @@ details.member-fold .summary-value {
   async function resolveMemberAdmin(userInput, familyIdOverride = '') {
     const raw = (userInput ?? '').toString().trim();
     if (!raw) {
-      throw new Error('Enter a user name or ID.');
+      throw new Error('Enter a name or ID.');
     }
-    const familyId = familyIdOverride || requireFamilyId();
-    const params = new URLSearchParams({ user: raw, family_id: familyId }).toString();
-    const { res, body } = await adminFetch(`/api/admin/resolve-member?${params}`);
+    let familyId = '';
+    try {
+      familyId = familyIdOverride || requireFamilyId();
+    } catch (error) {
+      throw error;
+    }
+    const params = new URLSearchParams({ q: raw });
+    if (familyId) params.set('familyId', familyId);
+    const { res, body } = await adminFetch(`/api/admin/resolve-member?${params.toString()}`);
     if (res.status === 401) {
       toast(ADMIN_INVALID_MSG, 'error');
       throw new Error(ADMIN_INVALID_MSG);
     }
     if (!res.ok) {
-      const message = presentError(body?.error, 'Member not found');
+      const message = presentError(body?.error, 'Member not found.');
       const error = new Error(message);
       error.status = res.status;
       error.body = body;
       throw error;
     }
-    if (!body || typeof body !== 'object' || !body.id) {
-      throw new Error('Member not found');
+    if (!Array.isArray(body)) {
+      throw new Error('Member not found.');
     }
-    return { id: body.id, name: body.name || '', family_id: body.family_id || null };
+    if (body.length === 0) {
+      throw new Error('Member not found.');
+    }
+    if (body.length === 1) {
+      const match = normalizeResolvedMember(body[0], familyId);
+      if (!match) throw new Error('Member not found.');
+      return match;
+    }
+    const choice = await promptMemberChoice(body);
+    const resolved = normalizeResolvedMember(choice, familyId);
+    if (!resolved) throw new Error('Member not found.');
+    return resolved;
   }
 
   async function resolveMemberForActions() {
     const info = getMemberIdInfo();
     const raw = (info.raw || '').trim();
-    if (!raw) throw new Error('Enter an ID or full name');
+    if (!raw) throw new Error('Enter a name or ID');
     let familyId;
     try {
       familyId = requireFamilyId({ silent: true });
@@ -3112,10 +3267,11 @@ details.member-fold .summary-value {
     }
     const resolved = await resolveMemberAdmin(raw, familyId);
     if (!resolved || !resolved.id) {
-      throw new Error('Member not found');
+      throw new Error('Member not found.');
     }
-    syncMemberInputs(resolved.id);
-    return resolved.id;
+    const normalizedId = MEMBER_ID_PATTERN.test(resolved.id) ? resolved.id.toLowerCase() : resolved.id;
+    syncMemberInputs(normalizedId);
+    return normalizedId;
   }
 
   function setMemberStatus(message) {
@@ -3190,12 +3346,18 @@ details.member-fold .summary-value {
   }
 
   function memberIdChanged({ loadActivityNow = true } = {}) {
-    normalizeMemberInput();
+    const info = normalizeMemberInput();
     setMemberStatus('');
-    setMemberInfoMessage('Enter a user ID and click Member Info to view details.');
+    setMemberInfoMessage('Enter a name or ID and click Member Info to view details.');
     clearMemberLedger('Redeemed rewards will appear here.');
     loadHolds();
-    loadActivity();
+    if (loadActivityNow) {
+      if (info.normalized && MEMBER_ID_PATTERN.test(info.normalized)) {
+        loadActivity();
+      } else {
+        resetActivityView('Enter a member ID to view activity.');
+      }
+    }
   }
 
   memberIdInput?.addEventListener('change', (event) => memberIdChanged({ loadActivityNow: event?.isTrusted !== false }));
@@ -3224,8 +3386,8 @@ details.member-fold .summary-value {
     try {
       userId = await resolveMemberForActions();
     } catch (error) {
-      const message = error?.message || 'Member not found';
-      if (message !== 'Select a family first') {
+      const message = error?.message || 'Member not found.';
+      if (message !== 'Select a family first' && message !== 'Selection cancelled') {
         toast(message, 'error');
         memberIdInput?.focus();
       }
@@ -3299,9 +3461,9 @@ details.member-fold .summary-value {
     try {
       userId = await resolveMemberForActions();
     } catch (error) {
-      const message = error?.message || 'Member not found';
+      const message = error?.message || 'Member not found.';
       setMemberStatus(message);
-      if (message !== 'Select a family first') {
+      if (message !== 'Select a family first' && message !== 'Selection cancelled') {
         toast(message, 'error');
       }
       return;
@@ -3712,8 +3874,8 @@ details.member-fold .summary-value {
     const rawUserId = (memberInfo.raw || '').trim();
     const normalizedUser = (memberInfo.normalized || '').trim();
     holdsTable.innerHTML = '';
-    if (!normalizedUser) {
-      const msg = 'Enter a user ID in Member Management to view holds.';
+    if (!normalizedUser || !MEMBER_ID_PATTERN.test(normalizedUser)) {
+      const msg = 'Enter a member ID in Family Member Management to view holds.';
       $('holdsStatus').textContent = msg;
       const row = document.createElement('tr');
       const cell = document.createElement('td');
@@ -3990,7 +4152,7 @@ details.member-fold .summary-value {
 
   const triggerActivityLoad = debounce(() => loadActivity(), 300);
 
-  function resetActivityView(message = 'Enter a user ID to view activity.') {
+  function resetActivityView(message = 'Enter a member ID to view activity.') {
     renderActivity([], { emptyMessage: message });
     if (activityStatus) activityStatus.textContent = message;
   }
@@ -3999,9 +4161,10 @@ details.member-fold .summary-value {
     if (!activityTableBody) return;
     const memberInfo = getMemberIdInfo();
     const user = (memberInfo?.normalized || '').trim();
-    if (!user) {
-      if (activityStatus) activityStatus.textContent = 'Enter a user ID to view activity.';
-      renderActivity([], { emptyMessage: 'Enter a user ID to view activity.' });
+    if (!user || !MEMBER_ID_PATTERN.test(user)) {
+      const message = 'Enter a member ID to view activity.';
+      if (activityStatus) activityStatus.textContent = message;
+      renderActivity([], { emptyMessage: message });
       return;
     }
     const params = new URLSearchParams();
@@ -4724,7 +4887,7 @@ setupScanner({
   const earnTableBody = $('earnTable')?.querySelector('tbody');
   const btnViewDeactivated = $('btn-view-deactivated');
   const btnReloadActive = $('btn-reload-active');
-  const earnTasksState = { mode: 'active', cachedActive: [] };
+  const earnTasksState = { mode: 'active', cachedActive: [], activeFamilyId: null };
   let earnTemplates = [];
 
   function updateEarnTasksControls() {
@@ -4736,37 +4899,42 @@ setupScanner({
     }
   }
 
-  async function reloadEarnPointsTable(modeOverride) {
+  async function refreshEarnTemplates(statusOverride) {
     let familyId;
     try {
       familyId = requireFamilyId({ silent: true });
     } catch (error) {
       earnTemplates = [];
+      earnTasksState.cachedActive = [];
+      earnTasksState.activeFamilyId = null;
+      populateQuickTemplates();
       if (earnTableBody) {
         earnTableBody.innerHTML = '<tr><td colspan="9" class="muted">Select a family to manage tasks.</td></tr>';
       }
-      if (modeOverride !== undefined) {
+      if (statusOverride !== undefined) {
         toast('Select a family to manage tasks.', 'error');
       }
       updateEarnTasksControls();
       return;
     }
 
-    const mode = modeOverride || earnTasksState.mode || 'active';
-    earnTasksState.mode = mode;
+    const status = statusOverride || earnTasksState.mode || 'active';
+    earnTasksState.mode = status;
     updateEarnTasksControls();
 
     try {
-      const params = new URLSearchParams({ family_id: familyId, mode });
-      const data = await apiFetch(`/api/admin/earn-templates?${params.toString()}`);
+      const params = new URLSearchParams({ status, familyId });
+      const data = await apiFetch(`/api/admin/list-earn-templates?${params.toString()}`);
       earnTemplates = Array.isArray(data) ? data : [];
-      if (mode === 'active') {
+      if (status === 'active') {
         earnTasksState.cachedActive = earnTemplates.slice();
+        earnTasksState.activeFamilyId = familyId;
       } else {
         try {
-          const activeParams = new URLSearchParams({ family_id: familyId, mode: 'active' });
-          const activeRows = await apiFetch(`/api/admin/earn-templates?${activeParams.toString()}`);
+          const activeParams = new URLSearchParams({ status: 'active', familyId });
+          const activeRows = await apiFetch(`/api/admin/list-earn-templates?${activeParams.toString()}`);
           earnTasksState.cachedActive = Array.isArray(activeRows) ? activeRows : [];
+          earnTasksState.activeFamilyId = familyId;
         } catch (err) {
           console.warn('Failed to refresh active task cache', err);
         }
@@ -4783,8 +4951,8 @@ setupScanner({
   }
 
   async function loadTemplates(options = {}) {
-    const mode = options.mode || earnTasksState.mode || 'active';
-    await reloadEarnPointsTable(mode);
+    const status = options.status || options.mode || earnTasksState.mode || 'active';
+    await refreshEarnTemplates(status);
   }
 
   function renderTemplates() {
@@ -4803,7 +4971,7 @@ setupScanner({
       const cell = document.createElement('td');
       cell.colSpan = 9;
       cell.className = 'muted';
-      cell.textContent = earnTasksState.mode === 'inactive' ? 'No deactivated tasks.' : 'No tasks found.';
+      cell.textContent = earnTasksState.mode === 'inactive' ? 'No deactivated tasks.' : 'No active tasks.';
       emptyRow.appendChild(cell);
       earnTableBody.appendChild(emptyRow);
       return;
@@ -4862,12 +5030,17 @@ setupScanner({
 
         const deactivateBtn = document.createElement('button');
         deactivateBtn.textContent = 'Deactivate';
-        deactivateBtn.addEventListener('click', () => updateTaskStatus(tpl.id, 'inactive'));
+        deactivateBtn.addEventListener('click', () => deactivateTask(tpl.id));
         actions.appendChild(deactivateBtn);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteTask(tpl.id));
+        actions.appendChild(deleteBtn);
       } else {
         const reactivateBtn = document.createElement('button');
         reactivateBtn.textContent = 'Reactivate';
-        reactivateBtn.addEventListener('click', () => updateTaskStatus(tpl.id, 'active'));
+        reactivateBtn.addEventListener('click', () => reactivateTask(tpl.id));
         actions.appendChild(reactivateBtn);
 
         const deleteBtn = document.createElement('button');
@@ -4891,8 +5064,8 @@ setupScanner({
     }
   }
   $('templateSearch')?.addEventListener('input', renderTemplates);
-  btnReloadActive?.addEventListener('click', () => reloadEarnPointsTable('active'));
-  btnViewDeactivated?.addEventListener('click', () => reloadEarnPointsTable('inactive'));
+  btnReloadActive?.addEventListener('click', () => refreshEarnTemplates('active'));
+  btnViewDeactivated?.addEventListener('click', () => refreshEarnTemplates('inactive'));
 
   document.querySelector('#btn-add-task-template')?.addEventListener('click', async () => {
     const box = document.querySelector('#tpl-list');
@@ -4979,10 +5152,35 @@ setupScanner({
     await updateTask(tpl.id, payload);
   }
 
-  async function updateTaskStatus(id, status) {
-    const normalized = (status || '').toString().trim().toLowerCase();
-    const message = normalized === 'inactive' ? 'Task deactivated' : 'Task reactivated';
-    await updateTask(id, { status: normalized }, { successMessage: message });
+  async function mutateTaskStatus(id, action, { successMessage, refreshStatus }) {
+    try {
+      const familyId = requireFamilyId();
+      const params = new URLSearchParams({ familyId });
+      const { res, body } = await adminFetch(
+        `/api/admin/tasks/${encodeURIComponent(id)}/${action}?${params.toString()}`,
+        { method: 'PATCH' }
+      );
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return;
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Update failed');
+        throw new Error(msg);
+      }
+      toast(successMessage);
+      await refreshEarnTemplates(refreshStatus ?? earnTasksState.mode);
+    } catch (err) {
+      toast(err.message || 'Update failed', 'error');
+    }
+  }
+
+  function deactivateTask(id) {
+    return mutateTaskStatus(id, 'deactivate', { successMessage: 'Task deactivated.', refreshStatus: 'active' });
+  }
+
+  function reactivateTask(id) {
+    return mutateTaskStatus(id, 'reactivate', { successMessage: 'Task reactivated.', refreshStatus: 'inactive' });
   }
 
   async function updateTask(id, body = {}, { successMessage } = {}) {
@@ -5000,7 +5198,7 @@ setupScanner({
         throw new Error(msg);
       }
       toast(successMessage || 'Task updated');
-      await reloadEarnPointsTable();
+      await refreshEarnTemplates();
     } catch (err) {
       toast(err.message || 'Update failed', 'error');
     }
@@ -5018,7 +5216,7 @@ setupScanner({
         throw new Error(msg);
       }
       toast('Task deleted');
-      await reloadEarnPointsTable();
+      await refreshEarnTemplates();
     } catch (err) {
       toast(err.message || 'Delete failed', 'error');
     }
@@ -5028,8 +5226,10 @@ setupScanner({
     const select = $('quickTemplate');
     if (!select) return;
     select.innerHTML = '<option value="">Select template</option>';
-    const source = earnTasksState.mode === 'active' ? earnTemplates : earnTasksState.cachedActive;
-    const rows = Array.isArray(source) ? source : [];
+    const currentFamilyId = readCurrentFamilyId();
+    const rows = currentFamilyId && earnTasksState.activeFamilyId === currentFamilyId
+      ? Array.isArray(earnTasksState.cachedActive) ? earnTasksState.cachedActive : []
+      : [];
     for (const tpl of rows.filter((task) => (task.active !== undefined ? task.active : (task.status || '').toLowerCase() === 'active'))) {
       const opt = document.createElement('option');
       opt.value = tpl.id;
@@ -5189,8 +5389,8 @@ setupScanner({
           const userId = await resolveMemberForActions();
           preset.userId = userId;
         } catch (error) {
-          const message = error?.message || 'Member not found';
-          if (message !== 'Select a family first') {
+          const message = error?.message || 'Member not found.';
+          if (message !== 'Select a family first' && message !== 'Selection cancelled') {
             toast(message, 'error');
           }
           return;
@@ -5209,8 +5409,8 @@ setupScanner({
     if (el) el.addEventListener('change', () => loadActivity());
   });
   if (activityTableBody) {
-    renderActivity([], { emptyMessage: 'Enter a user ID to view activity.' });
-    if (activityStatus) activityStatus.textContent = 'Enter a user ID to view activity.';
+    renderActivity([], { emptyMessage: 'Enter a member ID to view activity.' });
+    if (activityStatus) activityStatus.textContent = 'Enter a member ID to view activity.';
   }
 
   loadFeatureFlagsFromServer();

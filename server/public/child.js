@@ -149,7 +149,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
 
   const ADMIN_CONTEXT_STORAGE = 'CK_ADMIN_CONTEXT';
   const DEFAULT_FAMILY_ID = 'default';
-  const CHILD_ID_STORAGE = 'ck.childUserId';
+  const MEMBER_ID_STORAGE = 'memberId';
   let activeUser = null;
 
   function storageGet(key) {
@@ -173,21 +173,40 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  function getSaved() {
+  function getStoredMemberId() {
     try {
-      return window.localStorage?.getItem(CHILD_ID_STORAGE) || '';
+      const sessionValue = window.sessionStorage?.getItem(MEMBER_ID_STORAGE);
+      if (sessionValue) return sessionValue;
+    } catch {}
+    try {
+      return window.localStorage?.getItem(MEMBER_ID_STORAGE) || '';
     } catch {
       return '';
     }
   }
 
-  function setSaved(value) {
+  function isMemberRemembered() {
     try {
-      const next = (value ?? '').toString().trim();
-      if (next) {
-        window.localStorage?.setItem(CHILD_ID_STORAGE, next);
+      return !!window.localStorage?.getItem(MEMBER_ID_STORAGE);
+    } catch {
+      return false;
+    }
+  }
+
+  function storeMemberId(value, { remember = false } = {}) {
+    const next = (value ?? '').toString().trim();
+    try {
+      window.sessionStorage?.removeItem(MEMBER_ID_STORAGE);
+    } catch {}
+    try {
+      window.localStorage?.removeItem(MEMBER_ID_STORAGE);
+    } catch {}
+    if (!next) return;
+    try {
+      if (remember) {
+        window.localStorage?.setItem(MEMBER_ID_STORAGE, next);
       } else {
-        window.localStorage?.removeItem(CHILD_ID_STORAGE);
+        window.sessionStorage?.setItem(MEMBER_ID_STORAGE, next);
       }
     } catch {}
   }
@@ -448,95 +467,123 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
   }
 
-  async function resolveUserFlexible(userInput) {
-    const raw = (userInput ?? '').toString().trim();
-    if (!raw) throw new Error('Enter a user name or ID.');
-    const res = await fetch(`/api/child/resolve-user?user=${encodeURIComponent(raw)}`);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 409 && Array.isArray(data.matches) && data.matches.length) {
-      const modal = document.getElementById('child-chooser');
-      const list = document.getElementById('child-chooser-list');
-      if (!modal || !list) {
-        throw new Error('Multiple matches. Please use your ID.');
+  function normalizeResolverMatch(match) {
+    if (!match || typeof match !== 'object') return null;
+    const id = (match.id ?? '').toString().trim();
+    if (!id) return null;
+    const name = (match.name ?? '').toString();
+    const familyId = match.family_id ?? match.familyId ?? null;
+    return {
+      id,
+      name,
+      family_id: familyId ? String(familyId) : null
+    };
+  }
+
+  function chooseMemberFromList(matches) {
+    const modal = document.getElementById('child-chooser');
+    const list = document.getElementById('child-chooser-list');
+    if (!modal || !list) {
+      return Promise.reject(new Error('Multiple matches — pick one.'));
+    }
+    const msg = document.querySelector('#child-login-msg');
+    if (msg) msg.textContent = 'Multiple matches — pick one.';
+    toast('Multiple matches — pick one.');
+
+    list.innerHTML = '';
+    const familyId = resolveFamilyId();
+    for (const match of matches) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'choose-child btn';
+      button.dataset.id = match.id;
+      const parts = [];
+      const displayName = match.name && match.name.trim() ? match.name.trim() : '';
+      if (displayName) parts.push(displayName);
+      parts.push(match.id);
+      if (match.family_id && match.family_id !== familyId) {
+        parts.push(`· ${match.family_id.slice(0, 6)}…`);
       }
-
-      list.innerHTML = '';
-      for (const match of data.matches) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'choose-child btn';
-        button.dataset.id = match.id;
-        const familyId = (match.family_id || '').toString();
-        const suffix = familyId ? ` · ${familyId.slice(0, 6)}…` : '';
-        button.textContent = `${match.name || match.id}${suffix}`;
-        list.appendChild(button);
-      }
-
-      modal.classList.remove('hidden');
-      modal.setAttribute('aria-hidden', 'false');
-
-      return new Promise((resolve, reject) => {
-        const cleanup = () => {
-          list.replaceChildren();
-          list.removeEventListener('click', handleChoice);
-          modal.removeEventListener('click', handleBackdropClick);
-          window.removeEventListener('keydown', handleKeydown);
-          modal.classList.add('hidden');
-          modal.setAttribute('aria-hidden', 'true');
-        };
-
-        const handleBackdropClick = (event) => {
-          if (event.target === modal.querySelector('.modal-backdrop') || event.target.closest('[data-close]')) {
-            event.preventDefault();
-            cleanup();
-            reject(new Error('Selection cancelled'));
-          }
-        };
-
-        const handleKeydown = (event) => {
-          if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
-            cleanup();
-            reject(new Error('Selection cancelled'));
-          }
-        };
-
-        const handleChoice = (event) => {
-          const button = event.target.closest('.choose-child');
-          if (!button) return;
-          event.preventDefault();
-          const selectedId = button.dataset.id;
-          if (!selectedId) return;
-          cleanup();
-          fetch(`/api/child/resolve-user?user=${encodeURIComponent(selectedId)}`)
-            .then((rr) => rr.json().then((payload) => ({ ok: rr.ok, payload })).catch(() => ({ ok: rr.ok, payload: {} })))
-            .then(({ ok, payload }) => {
-              if (!ok) {
-                const message = typeof payload?.error === 'string' && payload.error.trim() ? payload.error.trim() : 'login failed';
-                throw new Error(message);
-              }
-              resolve(payload);
-            })
-            .catch((error) => {
-              reject(new Error(error?.message || 'login failed'));
-            });
-        };
-
-        list.addEventListener('click', handleChoice);
-        modal.addEventListener('click', handleBackdropClick);
-        window.addEventListener('keydown', handleKeydown);
-      });
+      button.textContent = parts.join(' ');
+      list.appendChild(button);
     }
 
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        list.replaceChildren();
+        list.removeEventListener('click', handleChoice);
+        modal.removeEventListener('click', handleBackdropClick);
+        window.removeEventListener('keydown', handleKeydown);
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+      };
+
+      const handleBackdropClick = (event) => {
+        const backdrop = modal.querySelector('.modal-backdrop');
+        if (event.target === backdrop || event.target.closest('[data-close]')) {
+          event.preventDefault();
+          cleanup();
+          reject(new Error('Selection cancelled'));
+        }
+      };
+
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
+          cleanup();
+          reject(new Error('Selection cancelled'));
+        }
+      };
+
+      const handleChoice = (event) => {
+        const button = event.target.closest('.choose-child');
+        if (!button) return;
+        event.preventDefault();
+        const selectedId = button.dataset.id;
+        const selected = matches.find((match) => match.id === selectedId);
+        cleanup();
+        if (selected) {
+          resolve(selected);
+        } else {
+          reject(new Error('Member not found.'));
+        }
+      };
+
+      list.addEventListener('click', handleChoice);
+      modal.addEventListener('click', handleBackdropClick);
+      window.addEventListener('keydown', handleKeydown);
+      const firstButton = list.querySelector('.choose-child');
+      firstButton?.focus({ preventScroll: true });
+    });
+  }
+
+  async function resolveMemberFlexible(userInput) {
+    const raw = (userInput ?? '').toString().trim();
+    if (!raw) throw new Error('Enter a name or ID.');
+    const params = new URLSearchParams({ q: raw });
+    const familyId = resolveFamilyId();
+    if (familyId) params.set('familyId', familyId);
+    const res = await fetch(`/api/admin/resolve-member?${params.toString()}`);
+    const data = await res.json().catch(() => []);
     if (!res.ok) {
       let message = typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : 'login failed';
-      if (message === 'user required') message = 'Enter a user name or ID.';
+      if (message === 'q required') message = 'Enter a name or ID.';
       throw new Error(message);
     }
-    return data;
+    const matches = Array.isArray(data) ? data.map(normalizeResolverMatch).filter(Boolean) : [];
+    if (!matches.length) {
+      throw new Error('Member not found.');
+    }
+    if (matches.length === 1) {
+      return matches[0];
+    }
+    return chooseMemberFromList(matches);
   }
 
   async function loginChild(rawInput, remember) {
-    const user = await resolveUserFlexible(rawInput);
+    const user = await resolveMemberFlexible(rawInput);
     enterApp(user, !!remember);
     return user;
   }
@@ -569,11 +616,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     if (rememberBox) rememberBox.checked = !!remember;
     const msg = document.querySelector('#child-login-msg');
     if (msg) msg.textContent = '';
-    if (remember) {
-      setSaved(user.id);
-    } else {
-      setSaved('');
-    }
+    storeMemberId(user.id, { remember: !!remember });
     loadChildDataFor(user);
   }
 
@@ -605,6 +648,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     updateRedeemNotice(null, { fallbackText: 'Log in to see recent redeemed rewards.' });
     setRecentVisible(false);
     setFullVisible(false);
+    storeMemberId('', { remember: false });
   }
 
   function saveFilters(filters) {
@@ -953,7 +997,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     }
     if (earnBox) earnBox.innerHTML = '<div class="muted">Loading...</div>';
     try {
-      const res = await fetch(`/api/child/tasks?userId=${encodeURIComponent(userId)}`);
+      const res = await fetch(`/api/child/tasks?memberId=${encodeURIComponent(userId)}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load tasks');
@@ -1444,13 +1488,14 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     const btn = document.querySelector('#child-login-btn');
     const msg = document.querySelector('#child-login-msg');
 
-    const saved = getSaved();
+    const saved = getStoredMemberId();
+    const remembered = isMemberRemembered();
     if (saved) {
       try {
-        await loginChild(saved, true);
+        await loginChild(saved, remembered);
       } catch (error) {
         console.warn('Auto-login failed', error);
-        setSaved('');
+        storeMemberId('', { remember: false });
         backToLogin();
       }
     }
@@ -1458,7 +1503,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     btn?.addEventListener('click', async () => {
       const value = input && typeof input.value === 'string' ? input.value.trim() : '';
       if (!value) {
-        if (msg) msg.textContent = 'Enter a user name or ID.';
+        if (msg) msg.textContent = 'Enter a name or ID.';
         return;
       }
       if (msg) msg.textContent = 'Signing in...';
@@ -1482,7 +1527,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     });
 
     document.querySelector('#child-switch')?.addEventListener('click', () => {
-      setSaved('');
+      storeMemberId('', { remember: false });
       const rememberBox = document.querySelector('#child-remember');
       if (rememberBox) rememberBox.checked = false;
       backToLogin();
@@ -1511,7 +1556,7 @@ window.isLikelyVerticalYouTube = isLikelyVerticalYouTube;
     if (list) list.innerHTML = '<div class="muted">Loading...</div>';
     if (empty) empty.style.display = 'none';
     try{
-      const res = await fetch(`/api/child/rewards?userId=${encodeURIComponent(userId)}`);
+      const res = await fetch(`/api/child/rewards?memberId=${encodeURIComponent(userId)}`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         const message = (data && data.error) || (typeof data === 'string' ? data : 'Failed to load rewards');
