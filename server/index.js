@@ -443,7 +443,7 @@ app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
   res.json(rest);
 });
 
-app.post(["/api/families", "/api/admin/families"], authenticateAdmin, requireMaster, (req, res) => {
+app.post("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
   const name = (body.name ?? "").toString().trim();
   if (!name) {
@@ -491,7 +491,7 @@ app.post(["/api/families", "/api/admin/families"], authenticateAdmin, requireMas
 });
 
 app.post(
-  ["/api/families/:id/rotate-key", "/api/admin/families/:id/rotate-key"],
+  "/api/admin/families/:id/rotate-key",
   authenticateAdmin,
   requireMaster,
   (req, res) => {
@@ -514,7 +514,7 @@ app.post(
   }
 );
 
-app.patch(["/api/families/:id", "/api/admin/families/:id"], authenticateAdmin, requireMaster, (req, res) => {
+app.patch("/api/admin/families/:id", authenticateAdmin, requireMaster, (req, res) => {
   const id = (req.params?.id ?? "").toString().trim();
   if (!id) {
     res.status(400).json({ error: "family id required" });
