@@ -10,7 +10,10 @@
     "check": "node --check server/index.js",
     "dev": "node --watch server/index.js",
     "lint": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs .",
-    "lint:fix": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs --fix ."
+    "lint:fix": "node ./config/eslint/run-lint.mjs --config ./eslint.config.mjs --fix .",
+    "legacy:inspect": "node scripts/legacy-tenant-clean.js --archive",
+    "legacy:execute": "node scripts/legacy-tenant-clean.js --archive --execute",
+    "legacy:execute:cleanup": "node scripts/legacy-tenant-clean.js --archive --execute --cleanup-orphans"
   },
   "keywords": [],
   "author": "",
