@@ -21,7 +21,7 @@ function adminAuth(req, _res, next) {
   next();
 }
 
-router.use("/api/admin", adminAuth);
+router.use(adminAuth);
 
 function allowFamilyOrMaster(req, familyId) {
   return (
