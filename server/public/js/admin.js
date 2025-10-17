@@ -436,7 +436,8 @@ function initAdmin() {
   };
 
   function canShowPendingBanner() {
-    return (adminState.role === 'master' || adminState.role === 'family') && Boolean(adminState.currentFamilyId);
+    const role = state.role ?? adminState.role ?? null;
+    return (role === 'master' || role === 'family') && Boolean(adminState.currentFamilyId);
   }
 
   function normalizeMasterStatus(value, fallback = 'active') {
@@ -452,7 +453,7 @@ function initAdmin() {
   }
 
   function applyMasterViewVisibility() {
-    const isMaster = adminState.role === 'master';
+    const isMaster = state.role === 'master';
     masterViewTabs.forEach((btn) => {
       if (!btn) return;
       const view = btn.dataset.viewTab || '';
@@ -480,9 +481,10 @@ function initAdmin() {
     templatesTab?.classList.toggle('is-active', desired === 'templates');
     familiesTab?.classList.toggle('is-active', desired === 'families');
 
+    const isMaster = state.role === 'master';
     if (adminState.masterView !== desired) {
       adminState.masterView = desired;
-      if ((state.role || adminState.role) === 'master') {
+      if (isMaster) {
         persistAdminContextSnapshot();
       }
     }
@@ -492,8 +494,7 @@ function initAdmin() {
     if (desired === 'families') {
       adminState.showInactiveFamilies = !!state.showInactive;
       renderFamilyManagement('');
-      const role = state.role || adminState.role;
-      if (role === 'master') {
+      if (isMaster) {
         fetchFamilies()
           .then((list) => {
             const families = Array.isArray(list) ? list : [];
@@ -506,13 +507,15 @@ function initAdmin() {
             console.warn('fetchFamilies failed', error);
             state.families = [];
             assignFamilies([]);
-            const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+            const message = String(error) === 'Error: 403'
+              ? 'Master key required.'
+              : 'Failed to load families.';
             renderFamilyManagement(message);
           });
-      } else if (role === 'family') {
-        renderFamilyManagement('This list is for master admins. You can still manage your family below.');
+      } else if (state.role === 'family') {
+        renderFamilyManagement('This section lists all families (master only).');
       } else {
-        renderFamilyManagement('Enter a valid admin key to use this section.');
+        renderFamilyManagement('Enter a valid admin key.');
       }
     } else {
       renderMasterTemplates();
@@ -554,7 +557,7 @@ function initAdmin() {
   }
 
   function updateMasterScopeVisibility() {
-    const isMaster = adminState.role === 'master';
+    const isMaster = state.role === 'master';
     const hasScope = Boolean(adminState.currentFamilyId);
     if (scopeNotice) {
       scopeNotice.hidden = !(isMaster && !hasScope);
@@ -985,7 +988,7 @@ function initAdmin() {
   }
 
   async function loadMasterTasks({ silent = false } = {}) {
-    if (adminState.role !== 'master') {
+    if (state.role !== 'master') {
       masterTemplatesState.tasks = [];
       masterTemplatesState.loadingTasks = false;
       renderMasterTaskList();
@@ -1017,7 +1020,7 @@ function initAdmin() {
   }
 
   async function loadMasterRewards({ silent = false } = {}) {
-    if (adminState.role !== 'master') {
+    if (state.role !== 'master') {
       masterTemplatesState.rewards = [];
       masterTemplatesState.loadingRewards = false;
       renderMasterRewardList();
@@ -1282,7 +1285,7 @@ function initAdmin() {
   }
 
   function applyRoleVisibility() {
-    const activeRole = adminState.role || '';
+    const activeRole = state.role || adminState.role || '';
     const hasScope = Boolean(adminState.currentFamilyId);
     if (familySearchInput) familySearchInput.disabled = activeRole !== 'master';
     const searchSubmit = familySearchForm?.querySelector('button[type="submit"]');
@@ -1485,7 +1488,7 @@ function initAdmin() {
 
   function updateFamilyCreateButtonState() {
     if (!familyCreateSubmitButton) return;
-    if (adminState.role !== 'master') {
+    if (state.role !== 'master') {
       familyCreateSubmitButton.disabled = true;
       return;
     }
@@ -1510,7 +1513,7 @@ function initAdmin() {
       pill.textContent = 'No admin';
       return;
     }
-    const role = state.role || adminState.role;
+    const role = state.role ?? adminState.role ?? null;
     if (role === 'master') {
       pill.textContent = 'Master';
       return;
@@ -1670,20 +1673,20 @@ function initAdmin() {
   }
 
   refreshAdminAuth = async () => {
+    let role = null;
+    let familyId = null;
     try {
       const me = await adminGET('/api/admin/whoami');
-      const role = typeof me?.role === 'string' ? me.role : null;
-      const familyId = me?.familyId ?? null;
-      state.role = role;
-      state.familyId = familyId;
-      setAdminState({ role, family_id: familyId }, { persist: false });
-      renderRoleBadge();
+      role = typeof me?.role === 'string' ? me.role : null;
+      familyId = me?.familyId ?? null;
     } catch {
-      state.role = null;
-      state.familyId = null;
-      setAdminState({ role: null, family_id: null }, { persist: false });
-      renderRoleBadge(true);
+      role = null;
+      familyId = null;
     }
+    state.role = role;
+    state.familyId = familyId;
+    setAdminState({ role, family_id: familyId }, { persist: false });
+    renderRoleBadge(!role);
   };
 
   async function fetchFamilies() {
@@ -1705,7 +1708,7 @@ function initAdmin() {
   }
 
   async function refreshFamiliesFromServer({ silent = false } = {}) {
-    if (adminState.role !== 'master') return false;
+    if (state.role !== 'master') return false;
     try {
       const families = await fetchFamiliesStrict();
       const nextState = { families };
@@ -1921,6 +1924,10 @@ function initAdmin() {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
+      if (state.role !== 'master') {
+        renderFamilyManagement('Master key required.');
+        return;
+      }
       state.showInactive = !state.showInactive;
       adminState.showInactiveFamilies = state.showInactive;
       renderFamilyManagement('');
@@ -1929,7 +1936,7 @@ function initAdmin() {
         const list = Array.isArray(fams) ? fams : [];
         state.families = list;
         assignFamilies(list);
-        if (adminState.role === 'master') {
+        if (state.role === 'master') {
           persistAdminContextSnapshot();
         }
         renderFamilyManagement('');
@@ -1945,7 +1952,7 @@ function initAdmin() {
 
   function renderFamilyManagement(message) {
     if (!familyManagementPanel) return;
-    const role = state.role || adminState.role;
+    const role = state.role ?? adminState.role ?? null;
     const isMaster = role === 'master';
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
@@ -2365,6 +2372,10 @@ details.member-fold .summary-value {
 
   async function renderQuickFamilyTable() {
     if (!quickFamilyTable) return;
+    if (state.role !== 'master') {
+      quickFamilyTable.innerHTML = '<div class="muted">Master access required.</div>';
+      return;
+    }
     quickFamilyTable.innerHTML = '<div class="muted">Loading families…</div>';
     try {
       const params = new URLSearchParams({ status: 'active' });
@@ -2406,7 +2417,7 @@ details.member-fold .summary-value {
 
   familySearchForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (adminState.role !== 'master') return;
+    if (state.role !== 'master') return;
     const query = (familySearchInput?.value || '').trim();
     if (!query) {
       toast('Enter a family ID to search.', 'error');
@@ -2435,7 +2446,7 @@ details.member-fold .summary-value {
     } catch (error) {
       toast(error.message || 'Unable to search families.', 'error');
     } finally {
-      if (submitButton) submitButton.disabled = adminState.role !== 'master';
+      if (submitButton) submitButton.disabled = state.role !== 'master';
     }
   });
 
@@ -2448,7 +2459,7 @@ details.member-fold .summary-value {
       await refreshFamiliesFromServer({ silent: false });
     } finally {
       familiesRefreshButton.textContent = originalLabel || 'Refresh';
-      familiesRefreshButton.disabled = adminState.role !== 'master';
+      familiesRefreshButton.disabled = state.role !== 'master';
     }
   });
 
@@ -2459,7 +2470,7 @@ details.member-fold .summary-value {
 
   familyCreateForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (adminState.role !== 'master') return;
+    if (state.role !== 'master') return;
     const familyName = (familyCreateNameInput?.value || '').trim();
     if (!familyName) {
       toast('Family name is required.', 'error');
@@ -2632,7 +2643,7 @@ details.member-fold .summary-value {
     return body;
   }
 
-  function renderEmptyPicker(kind, container, options = {}) {
+  function renderCustomTemplateForm(kind, container, options = {}) {
     if (!container) return;
     const { modalSelector, viewButton } = options;
     const modal = modalSelector ? document.querySelector(modalSelector) : container.closest('.modal');
@@ -2648,28 +2659,33 @@ details.member-fold .summary-value {
 
     const isTask = kind === 'task';
     container.innerHTML = `
-      <h3 class="text-lg font-semibold mb-2">Select a Master ${isTask ? 'Task' : 'Reward'}</h3>
-      <p class="text-sm text-slate-600 mb-3">No more templates to add. You’ve already adopted all active master templates.</p>
+      <h3 class="text-lg font-semibold mb-2">Create ${isTask ? 'Task' : 'Reward'}</h3>
       <div class="grid gap-2 mb-3">
-        <input id="customTitle" class="input" placeholder="${isTask ? 'Task' : 'Reward'} title">
-        <input id="customValue" class="input" type="number" min="0" value="0" placeholder="${isTask ? 'Base points' : 'Base cost'}">
+        <input id="customTitle" class="input" placeholder="Title" />
+        <input id="customValue" class="input" type="number" min="0" value="0" placeholder="${isTask ? 'Points' : 'Cost'}" />
+        <textarea id="customDesc" class="input" rows="3" placeholder="Description (optional)"></textarea>
+        <input id="customYT" class="input" placeholder="YouTube URL (optional)" />
       </div>
       <div class="flex gap-2 justify-end">
-        <button id="btnCreate" class="btn-primary">Create Custom ${isTask ? 'Task' : 'Reward'}</button>
-        <button id="btnCancel" class="btn-secondary">Close</button>
+        <button id="btnCreate" class="btn-primary">Create</button>
+        <button id="btnClose" class="btn-secondary">Close</button>
       </div>
     `;
 
-    const cancelBtn = container.querySelector('#btnCancel');
+    const closeBtn = container.querySelector('#btnClose');
     const createBtn = container.querySelector('#btnCreate');
 
-    cancelBtn?.addEventListener('click', closeModal);
+    closeBtn?.addEventListener('click', closeModal);
 
     createBtn?.addEventListener('click', async () => {
       const titleInput = container.querySelector('#customTitle');
       const valueInput = container.querySelector('#customValue');
+      const descInput = container.querySelector('#customDesc');
+      const ytInput = container.querySelector('#customYT');
       const title = (titleInput?.value || '').trim();
       const numericValue = Number(valueInput?.value || 0) || 0;
+      const description = (descInput?.value || '').trim();
+      const youtubeUrl = (ytInput?.value || '').trim();
       if (!title) {
         toast('Title required');
         return;
@@ -2683,8 +2699,8 @@ details.member-fold .summary-value {
       const endpoint = isTask ? 'tasks' : 'rewards';
       const url = `/api/admin/families/${encodeURIComponent(familyId)}/${endpoint}`;
       const body = isTask
-        ? { title, points: numericValue, status: 'active' }
-        : { title, cost: numericValue, status: 'active' };
+        ? { title, points: numericValue, description, youtube_url: youtubeUrl || null, status: 'active' }
+        : { title, cost: numericValue, description, youtube_url: youtubeUrl || null, status: 'active' };
 
       try {
         const res = await fetch(url, {
@@ -5486,7 +5502,7 @@ setupScanner({
           .join('');
       } else {
         const viewBtn = document.getElementById('btn-view-deactivated');
-        renderEmptyPicker('task', box, {
+        renderCustomTemplateForm('task', box, {
           modalSelector: '#modal-task-templates',
           viewButton: viewBtn || undefined
         });
