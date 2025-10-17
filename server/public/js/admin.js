@@ -33,29 +33,67 @@ import { renderHeader } from './header.js';
   let adminKeyMemory = '';
 
   function getAdminKey() {
-    try {
-      const stored = window.localStorage?.getItem(ADMIN_KEY_STORAGE);
-      if (stored != null) {
-        adminKeyMemory = stored;
-        state.adminKey = stored;
-        return stored;
-      }
-    } catch {
-      // ignore storage errors
+    const remembered = (state.adminKey || adminKeyMemory || '').trim();
+    if (remembered) {
+      adminKeyMemory = remembered;
+      state.adminKey = remembered;
+      return remembered;
     }
-    const fallback = adminKeyMemory || '';
-    state.adminKey = fallback;
-    return fallback;
+
+    const readers = [
+      () => window.localStorage?.getItem('adminKey'),
+      () => window.localStorage?.getItem('ck_admin_key'),
+      () => window.localStorage?.getItem(ADMIN_KEY_STORAGE),
+      () => window.sessionStorage?.getItem('adminKey'),
+      () => window.sessionStorage?.getItem('ck_admin_key'),
+      () => window.sessionStorage?.getItem(ADMIN_KEY_STORAGE)
+    ];
+
+    for (const read of readers) {
+      try {
+        const value = read?.();
+        if (typeof value === 'string' && value.trim()) {
+          adminKeyMemory = value.trim();
+          state.adminKey = adminKeyMemory;
+          return adminKeyMemory;
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+
+    state.adminKey = '';
+    return '';
   }
 
   function setAdminKey(val) {
-    const value = val || '';
+    const value = (val || '').trim();
     let persisted = true;
     try {
+      const ls = window.localStorage;
+      const ss = window.sessionStorage;
       if (value) {
-        window.localStorage?.setItem(ADMIN_KEY_STORAGE, value);
+        if (ls) {
+          ls.setItem('adminKey', value);
+          ls.setItem('ck_admin_key', value);
+          ls.setItem(ADMIN_KEY_STORAGE, value);
+        }
+        if (ss) {
+          ss.setItem('adminKey', value);
+          ss.setItem('ck_admin_key', value);
+          ss.setItem(ADMIN_KEY_STORAGE, value);
+        }
       } else {
-        window.localStorage?.removeItem(ADMIN_KEY_STORAGE);
+        if (ls) {
+          ls.removeItem('adminKey');
+          ls.removeItem('ck_admin_key');
+          ls.removeItem(ADMIN_KEY_STORAGE);
+        }
+        if (ss) {
+          ss.removeItem('adminKey');
+          ss.removeItem('ck_admin_key');
+          ss.removeItem(ADMIN_KEY_STORAGE);
+        }
       }
     } catch {
       persisted = false;
@@ -282,7 +320,7 @@ function initAdmin() {
 
   const whoamiBanner = $k('adminWhoami');
   const whoamiRoleLabel = $k('adminRoleLabel');
-  const scopeBadgeEl = $k('admin-scope-badge');
+  const roleBadgeEl = $k('roleBadge');
   const masterToolbar = $k('masterToolbar');
   const familyScopeWrapper = $k('familyScopeWrapper');
   const familyScopeSelect = $k('familyScopeSelect');
@@ -422,7 +460,7 @@ function initAdmin() {
 
     if (desired === 'families') {
       adminState.showInactiveFamilies = !!state.showInactive;
-      renderFamilyManagement();
+      renderFamilyManagement('');
       fetchFamilies()
         .then((list) => {
           const families = Array.isArray(list) ? list : [];
@@ -431,13 +469,15 @@ function initAdmin() {
           if (adminState.role === 'master') {
             persistAdminContextSnapshot();
           }
-          renderFamilyManagement();
+          renderFamilyManagement('');
         })
         .catch((error) => {
           console.warn('fetchFamilies failed', error);
           state.families = [];
           assignFamilies([]);
-          const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+          const message = String(error) === 'Error: 403'
+            ? 'Master key required or header missing.'
+            : 'Failed to load families.';
           renderFamilyManagement(message);
         });
     } else {
@@ -1256,7 +1296,7 @@ function initAdmin() {
     updateWhoamiBanner();
     applyRoleVisibility();
     updateMasterScopeVisibility();
-    updateScopeBadgeDisplay();
+    renderRoleBadge(true);
     updateScopeBadgeDisplay();
     if (familySearchInput) familySearchInput.value = '';
     if (familyCreateForm) familyCreateForm.reset();
@@ -1429,41 +1469,50 @@ function initAdmin() {
     return suggestion;
   }
 
+  function renderRoleBadge(noAuth = false) {
+    const pill = roleBadgeEl;
+    if (!pill) return;
+    if (noAuth) {
+      pill.textContent = 'No admin';
+      return;
+    }
+    const isMaster = state.isMaster || adminState.role === 'master';
+    if (isMaster) {
+      pill.textContent = 'Master';
+      return;
+    }
+    const familyLabel = state.familyId || adminState.currentFamilyId || adminState.familyId || '';
+    pill.textContent = `Family Admin (${familyLabel || 'unknown'})`;
+  }
+
   function updateScopeBadgeDisplay() {
-    if (!scopeBadgeEl) return;
-    scopeBadgeEl.classList.remove('bg-green-200', 'bg-sky-200');
-    scopeBadgeEl.style.backgroundColor = '';
-    scopeBadgeEl.style.color = '';
+    if (!roleBadgeEl) return;
+    roleBadgeEl.classList.remove('bg-green-200', 'bg-sky-200');
+    roleBadgeEl.style.backgroundColor = '';
+    roleBadgeEl.style.color = '';
 
     if (!adminState.role) {
-      scopeBadgeEl.textContent = 'No admin';
+      renderRoleBadge(true);
       return;
     }
 
     if (adminState.role === 'master') {
-      scopeBadgeEl.classList.add('bg-green-200');
-      scopeBadgeEl.style.backgroundColor = '#bbf7d0';
-      scopeBadgeEl.style.color = '#14532d';
-      if (adminState.currentFamilyId) {
-        scopeBadgeEl.textContent = `Master · ${findFamilyLabel(adminState.currentFamilyId)}`;
-      } else {
-        scopeBadgeEl.textContent = 'Master · Select a family';
-      }
+      roleBadgeEl.classList.add('bg-green-200');
+      roleBadgeEl.style.backgroundColor = '#bbf7d0';
+      roleBadgeEl.style.color = '#14532d';
+      renderRoleBadge();
       return;
     }
 
     if (adminState.role === 'family') {
-      scopeBadgeEl.classList.add('bg-sky-200');
-      scopeBadgeEl.style.backgroundColor = '#bae6fd';
-      scopeBadgeEl.style.color = '#0c4a6e';
-      const familyLabel = adminState.currentFamilyId || adminState.familyId || '';
-      scopeBadgeEl.textContent = familyLabel
-        ? `Family Admin (${findFamilyLabel(familyLabel)})`
-        : 'Family Admin';
+      roleBadgeEl.classList.add('bg-sky-200');
+      roleBadgeEl.style.backgroundColor = '#bae6fd';
+      roleBadgeEl.style.color = '#0c4a6e';
+      renderRoleBadge();
       return;
     }
 
-    scopeBadgeEl.textContent = adminState.role;
+    roleBadgeEl.textContent = adminState.role;
   }
 
   function updateWhoamiBanner() {
@@ -1567,13 +1616,8 @@ function initAdmin() {
   }
 
   async function adminGET(path) {
-    const key = ensureAdminKey();
-    const headers = {};
-    if (key) {
-      headers['X-Admin-Key'] = key;
-    }
     const res = await fetch(path, {
-      headers,
+      headers: { 'X-Admin-Key': getAdminKey() },
       credentials: 'same-origin'
     });
     if (!res.ok) {
@@ -1588,21 +1632,22 @@ function initAdmin() {
       state.isMaster = me.role === 'master';
       const incomingFamilyId = me.familyId ?? me.family_id ?? null;
       state.familyId = incomingFamilyId ?? state.familyId ?? null;
+      renderRoleBadge();
     } catch {
       state.isMaster = false;
       state.familyId = null;
+      renderRoleBadge(true);
     }
   }
 
   async function fetchFamilies() {
     const status = state.showInactive ? 'inactive' : 'active';
-    const url = `/api/admin/families?status=${status}`;
-    const body = await adminGET(url);
-    return Array.isArray(body) ? body : [];
+    return adminGET(`/api/admin/families?status=${status}`);
   }
 
   async function fetchFamiliesStrict() {
-    const families = await fetchFamilies();
+    const response = await fetchFamilies();
+    const families = Array.isArray(response) ? response : [];
     return families
       .map((family) => {
         if (!family) return null;
@@ -1832,6 +1877,7 @@ function initAdmin() {
       event.stopImmediatePropagation();
       state.showInactive = !state.showInactive;
       adminState.showInactiveFamilies = state.showInactive;
+      renderFamilyManagement('');
       try {
         const fams = await fetchFamilies();
         const list = Array.isArray(fams) ? fams : [];
@@ -1840,10 +1886,12 @@ function initAdmin() {
         if (adminState.role === 'master') {
           persistAdminContextSnapshot();
         }
-        renderFamilyManagement();
+        renderFamilyManagement('');
       } catch (error) {
         console.warn('fetchFamilies failed', error);
-        const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+        const message = String(error) === 'Error: 403'
+          ? 'Master key required or header missing.'
+          : 'Failed to load families.';
         renderFamilyManagement(message);
       }
     });
@@ -2220,6 +2268,7 @@ details.member-fold .summary-value {
       const value = (keyInput?.value || '').trim();
       const persisted = setAdminKey(value);
       toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
+      renderRoleBadge(value ? false : true);
       await refreshAdminAuth();
       setActiveTab(state.activeTab || 'templates');
       if (value) {
@@ -2526,6 +2575,170 @@ details.member-fold .summary-value {
       throw error;
     }
     return body;
+  }
+
+  function renderEmptyTemplateOptions(kind, container, options = {}) {
+    if (!container) return;
+    const { modalSelector, viewButton } = options;
+    const label = kind === 'reward' ? 'Reward' : 'Task';
+    container.innerHTML =
+      '<div class="opacity-70" style="margin-bottom:12px;">No more templates to add. You’ve already adopted all active master templates.</div>';
+    const actions = document.createElement('div');
+    actions.className = 'flex gap-2 mt-3';
+
+    const createBtn = document.createElement('button');
+    createBtn.type = 'button';
+    createBtn.className = 'btn-primary';
+    createBtn.textContent = `Create Custom ${label}`;
+    actions.appendChild(createBtn);
+
+    if (viewButton instanceof HTMLElement) {
+      const viewBtn = document.createElement('button');
+      viewBtn.type = 'button';
+      viewBtn.className = 'btn btn-sm';
+      viewBtn.textContent = viewButton.textContent || 'View Deactivated';
+      viewBtn.addEventListener('click', () => {
+        if (modalSelector) hide(modalSelector);
+        viewButton.click();
+      });
+      actions.appendChild(viewBtn);
+    }
+
+    container.appendChild(actions);
+    createBtn.addEventListener('click', () =>
+      showCustomTemplateForm(kind, container, { modalSelector, viewButton })
+    );
+  }
+
+  function showCustomTemplateForm(kind, container, options = {}) {
+    if (!container) return;
+    const { modalSelector, viewButton } = options;
+    const label = kind === 'reward' ? 'Reward' : 'Task';
+    const numericLabel = kind === 'reward' ? 'Cost' : 'Points';
+    const numericName = kind === 'reward' ? 'cost' : 'points';
+    container.innerHTML = `
+      <form class="stack" data-custom-form="${kind}">
+        <p class="opacity-70">Create a custom ${label.toLowerCase()} for this family.</p>
+        <label>Title
+          <input name="title" type="text" required />
+        </label>
+        <label>${numericLabel}
+          <input name="${numericName}" type="number" min="0" step="1" value="0" required />
+        </label>
+        <label>Description
+          <textarea name="description" rows="3" placeholder="Optional details"></textarea>
+        </label>
+        <label>Icon URL
+          <input name="icon" type="text" placeholder="https://..." />
+        </label>
+        <label>YouTube URL
+          <input name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+        </label>
+        <div class="flex gap-2 mt-3">
+          <button type="submit" class="btn-primary">Create Custom ${label}</button>
+          <button type="button" class="btn" data-cancel-custom>Back</button>
+        </div>
+      </form>
+    `;
+
+    const form = container.querySelector('form');
+    if (!form) return;
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const success = await submitCustomTemplate(kind, form, modalSelector);
+      if (success) {
+        container.innerHTML = '';
+      }
+    });
+
+    const cancel = form.querySelector('[data-cancel-custom]');
+    cancel?.addEventListener('click', () =>
+      renderEmptyTemplateOptions(kind, container, { modalSelector, viewButton })
+    );
+  }
+
+  async function submitCustomTemplate(kind, form, modalSelector) {
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const formData = new FormData(form);
+      const title = String(formData.get('title') || '').trim();
+      if (!title) {
+        toast('Title is required.', 'error');
+        return false;
+      }
+      const numericName = kind === 'reward' ? 'cost' : 'points';
+      const numericRaw = formData.get(numericName);
+      const numericValue = Number(numericRaw);
+      const amount = Number.isFinite(numericValue) && numericValue >= 0 ? Math.floor(numericValue) : 0;
+      const description = String(formData.get('description') || '').trim();
+      const icon = String(formData.get('icon') || '').trim();
+      const youtubeUrl = String(formData.get('youtube_url') || '').trim();
+
+      let familyId;
+      try {
+        familyId = requireFamilyId();
+      } catch (error) {
+        const message = error?.message || 'Select a family first';
+        toast(message, 'error');
+        return false;
+      }
+
+      const payload = {
+        title,
+        description,
+        icon: icon || null,
+        youtube_url: youtubeUrl || null,
+        status: 'active'
+      };
+      if (kind === 'reward') {
+        payload.cost = amount;
+      } else {
+        payload.points = amount;
+      }
+
+      const endpoint = kind === 'reward' ? 'rewards' : 'tasks';
+      const url = `/api/admin/families/${encodeURIComponent(familyId)}/${endpoint}`;
+      const { res, body } = await adminFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        return false;
+      }
+      if (res.status === 403) {
+        toast('Master key required or header missing.', 'error');
+        return false;
+      }
+      if (!res.ok) {
+        const message = presentError(body?.error, 'Create failed');
+        toast(message, 'error');
+        return false;
+      }
+
+      toast(kind === 'reward' ? 'Custom reward created.' : 'Custom task created.');
+      if (modalSelector) hide(modalSelector);
+      if (kind === 'reward') {
+        await loadRewards?.();
+      } else {
+        await refreshEarnTemplates('active');
+      }
+      return true;
+    } catch (error) {
+      const message = error?.message || 'Create failed';
+      if (message === 'family_id required') {
+        toast('Select a family scope to create templates.', 'error');
+      } else if (message !== ADMIN_KEY_REQUIRED_MSG) {
+        toast(message, 'error');
+      }
+      return false;
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
   }
 
   async function loadAvailableTaskTemplates() {
@@ -5284,21 +5497,11 @@ setupScanner({
           )
           .join('');
       } else {
-        const viewBtn = document.getElementById('btnViewDeactivated');
-        const parts = [
-          '<div class="opacity-70" style="margin-bottom:12px;">No more templates to add. You’ve already adopted all active master templates.</div>'
-        ];
-        if (viewBtn) {
-          parts.push('<button type="button" class="btn btn-sm" data-open-deactivated="true">View Deactivated</button>');
-        }
-        box.innerHTML = parts.join('');
-        const openDeactivated = box.querySelector('[data-open-deactivated]');
-        if (openDeactivated && viewBtn) {
-          openDeactivated.addEventListener('click', () => {
-            hide('#modal-task-templates');
-            viewBtn.click();
-          });
-        }
+        const viewBtn = document.getElementById('btn-view-deactivated');
+        renderEmptyTemplateOptions('task', box, {
+          modalSelector: '#modal-task-templates',
+          viewButton: viewBtn || undefined
+        });
       }
       show('#modal-task-templates');
     } catch (error) {
