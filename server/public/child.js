@@ -2,6 +2,10 @@ import { renderHeader } from './js/header.js';
 
 if (typeof document !== 'undefined' && document.title) {
   document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
+  const heroHeading = document.querySelector('h1');
+  if (heroHeading && /CryptoKids/i.test(heroHeading.textContent)) {
+    heroHeading.textContent = heroHeading.textContent.replace(/CryptoKids/gi, 'CleverKids');
+  }
 }
 
 const SUPPORTED_LANGS = ['en', 'ko'];

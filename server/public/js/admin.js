@@ -5,6 +5,10 @@ import { renderHeader } from './header.js';
 
   if (typeof document !== 'undefined' && document.title) {
     document.title = document.title.replace(/CryptoKids/gi, 'CleverKids');
+    const heroHeading = document.querySelector('h1');
+    if (heroHeading && /CryptoKids/i.test(heroHeading.textContent)) {
+      heroHeading.textContent = heroHeading.textContent.replace(/CryptoKids/gi, 'CleverKids');
+    }
   }
 
   // ---- constants FIRST (avoid TDZ) ----
@@ -267,7 +271,6 @@ function initAdmin() {
   const familiesRefreshButton = $k('btnFamiliesRefresh');
   const familyListTableBody = $k('familyListTableBody');
   const familyListEmptyRow = $k('familyListEmpty');
-  const familyToggleInactiveButton = $k('familyToggleInactive');
   const familyCreateForm = $k('familyCreateForm');
   const familyCreateNameInput = $k('familyCreateName');
   const familyCreateFirstNameInput = $k('familyCreateFirstName');
@@ -1481,18 +1484,7 @@ function initAdmin() {
   async function fetchFamilies() {
     const status = adminState.showInactiveFamilies ? 'inactive' : 'active';
     const url = `/api/admin/families?status=${status}`;
-    const { res, body } = await adminFetch(url, { skipScope: true });
-    if (res.status === 401) {
-      const error = new Error(ADMIN_INVALID_MSG);
-      error.code = 'UNAUTHORIZED';
-      throw error;
-    }
-    if (!res.ok) {
-      const message = presentError(body?.error, 'Failed to load families');
-      const error = new Error(message);
-      error.code = res.status;
-      throw error;
-    }
+    const body = await adminGET(url, { skipScope: true });
     return Array.isArray(body) ? body : [];
   }
 
@@ -1717,43 +1709,54 @@ function initAdmin() {
     familyListTableBody.appendChild(row);
   }
 
-  function mountFamiliesToggle(btnEl) {
-    if (!btnEl || btnEl.dataset.familiesToggleBound === 'true') return;
-    btnEl.dataset.familiesToggleBound = 'true';
-    btnEl.addEventListener(
-      'click',
-      async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (btnEl.disabled) return;
-        adminState.showInactiveFamilies = !adminState.showInactiveFamilies;
-        try {
-          const families = await fetchFamiliesStrict();
-          assignFamilies(families);
-          persistAdminContextSnapshot();
-          renderFamilyManagement();
-        } catch (error) {
-          adminState.showInactiveFamilies = !adminState.showInactiveFamilies;
-          const message = presentError(error?.body?.error || error?.message, 'Failed to load families');
-          toast(message, 'error');
-          renderFamilyManagement();
-        }
-      },
-      { passive: true }
-    );
-  }
-
   function renderFamilyManagement() {
     if (!familyManagementPanel) return;
     const isMaster = adminState.role === 'master';
-    if (familyToggleInactiveButton) {
-      mountFamiliesToggle(familyToggleInactiveButton);
-      familyToggleInactiveButton.hidden = !isMaster;
-      familyToggleInactiveButton.disabled = !isMaster;
-      familyToggleInactiveButton.textContent = adminState.showInactiveFamilies
-        ? 'View active families'
-        : 'View inactive families';
-      familyToggleInactiveButton.setAttribute('aria-pressed', adminState.showInactiveFamilies ? 'true' : 'false');
+    const familiesPanel = document.getElementById('families-panel');
+    if (familiesPanel) {
+      familiesPanel.innerHTML = '';
+      if (isMaster) {
+        familiesPanel.innerHTML = `
+          <p class="muted family-panel-copy">Create or update families and control their status.</p>
+          <button id="familiesToggle" type="button" class="btn-link" aria-pressed="${
+            adminState.showInactiveFamilies ? 'true' : 'false'
+          }">
+            ${adminState.showInactiveFamilies ? 'View active families' : 'View inactive families'}
+          </button>
+        `;
+        const toggleButton = familiesPanel.querySelector('#familiesToggle');
+        if (toggleButton) {
+          toggleButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            if (toggleButton.disabled) return;
+            const previousState = adminState.showInactiveFamilies;
+            adminState.showInactiveFamilies = !previousState;
+            toggleButton.disabled = true;
+            toggleButton.textContent = 'Loading...';
+            try {
+              const families = await fetchFamiliesStrict();
+              assignFamilies(families);
+              persistAdminContextSnapshot();
+            } catch (error) {
+              adminState.showInactiveFamilies = previousState;
+              const message = presentError(error?.body?.error || error?.message, 'Failed to load families');
+              toast(message, 'error');
+            } finally {
+              toggleButton.disabled = adminState.role !== 'master';
+              const finalLabel = adminState.showInactiveFamilies
+                ? 'View active families'
+                : 'View inactive families';
+              toggleButton.textContent = finalLabel;
+              renderFamilyManagement();
+            }
+          });
+        }
+      } else {
+        familiesPanel.innerHTML =
+          '<p class="muted family-panel-copy">Master access required to manage families.</p>';
+      }
     }
     if (!isMaster) {
       if (familyListTableBody) {
@@ -2385,7 +2388,7 @@ details.member-fold .summary-value {
       }
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-    const res = await fetch(url, { ...fetchOpts, headers });
+    const res = await fetch(url, { credentials: 'same-origin', ...fetchOpts, headers });
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
     return { res, body };
@@ -2396,6 +2399,25 @@ details.member-fold .summary-value {
     if (!res.ok) {
       const message = body && typeof body === 'object' ? body.error || res.statusText : res.statusText;
       const error = new Error(message || 'Request failed');
+      error.status = res.status;
+      error.body = body;
+      throw error;
+    }
+    return body;
+  }
+
+  async function adminGET(url, { skipScope = false } = {}) {
+    const { res, body } = await adminFetch(url, { skipScope });
+    if (res.status === 401) {
+      const error = new Error(ADMIN_INVALID_MSG);
+      error.code = 'UNAUTHORIZED';
+      error.status = res.status;
+      error.body = body;
+      throw error;
+    }
+    if (!res.ok) {
+      const message = presentError(body?.error, res.statusText || 'Request failed');
+      const error = new Error(message);
       error.status = res.status;
       error.body = body;
       throw error;
