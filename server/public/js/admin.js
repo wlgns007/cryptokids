@@ -280,6 +280,10 @@ import { renderHeader } from './header.js';
     if (el) el.classList.add('hidden');
   }
 
+  function qs(id) {
+    return typeof document !== 'undefined' ? document.getElementById(id) : null;
+  }
+
   function normalizeStatus(s) {
     return String(s).toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
   }
@@ -477,8 +481,11 @@ function initAdmin() {
     const desired = tab === 'families' ? 'families' : 'templates';
     state.activeTab = desired;
 
-    document.getElementById('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
-    document.getElementById('tabFamilies')?.classList.toggle('is-active', desired === 'families');
+    qs('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
+    qs('tabFamilies')?.classList.toggle('is-active', desired === 'families');
+
+    qs('panel-templates')?.classList.toggle('hidden', desired !== 'templates');
+    qs('panel-families')?.classList.toggle('hidden', desired !== 'families');
 
     const isMaster = state.role === 'master';
     if (adminState.masterView !== desired) {
@@ -1904,24 +1911,9 @@ function initAdmin() {
     familyListTableBody.appendChild(row);
   }
 
-  function ensureFamiliesPanel() {
-    if (document.getElementById('families-panel')) return;
-    const host =
-      familyManagementPanel?.querySelector('.family-management-list') ||
-      familyManagementPanel ||
-      document.getElementById('secFamilyManagement') ||
-      document.body;
-    const pane = document.createElement('div');
-    pane.id = 'families-panel';
-    pane.className = 'family-management-controls';
-    host.appendChild(pane);
-  }
-
   function renderFamilyManagement(message = '') {
-    if (!familyManagementPanel) return;
-    ensureFamiliesPanel();
-    const familiesPanel = document.getElementById('families-panel');
-    if (!familiesPanel) return;
+    const host = qs('families-panel');
+    if (!host) return;
 
     const role = state.role ?? adminState.role ?? null;
     const isMaster = role === 'master';
@@ -1930,7 +1922,7 @@ function initAdmin() {
 
     const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
     if (isMaster) {
-      familiesPanel.innerHTML = `
+      host.innerHTML = `
         <div class="flex items-center mb-3">
           <div class="text-sm text-slate-500">Master admins can review all families.</div>
           <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
@@ -1939,7 +1931,7 @@ function initAdmin() {
         </div>
         ${note}
       `;
-      familiesPanel
+      host
         .querySelector('#familiesToggle')
         ?.addEventListener(
           'click',
@@ -1974,10 +1966,8 @@ function initAdmin() {
           { capture: true }
         );
     } else {
-      familiesPanel.innerHTML =
-        `${note}<p class="muted family-panel-copy">Master access required to manage families.</p>`;
-    }
-    if (!isMaster) {
+      const fallback = '<p class="muted family-panel-copy">Master access required to manage families.</p>';
+      host.innerHTML = `${note}${fallback}`;
       if (familyListTableBody) {
         familyListTableBody.innerHTML = '';
         if (familyListEmptyRow) {
@@ -1996,6 +1986,8 @@ function initAdmin() {
       updateFamilyCreateButtonState();
       return;
     }
+
+    if (!familyManagementPanel) return;
 
     const families = Array.isArray(adminState.families) ? adminState.families : [];
     if (familyListTableBody) {
