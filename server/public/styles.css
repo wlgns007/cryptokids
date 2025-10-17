@@ -125,7 +125,7 @@
   list-style: none;
 }
 
-.admin-tab {
+.tab {
   border: 1px solid var(--line, #e5e7eb);
   background: #fff;
   color: var(--muted, #6b7280);
@@ -136,7 +136,7 @@
   transition: box-shadow 120ms ease, transform 120ms ease, background 120ms ease;
 }
 
-.admin-tab.is-active {
+.tab.is-active {
   background: linear-gradient(135deg,#7c4dff,#5d34d6);
   color: #fff;
   border-color: transparent;
@@ -144,7 +144,7 @@
   transform: translateY(-1px);
 }
 
-.admin-tab:disabled {
+.tab:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
