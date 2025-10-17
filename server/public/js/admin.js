@@ -476,10 +476,9 @@ function initAdmin() {
   setActiveTab = (tab) => {
     const desired = tab === 'families' ? 'families' : 'templates';
     state.activeTab = desired;
-    const templatesTab = document.getElementById('tabTemplates');
-    const familiesTab = document.getElementById('tabFamilies');
-    templatesTab?.classList.toggle('is-active', desired === 'templates');
-    familiesTab?.classList.toggle('is-active', desired === 'families');
+
+    document.getElementById('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
+    document.getElementById('tabFamilies')?.classList.toggle('is-active', desired === 'families');
 
     const isMaster = state.role === 'master';
     if (adminState.masterView !== desired) {
@@ -492,12 +491,11 @@ function initAdmin() {
     applyMasterViewVisibility();
 
     if (desired === 'families') {
-      adminState.showInactiveFamilies = !!state.showInactive;
       renderFamilyManagement('');
       if (isMaster) {
         fetchFamilies()
-          .then((list) => {
-            const families = Array.isArray(list) ? list : [];
+          .then((rows) => {
+            const families = Array.isArray(rows) ? rows : [];
             state.families = families;
             assignFamilies(families);
             persistAdminContextSnapshot();
@@ -531,30 +529,15 @@ function initAdmin() {
   document.addEventListener(
     'click',
     (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const { id } = target;
-      if (id === 'tabFamilies' || id === 'tabTemplates') {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-      }
+      const target = event.target instanceof Element ? event.target.closest('#tabFamilies, #tabTemplates') : null;
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setActiveTab(target.id === 'tabFamilies' ? 'families' : 'templates');
     },
     true
   );
-
-  function bindMasterTabs() {
-    const familiesTab = document.getElementById('tabFamilies');
-    const templatesTab = document.getElementById('tabTemplates');
-    familiesTab?.addEventListener('click', () => setActiveTab('families'));
-    templatesTab?.addEventListener('click', () => setActiveTab('templates'));
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bindMasterTabs, { once: true });
-  } else {
-    bindMasterTabs();
-  }
 
   function updateMasterScopeVisibility() {
     const isMaster = state.role === 'master';
@@ -1921,66 +1904,78 @@ function initAdmin() {
     familyListTableBody.appendChild(row);
   }
 
-  function mountFamiliesToggle(btn) {
-    if (!btn || btn.dataset.bound === 'true') return;
-    btn.dataset.bound = 'true';
-    btn.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      if (state.role !== 'master') {
-        renderFamilyManagement('Master key required.');
-        return;
-      }
-      state.showInactive = !state.showInactive;
-      adminState.showInactiveFamilies = state.showInactive;
-      renderFamilyManagement('');
-      try {
-        const fams = await fetchFamilies();
-        const list = Array.isArray(fams) ? fams : [];
-        state.families = list;
-        assignFamilies(list);
-        if (state.role === 'master') {
-          persistAdminContextSnapshot();
-        }
-        renderFamilyManagement('');
-      } catch (error) {
-        console.warn('fetchFamilies failed', error);
-        const message = String(error) === 'Error: 403'
-          ? 'Master key required or header missing.'
-          : 'Failed to load families.';
-        renderFamilyManagement(message);
-      }
-    });
+  function ensureFamiliesPanel() {
+    if (document.getElementById('families-panel')) return;
+    const host =
+      familyManagementPanel?.querySelector('.family-management-list') ||
+      familyManagementPanel ||
+      document.getElementById('secFamilyManagement') ||
+      document.body;
+    const pane = document.createElement('div');
+    pane.id = 'families-panel';
+    pane.className = 'family-management-controls';
+    host.appendChild(pane);
   }
 
-  function renderFamilyManagement(message) {
+  function renderFamilyManagement(message = '') {
     if (!familyManagementPanel) return;
+    ensureFamiliesPanel();
+    const familiesPanel = document.getElementById('families-panel');
+    if (!familiesPanel) return;
+
     const role = state.role ?? adminState.role ?? null;
     const isMaster = role === 'master';
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
-    const familiesPanel = document.getElementById('families-panel');
-    if (familiesPanel) {
-      familiesPanel.innerHTML = '';
-      if (isMaster) {
-        const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
-        familiesPanel.innerHTML = `
-          <div class="flex items-center mb-3">
-            <div class="text-sm text-slate-500">Master admins can review all families from here.</div>
-            <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
-              ${showInactive ? 'View active families' : 'View inactive families'}
-            </button>
-          </div>
-          ${note}
-        `;
-        const toggleButton = familiesPanel.querySelector('#familiesToggle');
-        mountFamiliesToggle(toggleButton);
-      } else {
-        const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
-        familiesPanel.innerHTML =
-          `${note}<p class="muted family-panel-copy">Master access required to manage families.</p>`;
-      }
+
+    const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
+    if (isMaster) {
+      familiesPanel.innerHTML = `
+        <div class="flex items-center mb-3">
+          <div class="text-sm text-slate-500">Master admins can review all families.</div>
+          <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
+            ${showInactive ? 'View active families' : 'View inactive families'}
+          </button>
+        </div>
+        ${note}
+      `;
+      familiesPanel
+        .querySelector('#familiesToggle')
+        ?.addEventListener(
+          'click',
+          async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            if (state.role !== 'master') {
+              renderFamilyManagement('Master key required.');
+              return;
+            }
+            state.showInactive = !state.showInactive;
+            adminState.showInactiveFamilies = state.showInactive;
+            renderFamilyManagement('');
+            try {
+              const fams = await fetchFamilies();
+              const list = Array.isArray(fams) ? fams : [];
+              state.families = list;
+              assignFamilies(list);
+              if (state.role === 'master') {
+                persistAdminContextSnapshot();
+              }
+              renderFamilyManagement('');
+            } catch (error) {
+              console.warn('fetchFamilies failed', error);
+              const msg = String(error) === 'Error: 403'
+                ? 'Master key required.'
+                : 'Failed to load families.';
+              renderFamilyManagement(msg);
+            }
+          },
+          { capture: true }
+        );
+    } else {
+      familiesPanel.innerHTML =
+        `${note}<p class="muted family-panel-copy">Master access required to manage families.</p>`;
     }
     if (!isMaster) {
       if (familyListTableBody) {
