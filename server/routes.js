@@ -58,11 +58,14 @@ router.get("/api/admin/families", (req, res) => {
   const key = readAdminKey(req);
   if (key !== process.env.MASTER_ADMIN_KEY) return res.sendStatus(403);
 
-  const status = (req.query.status || "active").toString().toLowerCase();
-  const normalized = status === "active" || status === "inactive" ? status : "";
+  const status = (req.query.status || "").toString().toLowerCase();
   const rows = db
-    .prepare(`SELECT * FROM family WHERE (@s = '' OR status = @s) ORDER BY created_at DESC`)
-    .all({ s: normalized });
+    .prepare(`
+      SELECT * FROM family
+      WHERE (? = '' OR status = ?)
+      ORDER BY created_at DESC
+    `)
+    .all(status, status);
   res.json(rows);
 });
 
