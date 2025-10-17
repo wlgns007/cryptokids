@@ -86,7 +86,7 @@ router.patch("/api/families/:id", express.json(), (req, res) => {
 });
 
 // PUBLIC: self-register a new family
-router.post("/api/families/self-register", async (req, res) => {
+router.post(["/api/families/self-register", "/api/admin/families/self-register"], async (req, res) => {
   const { familyName, adminName, email, adminKey } = req.body || {};
   if (!familyName?.trim() || !email?.trim() || !adminKey?.trim()) {
     return res.status(400).json({ error: "familyName, email and adminKey are required" });
@@ -126,48 +126,54 @@ router.post("/api/families/self-register", async (req, res) => {
 });
 
 // PUBLIC: forgot admin key (lookup by email)
-router.post("/api/families/forgot-admin-key", async (req, res) => {
-  const { email } = req.body || {};
-  if (!email?.trim()) return res.status(400).json({ error: "email required" });
-  const row = db.prepare(`SELECT name, admin_key FROM "family" WHERE lower(email) = lower(?)`).get(email.trim());
-  // respond 200 regardless, to avoid probing emails
-  if (!row?.admin_key) return res.json({ ok: true });
+router.post(
+  ["/api/families/forgot-admin-key", "/api/admin/families/forgot-admin-key"],
+  async (req, res) => {
+    const { email } = req.body || {};
+    if (!email?.trim()) return res.status(400).json({ error: "email required" });
+    const row = db.prepare(`SELECT name, admin_key FROM "family" WHERE lower(email) = lower(?)`).get(email.trim());
+    // respond 200 regardless, to avoid probing emails
+    if (!row?.admin_key) return res.json({ ok: true });
 
-  try {
-    await sendMail(
-      email.trim(),
-      "CleverKids — Your admin key",
-      `<p>Your family "${row.name}" admin key:</p><p><code>${row.admin_key}</code></p>`
-    );
-  } catch (e) {
-    console.warn("[email] forgot-admin-key mail failed", e);
+    try {
+      await sendMail(
+        email.trim(),
+        "CleverKids — Your admin key",
+        `<p>Your family "${row.name}" admin key:</p><p><code>${row.admin_key}</code></p>`
+      );
+    } catch (e) {
+      console.warn("[email] forgot-admin-key mail failed", e);
+    }
+    res.json({ ok: true });
   }
-  res.json({ ok: true });
-});
+);
 
 // List active master tasks not yet adopted by a family
-router.get("/api/families/:familyId/master-tasks/available", (req, res) => {
-  const { familyId } = req.params;
-  const ctx = resolveAdminContext(db, readAdminKey(req));
-  if (ctx.role === "none") return res.status(403).json({ error: "forbidden" });
-  if (ctx.role === "family" && ctx.familyId !== familyId) {
-    return res.status(403).json({ error: "forbidden" });
+router.get(
+  ["/api/families/:familyId/master-tasks/available", "/api/admin/families/:familyId/master-tasks/available"],
+  (req, res) => {
+    const { familyId } = req.params;
+    const ctx = resolveAdminContext(db, readAdminKey(req));
+    if (ctx.role === "none") return res.status(403).json({ error: "forbidden" });
+    if (ctx.role === "family" && ctx.familyId !== familyId) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT mt.id, mt.title, mt.description, mt.base_points AS points, mt.icon, mt.youtube_url
+           FROM master_task mt
+          WHERE mt.status = 'active'
+            AND NOT EXISTS (
+              SELECT 1 FROM task t WHERE t.family_id = ? AND t.master_task_id = mt.id
+            )
+          ORDER BY mt.created_at DESC`
+      )
+      .all(familyId);
+
+    res.json(rows);
   }
-
-  const rows = db
-    .prepare(
-      `SELECT mt.id, mt.title, mt.description, mt.base_points AS points, mt.icon, mt.youtube_url
-         FROM master_task mt
-        WHERE mt.status = 'active'
-          AND NOT EXISTS (
-            SELECT 1 FROM task t WHERE t.family_id = ? AND t.master_task_id = mt.id
-          )
-        ORDER BY mt.created_at DESC`
-    )
-    .all(familyId);
-
-  res.json(rows);
-});
+);
 
 // Create a family task from a master template
 router.post("/api/families/:familyId/tasks/from-master", express.json(), (req, res) => {

@@ -363,6 +363,28 @@ app.use(express.urlencoded({ extended: false }));
 app.use("/api", ledgerRoutes);
 app.use(coreRoutes);
 
+app.get("/api/admin/whoami", (req, res) => {
+  const key = readAdminKey(req) || "";
+  if (!key) {
+    res.status(401).json({ error: "invalid" });
+    return;
+  }
+  const ctx = resolveAdminContext(db, key);
+  if (!ctx || ctx.role === "none") {
+    res.status(401).json({ error: "invalid" });
+    return;
+  }
+  if (ctx.role === "master") {
+    res.json({ role: "master" });
+    return;
+  }
+  if (ctx.role === "family" && ctx.familyId) {
+    res.json({ role: "family", familyId: ctx.familyId });
+    return;
+  }
+  res.json({ role: ctx.role ?? "none" });
+});
+
 app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const statusParam = (req.query?.status || "").toString().trim().toLowerCase();
   const status = statusParam === "active" || statusParam === "inactive" ? statusParam : null;
@@ -380,7 +402,34 @@ app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   res.json(rows);
 });
 
-app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
+app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "family id required" });
+    return;
+  }
+  if (id.toLowerCase() === "default") {
+    res.status(400).json({ error: "default family is reserved" });
+    return;
+  }
+  if (req.auth?.role === "family" && req.auth.familyId !== id) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  if (req.auth?.role !== "master" && req.auth?.role !== "family") {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  const row = selectFamilyByIdStmt.get(id);
+  if (!row) {
+    res.status(404).json({ error: "family not found" });
+    return;
+  }
+  const { admin_key, ...rest } = row;
+  res.json(rest);
+});
+
+app.post(["/api/families", "/api/admin/families"], authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
   const name = (body.name ?? "").toString().trim();
   if (!name) {
@@ -427,7 +476,11 @@ app.post("/api/families", authenticateAdmin, requireMaster, (req, res) => {
   res.status(201).json({ id, name, email: email || null, adminKey });
 });
 
-app.post("/api/families/:id/rotate-key", authenticateAdmin, requireMaster, (req, res) => {
+app.post(
+  ["/api/families/:id/rotate-key", "/api/admin/families/:id/rotate-key"],
+  authenticateAdmin,
+  requireMaster,
+  (req, res) => {
   const id = (req.params?.id ?? "").toString().trim();
   if (!id) {
     res.status(404).json({ error: "not found" });
@@ -444,9 +497,10 @@ app.post("/api/families/:id/rotate-key", authenticateAdmin, requireMaster, (req,
   const updated_at = new Date().toISOString();
   updateFamilyAdminKeyStmt.run({ id, admin_key: adminKey, updated_at });
   res.json({ id, adminKey });
-});
+  }
+);
 
-app.patch("/api/families/:id", authenticateAdmin, requireMaster, (req, res) => {
+app.patch(["/api/families/:id", "/api/admin/families/:id"], authenticateAdmin, requireMaster, (req, res) => {
   const id = (req.params?.id ?? "").toString().trim();
   if (!id) {
     res.status(400).json({ error: "family id required" });

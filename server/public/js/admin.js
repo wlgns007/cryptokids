@@ -7,7 +7,9 @@ import { renderHeader } from './header.js';
     activeTab: 'templates',
     adminKey: '',
     families: [],
-    showInactive: false
+    showInactive: false,
+    isMaster: false,
+    familyId: null
   };
 
   if (typeof document !== 'undefined' && document.title) {
@@ -422,10 +424,10 @@ function initAdmin() {
       adminState.showInactiveFamilies = !!state.showInactive;
       renderFamilyManagement();
       fetchFamilies()
-        .then((fams) => {
-          const list = Array.isArray(fams) ? fams : [];
-          state.families = list;
-          assignFamilies(list);
+        .then((list) => {
+          const families = Array.isArray(list) ? list : [];
+          state.families = families;
+          assignFamilies(families);
           if (adminState.role === 'master') {
             persistAdminContextSnapshot();
           }
@@ -433,7 +435,10 @@ function initAdmin() {
         })
         .catch((error) => {
           console.warn('fetchFamilies failed', error);
-          renderFamilyManagement();
+          state.families = [];
+          assignFamilies([]);
+          const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+          renderFamilyManagement(message);
         });
     } else {
       renderMasterTemplates();
@@ -466,7 +471,6 @@ function initAdmin() {
     const templatesTab = document.getElementById('tabTemplates');
     familiesTab?.addEventListener('click', () => setActiveTab('families'));
     templatesTab?.addEventListener('click', () => setActiveTab('templates'));
-    setActiveTab(state.activeTab || 'templates');
   }
 
   if (document.readyState === 'loading') {
@@ -1239,6 +1243,8 @@ function initAdmin() {
   function clearAdminContext() {
     adminState.role = null;
     adminState.familyId = null;
+    state.isMaster = false;
+    state.familyId = null;
     assignFamilies([]);
     adminState.currentFamilyId = null;
     adminState.masterView = 'templates';
@@ -1277,12 +1283,14 @@ function initAdmin() {
       if (adminState.role !== 'master') {
         adminState.showInactiveFamilies = false;
       }
+      state.isMaster = adminState.role === 'master';
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'masterView')) {
       adminState.masterView = partial.masterView === 'families' ? 'families' : 'templates';
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
       adminState.familyId = normalizeScopeId(partial.family_id);
+      state.familyId = adminState.familyId;
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'showInactiveFamilies')) {
       adminState.showInactiveFamilies = !!partial.showInactiveFamilies;
@@ -1558,14 +1566,34 @@ function initAdmin() {
     }
   }
 
-  async function adminGET(url) {
-    return fetch(url, {
-      headers: { 'X-Admin-Key': state.adminKey || '' },
+  async function adminGET(path) {
+    let storedKey = '';
+    try {
+      storedKey = window.localStorage?.getItem(ADMIN_KEY_STORAGE) || '';
+    } catch {
+      storedKey = '';
+    }
+    const key = state.adminKey || storedKey || getAdminKey() || '';
+    const res = await fetch(path, {
+      headers: { 'X-Admin-Key': key },
       credentials: 'same-origin'
-    }).then((response) => {
-      if (!response.ok) throw new Error(`${response.status}`);
-      return response.json();
     });
+    if (!res.ok) {
+      throw new Error(String(res.status));
+    }
+    return res.json();
+  }
+
+  async function refreshAdminAuth() {
+    try {
+      const me = await adminGET('/api/admin/whoami');
+      state.isMaster = me.role === 'master';
+      const incomingFamilyId = me.familyId ?? me.family_id ?? null;
+      state.familyId = incomingFamilyId ?? state.familyId ?? null;
+    } catch {
+      state.isMaster = false;
+      state.familyId = null;
+    }
   }
 
   async function fetchFamilies() {
@@ -1610,7 +1638,7 @@ function initAdmin() {
   async function updateFamily(id, patch) {
     if (!id) throw new Error('Family ID required');
     const payload = patch && typeof patch === 'object' ? patch : {};
-    return apiFetch(`/api/families/${encodeURIComponent(id)}`, {
+    return apiFetch(`/api/admin/families/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1620,7 +1648,8 @@ function initAdmin() {
 
   async function deleteFamily(id) {
     if (!id) throw new Error('Family ID required');
-    return apiFetch(`/api/families/${encodeURIComponent(id)}`, {
+    const qs = new URLSearchParams({ hard: 'true' }).toString();
+    return apiFetch(`/api/admin/families/${encodeURIComponent(id)}?${qs}`, {
       method: 'DELETE',
       skipScope: true
     });
@@ -1803,8 +1832,7 @@ function initAdmin() {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      const previous = state.showInactive;
-      state.showInactive = !previous;
+      state.showInactive = !state.showInactive;
       adminState.showInactiveFamilies = state.showInactive;
       try {
         const fams = await fetchFamilies();
@@ -1814,38 +1842,40 @@ function initAdmin() {
         if (adminState.role === 'master') {
           persistAdminContextSnapshot();
         }
+        renderFamilyManagement();
       } catch (error) {
         console.warn('fetchFamilies failed', error);
-        state.showInactive = previous;
-        adminState.showInactiveFamilies = previous;
+        const message = String(error) === 'Error: 403' ? 'Master key required.' : 'Failed to load families.';
+        renderFamilyManagement(message);
       }
-      renderFamilyManagement();
     });
   }
 
-  function renderFamilyManagement() {
+  function renderFamilyManagement(message) {
     if (!familyManagementPanel) return;
-    const isMaster = adminState.role === 'master';
+    const isMaster = state.isMaster || adminState.role === 'master';
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
     const familiesPanel = document.getElementById('families-panel');
     if (familiesPanel) {
       familiesPanel.innerHTML = '';
       if (isMaster) {
+        const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
         familiesPanel.innerHTML = `
           <div class="flex items-center mb-3">
-            <div class="text-sm text-slate-500">Create or update families and control their status.</div>
+            <div class="text-sm text-slate-500">Master admins can review all families from here.</div>
             <button id="familiesToggle" type="button" class="ml-auto px-3 py-1 rounded border">
               ${showInactive ? 'View active families' : 'View inactive families'}
             </button>
           </div>
-          <div id="familiesTable"></div>
+          ${note}
         `;
         const toggleButton = familiesPanel.querySelector('#familiesToggle');
         mountFamiliesToggle(toggleButton);
       } else {
+        const note = message ? `<div class="text-sm text-rose-600 mb-2">${message}</div>` : '';
         familiesPanel.innerHTML =
-          '<p class="muted family-panel-copy">Master access required to manage families.</p>';
+          `${note}<p class="muted family-panel-copy">Master access required to manage families.</p>`;
       }
     }
     if (!isMaster) {
@@ -2192,6 +2222,8 @@ details.member-fold .summary-value {
       const value = (keyInput?.value || '').trim();
       const persisted = setAdminKey(value);
       toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
+      await refreshAdminAuth();
+      setActiveTab(state.activeTab || 'templates');
       if (value) {
         const ok = await refreshAdminContext({ showToastOnError: true });
         if (ok) {
@@ -2215,6 +2247,8 @@ details.member-fold .summary-value {
     } else {
       updateWhoamiBanner();
     }
+    await refreshAdminAuth();
+    setActiveTab(state.activeTab || 'templates');
     if (saved) {
       const ok = await refreshAdminContext({ silent: true });
       if (ok) {
@@ -2348,7 +2382,7 @@ details.member-fold .summary-value {
       familyCreateSubmitButton.textContent = 'Creating...';
     }
     try {
-      const { res, body } = await adminFetch('/api/families', {
+      const { res, body } = await adminFetch('/api/admin/families', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -2499,7 +2533,7 @@ details.member-fold .summary-value {
   async function loadAvailableTaskTemplates() {
     const familyId = requireFamilyId();
     const list = await apiFetch(
-      `/api/families/${encodeURIComponent(familyId)}/master-tasks/available`
+      `/api/admin/families/${encodeURIComponent(familyId)}/master-tasks/available`
     );
     return Array.isArray(list) ? list : [];
   }
@@ -2530,13 +2564,11 @@ details.member-fold .summary-value {
   async function fetchFamilyDetail(familyId) {
     if (!familyId) return null;
     try {
-      const params = new URLSearchParams({ id: familyId }).toString();
-      const { res, body } = await adminFetch(`/api/families?${params}`, { skipScope: true });
+      const { res, body } = await adminFetch(`/api/admin/families/${encodeURIComponent(familyId)}`, {
+        skipScope: true
+      });
       if (!res.ok) return null;
-      if (Array.isArray(body)) {
-        return body.find((entry) => entry && entry.id === familyId) || null;
-      }
-      if (body && typeof body === 'object' && body.id === familyId) {
+      if (body && typeof body === 'object') {
         return body;
       }
     } catch (error) {
@@ -2651,7 +2683,7 @@ details.member-fold .summary-value {
     const msg = document.querySelector('#nf-msg');
     if (msg) msg.textContent = 'Creating...';
     try {
-      const res = await fetch('/api/families/self-register', {
+      const res = await fetch('/api/admin/families/self-register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ familyName, adminName, email, adminKey })
@@ -2674,7 +2706,7 @@ details.member-fold .summary-value {
     const msg = document.querySelector('#fk-msg');
     if (msg) msg.textContent = 'Sending...';
     try {
-      const res = await fetch('/api/families/forgot-admin-key', {
+      const res = await fetch('/api/admin/families/forgot-admin-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
