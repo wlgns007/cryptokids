@@ -4,9 +4,7 @@ import db from "./db.js";
 import { sendMail } from "./email.js";
 import { makeFamilyResolver } from "./lib/familyResolver.js";
 import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
-import whoAmI from "./routes/adminWhoAmI.js";
 import { listFamilies } from "./routes/families.js";
-import adminLogin from "./routes/adminLogin.js";
 import { listActivity } from "./routes/activity.js";
 import { listMembers } from "./routes/members.js";
 
@@ -166,11 +164,6 @@ function hardDeleteFamily(id) {
 
   return { status: 500, body: { error: "delete failed" } };
 }
-
-router.post("/admin/login", adminLogin);
-
-// whoami
-router.get("/admin/whoami", whoAmI);
 
 router.get("/admin/families/self", requireFamilyScope, (req, res) => {
   const { id, key, name, status } = req.family;

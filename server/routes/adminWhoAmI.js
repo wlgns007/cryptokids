@@ -1,12 +1,11 @@
 export function whoAmI(req, res) {
-  const fam = req.family || null;
-  const role = req.admin?.role || req.auth?.role || 'unknown';
+  const role = req.admin?.role || "none";
   res.json({
     role,
-    family_uuid: fam?.id ?? null,
-    family_key: fam?.key ?? null,
-    family_name: fam?.name ?? null,
-    family_status: fam?.status ?? null,
+    family_uuid: req.family?.id ?? null,
+    family_key: req.family?.key ?? null,
+    family_name: req.family?.name ?? null,
+    family_status: req.family?.status ?? null
   });
 }
 
