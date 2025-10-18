@@ -4,10 +4,27 @@ import {
   setFamilyScope,
   clearFamilyScope,
   isUUID,
-  setAdminKeyTemp,
-  clearAdminKeyTemp,
+  setAdminKeyTemp as persistTempAdminKey,
+  clearAdminKeyTemp as dropPersistedTempAdminKey,
   getAdminKeyTemp
 } from './scopeStore.js';
+
+let tempAdminKey = getAdminKeyTemp() || null;
+
+function setAdminKeyTemp(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  tempAdminKey = normalized || null;
+  if (normalized) {
+    persistTempAdminKey(normalized);
+  } else {
+    dropPersistedTempAdminKey();
+  }
+}
+
+function clearAdminKeyTemp() {
+  tempAdminKey = null;
+  dropPersistedTempAdminKey();
+}
 
 const persistFamilyScope = setFamilyScope;
 const resetStoredScope = clearFamilyScope;
@@ -121,14 +138,10 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
         if (scope?.uuid && isUUID(scope.uuid) && !headers.has('x-family')) {
           headers.set('x-family', scope.uuid);
         }
-        const tmpKey = getAdminKeyTemp();
-        if (tmpKey && !headers.has('x-admin-key')) {
-          headers.set('x-admin-key', tmpKey);
+        if (tempAdminKey && !headers.has('x-admin-key')) {
+          headers.set('x-admin-key', tempAdminKey);
         }
-        const nextInit = { ...init, headers };
-        if (!('credentials' in nextInit)) {
-          nextInit.credentials = 'same-origin';
-        }
+        const nextInit = { ...init, headers, credentials: 'same-origin' };
         if (request) {
           return orig(new Request(request, nextInit));
         }
