@@ -47,6 +47,20 @@ const schemaStatements = [
     status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS master_admin (
+    id TEXT PRIMARY KEY,
+    admin_key TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS family_admin (
+    id TEXT PRIMARY KEY,
+    family_id TEXT NOT NULL,
+    admin_key TEXT UNIQUE NOT NULL,
+    family_role TEXT NOT NULL DEFAULT 'owner',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (family_id) REFERENCES family(id) ON DELETE CASCADE
   )`
 ];
 
@@ -59,6 +73,56 @@ try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_email" ON "family"(email)');
 } catch (err) {
   console.warn('[db] unable to ensure family indexes', err?.message || err);
+}
+
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_master_admin_key" ON "master_admin"(admin_key)');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_master_admin_id" ON "master_admin"(id)');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_family" ON "family_admin"(family_id)');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS "idx_family_admin_admin_key" ON "family_admin"(admin_key)');
+} catch (err) {
+  console.warn('[db] unable to ensure admin indexes', err?.message || err);
+}
+
+try {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS "trg_family_admin_insert"
+    AFTER INSERT ON "family"
+    WHEN NEW.admin_key IS NOT NULL
+    BEGIN
+      INSERT INTO "family_admin"(id, family_id, admin_key, family_role, created_at, updated_at)
+      VALUES (NEW.id, NEW.id, NEW.admin_key, 'owner', datetime('now'), datetime('now'))
+      ON CONFLICT(family_id) DO UPDATE SET
+        admin_key = excluded.admin_key,
+        updated_at = datetime('now');
+    END;
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS "trg_family_admin_update"
+    AFTER UPDATE OF admin_key ON "family"
+    BEGIN
+      DELETE FROM "family_admin" WHERE family_id = NEW.id;
+      INSERT INTO "family_admin"(id, family_id, admin_key, family_role, created_at, updated_at)
+      SELECT NEW.id, NEW.id, NEW.admin_key, 'owner', datetime('now'), datetime('now')
+      WHERE NEW.admin_key IS NOT NULL;
+    END;
+  `);
+} catch (err) {
+  console.warn('[db] unable to ensure family_admin triggers', err?.message || err);
+}
+
+try {
+  db.exec(`
+    INSERT INTO "family_admin"(id, family_id, admin_key, family_role, created_at, updated_at)
+    SELECT f.id, f.id, f.admin_key, 'owner', COALESCE(f.created_at, datetime('now')), datetime('now')
+      FROM "family" f
+     WHERE f.admin_key IS NOT NULL
+    ON CONFLICT(family_id) DO UPDATE SET
+      admin_key = excluded.admin_key,
+      updated_at = datetime('now');
+  `);
+} catch (err) {
+  console.warn('[db] unable to backfill family_admin', err?.message || err);
 }
 
 // ---- Family table migration (email + admin_key) ----
@@ -136,6 +200,19 @@ if (ADMIN_KEY_ENV) {
     `).run(ADMIN_KEY_ENV);
   } catch (err) {
     console.warn('[db] unable to backfill default admin key', err?.message || err);
+  }
+}
+
+const MASTER_ADMIN_KEY_ENV = process.env.MASTER_ADMIN_KEY?.trim();
+if (MASTER_ADMIN_KEY_ENV) {
+  try {
+    db.prepare(`
+      INSERT INTO "master_admin"(id, admin_key, created_at)
+      VALUES ('master', ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET admin_key = excluded.admin_key
+    `).run(MASTER_ADMIN_KEY_ENV);
+  } catch (err) {
+    console.warn('[db] unable to ensure master admin key', err?.message || err);
   }
 }
 
@@ -542,8 +619,32 @@ export function resolveAdminContext(database, adminKey) {
   const key = typeof adminKey === "string" ? adminKey.trim() : "";
   if (!key) return { role: "none", familyId: null, family_id: null };
 
+  try {
+    const masterRow = database
+      .prepare(`SELECT id FROM "master_admin" WHERE admin_key = ? LIMIT 1`)
+      .get(key);
+    if (masterRow?.id) {
+      return { role: "master", familyId: null, family_id: null };
+    }
+  } catch (err) {
+    console.warn('[db] master_admin lookup failed', err?.message || err);
+  }
+
   const MASTER = process.env.MASTER_ADMIN_KEY?.trim();
   if (MASTER && key === MASTER) return { role: "master", familyId: null, family_id: null };
+
+  try {
+    const adminRow = database
+      .prepare(
+        `SELECT family_id AS familyId FROM "family_admin" WHERE admin_key = ? LIMIT 1`
+      )
+      .get(key);
+    if (adminRow?.familyId) {
+      return { role: "family", familyId: adminRow.familyId, family_id: adminRow.familyId };
+    }
+  } catch (err) {
+    console.warn('[db] family_admin lookup failed', err?.message || err);
+  }
 
   const row = database.prepare(`SELECT id FROM "family" WHERE admin_key = ?`).get(key);
   if (row?.id) return { role: "family", familyId: row.id, family_id: row.id };

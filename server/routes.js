@@ -1,29 +1,12 @@
 import express from "express";
 import { randomUUID } from "node:crypto";
 import db from "./db.js";
-import { readAdminKey } from "./auth.js";
+import { createAdminAuth } from "./middleware/adminAuth.js";
 import { sendMail } from "./email.js";
 
 export const router = express.Router();
 
-function adminAuth(req, _res, next) {
-  const key = readAdminKey(req);
-  if (!key) {
-    req.auth = { role: null };
-    return next();
-  }
-  if (key === process.env.MASTER_ADMIN_KEY) {
-    req.auth = { role: "master" };
-    return next();
-  }
-  const row = db.prepare("SELECT id, name FROM family WHERE admin_key = ?").get(key);
-  req.auth = row
-    ? { role: "family", familyId: String(row.id), familyName: row.name ? String(row.name) : "" }
-    : { role: null };
-  next();
-}
-
-router.use(adminAuth);
+router.use(createAdminAuth(db));
 
 function allowFamilyOrMaster(req, familyId) {
   return (
@@ -32,12 +15,120 @@ function allowFamilyOrMaster(req, familyId) {
   );
 }
 
+function attemptFamilyDelete(id, enforceForeignKeys) {
+  const normalized = String(id ?? "").trim();
+  if (!normalized) {
+    return { status: 400, body: { error: "invalid id" } };
+  }
+  if (normalized.toLowerCase() === "default") {
+    return { status: 400, body: { error: "cannot delete default family" } };
+  }
+
+  const begin = enforceForeignKeys ? "PRAGMA foreign_keys=ON; BEGIN" : "PRAGMA foreign_keys=OFF; BEGIN";
+  const commit = enforceForeignKeys ? "COMMIT" : "COMMIT; PRAGMA foreign_keys=ON;";
+  const rollback = enforceForeignKeys ? "ROLLBACK" : "ROLLBACK; PRAGMA foreign_keys=ON;";
+
+  db.exec(begin);
+  try {
+    const removed = {
+      family: 0,
+      members: 0,
+      tasks: 0,
+      ledger: 0,
+      member_task: 0
+    };
+
+    db.prepare(`DELETE FROM holds   WHERE family_id = ?`).run(normalized);
+    db.prepare(`DELETE FROM history WHERE family_id = ?`).run(normalized);
+    db.prepare(`DELETE FROM reward  WHERE family_id = ?`).run(normalized);
+
+    try {
+      const ledgerColumns = db.prepare("PRAGMA table_info('ledger')").all().map((col) => col.name);
+      const ledgerMemberColumn = ledgerColumns.includes("member_id")
+        ? "member_id"
+        : ledgerColumns.includes("user_id")
+          ? "user_id"
+          : null;
+      if (ledgerMemberColumn) {
+        const ledgerInfo = db
+          .prepare(
+            `DELETE FROM ledger WHERE family_id = ? OR ${ledgerMemberColumn} IN (SELECT id FROM member WHERE family_id = ?)`
+          )
+          .run(normalized, normalized);
+        removed.ledger = ledgerInfo?.changes ? Number(ledgerInfo.changes) : 0;
+      }
+    } catch (err) {
+      console.warn('[admin] unable to clean ledger entries for family', normalized, err?.message || err);
+    }
+
+    try {
+      const memberTaskColumns = db.prepare("PRAGMA table_info('member_task')").all().map((col) => col.name);
+      const memberTaskMemberColumn = memberTaskColumns.includes("member_id")
+        ? "member_id"
+        : memberTaskColumns.includes("memberId")
+          ? "memberId"
+          : null;
+      const memberTaskTaskColumn = memberTaskColumns.includes("task_id")
+        ? "task_id"
+        : memberTaskColumns.includes("taskId")
+          ? "taskId"
+          : null;
+      if (memberTaskMemberColumn && memberTaskTaskColumn) {
+        const memberTaskInfo = db
+          .prepare(
+            `DELETE FROM member_task
+              WHERE ${memberTaskMemberColumn} IN (SELECT id FROM member WHERE family_id = ?)
+                 OR ${memberTaskTaskColumn} IN (SELECT id FROM task WHERE family_id = ?)`
+          )
+          .run(normalized, normalized);
+        removed.member_task = memberTaskInfo?.changes ? Number(memberTaskInfo.changes) : 0;
+      }
+    } catch (err) {
+      console.warn('[admin] unable to clean member_task entries for family', normalized, err?.message || err);
+    }
+
+    const taskInfo = db.prepare(`DELETE FROM task WHERE family_id = ?`).run(normalized);
+    removed.tasks = taskInfo?.changes ? Number(taskInfo.changes) : 0;
+    const memberInfo = db.prepare(`DELETE FROM member WHERE family_id = ?`).run(normalized);
+    removed.members = memberInfo?.changes ? Number(memberInfo.changes) : 0;
+    const info = db.prepare(`DELETE FROM family WHERE id = ?`).run(normalized);
+    removed.family = info?.changes ? Number(info.changes) : 0;
+    db.exec(commit);
+    if (!info.changes) {
+      return { status: 404, body: { error: "not found" } };
+    }
+    return { status: 200, body: { removed } };
+  } catch (err) {
+    db.exec(rollback);
+    return null;
+  }
+}
+
+function hardDeleteFamily(id) {
+  const normalized = String(id ?? "").trim();
+  if (!normalized) {
+    return { status: 400, body: { error: "invalid id" } };
+  }
+  if (normalized.toLowerCase() === "default") {
+    return { status: 400, body: { error: "cannot delete default family" } };
+  }
+
+  const first = attemptFamilyDelete(normalized, true);
+  if (first) return first;
+
+  const fallback = attemptFamilyDelete(normalized, false);
+  if (fallback) return fallback;
+
+  return { status: 500, body: { error: "delete failed" } };
+}
+
 // whoami
 router.get("/api/admin/whoami", (req, res) => {
   if (!req.auth?.role) return res.status(401).json({ error: "invalid" });
   const out = { role: req.auth.role };
   if (req.auth.role === "family") {
     out.familyId = req.auth.familyId;
+    if (req.auth.familyKey) out.familyKey = req.auth.familyKey;
     if (req.auth.familyName) out.familyName = req.auth.familyName;
   }
   res.json(out);
@@ -73,50 +164,50 @@ router.get("/api/admin/families", (req, res) => {
 });
 
 router.get("/api/admin/families/:familyId/members", (req, res) => {
-  const { familyId } = req.params;
-  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const fid = String(req.params.familyId ?? "");
+  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
   const rows = db
     .prepare(
       "SELECT id, name, nickname, balance, user_id, created_at, updated_at FROM member WHERE family_id = ? ORDER BY created_at ASC"
     )
-    .all(familyId);
+    .all(fid);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/tasks", (req, res) => {
-  const { familyId } = req.params;
-  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const fid = String(req.params.familyId ?? "");
+  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(familyId);
+    .all(fid);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/rewards", (req, res) => {
-  const { familyId } = req.params;
-  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const fid = String(req.params.familyId ?? "");
+  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(familyId);
+    .all(fid);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/holds", (req, res) => {
-  const { familyId } = req.params;
-  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const fid = String(req.params.familyId ?? "");
+  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward_hold WHERE family_id = ? ORDER BY created_at DESC")
-    .all(familyId);
+    .all(fid);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/activity", (req, res) => {
-  const { familyId } = req.params;
-  if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
+  const fid = String(req.params.familyId ?? "");
+  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
   const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
   const rows = db
     .prepare("SELECT * FROM activity WHERE family_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(familyId, limit);
+    .all(fid, limit);
   res.json(rows);
 });
 
@@ -125,6 +216,14 @@ router.patch("/api/admin/families/:id", express.json(), (req, res) => {
 
   const { id } = req.params;
   const body = req.body || {};
+  const normalizedStatus = typeof body.status === "string" ? body.status.trim().toLowerCase() : "";
+  const hardMode = body.hard === true || body.hard === "true";
+
+  if (hardMode && normalizedStatus === "deleted") {
+    const result = hardDeleteFamily(id);
+    return res.status(result.status).json(result.body);
+  }
+
   const fields = [];
   const args = [];
 
@@ -138,9 +237,9 @@ router.patch("/api/admin/families/:id", express.json(), (req, res) => {
     fields.push("email = ?");
     args.push(email || null);
   }
-  if (typeof body.status === "string" && /^(active|inactive)$/i.test(body.status)) {
+  if (normalizedStatus && /^(active|inactive|deleted)$/i.test(normalizedStatus)) {
     fields.push("status = ?");
-    args.push(body.status.toLowerCase());
+    args.push(normalizedStatus);
   }
 
   if (!fields.length) return res.status(400).json({ error: "no fields to update" });
@@ -469,54 +568,18 @@ router.post("/api/admin/families/:familyId/rewards", (req, res) => {
   }
 });
 
-router.delete("/api/admin/families/:id", (req, res, next) => {
+router.delete("/api/admin/families/:id", (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
-  const hardMode = (req.query?.hard || "").toString().trim().toLowerCase();
-  if (hardMode === "true") {
-    return next();
+  const hardMode = String(req.query?.hard ?? "").trim().toLowerCase() === "true";
+  const result = hardDeleteFamily(req.params?.id);
+  if (hardMode) {
+    return res.status(result.status).json(result.body);
   }
-
-  const id = (req.params?.id || "").toString().trim();
-  if (!id) return res.status(400).json({ error: "invalid id" });
-  if (id.toLowerCase() === "default") {
-    return res.status(400).json({ error: "cannot delete default family" });
-  }
-
-  db.exec("PRAGMA foreign_keys=ON; BEGIN");
-  try {
-    db.prepare(`DELETE FROM holds   WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM history WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM reward  WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM task    WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM member  WHERE family_id = ?`).run(id);
-    const info = db.prepare(`DELETE FROM family WHERE id = ?`).run(id);
-    db.exec("COMMIT");
-    if (!info.changes) {
-      return res.status(404).json({ error: "not found" });
-    }
+  if (result.status === 200) {
     return res.json({ ok: true });
-  } catch (err) {
-    db.exec("ROLLBACK");
   }
-
-  try {
-    db.exec("PRAGMA foreign_keys=OFF; BEGIN");
-    db.prepare(`DELETE FROM holds   WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM history WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM reward  WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM task    WHERE family_id = ?`).run(id);
-    db.prepare(`DELETE FROM member  WHERE family_id = ?`).run(id);
-    const info = db.prepare(`DELETE FROM family WHERE id = ?`).run(id);
-    db.exec("COMMIT; PRAGMA foreign_keys=ON;");
-    if (!info.changes) {
-      return res.status(404).json({ error: "not found" });
-    }
-    return res.json({ ok: true });
-  } catch (err) {
-    db.exec("ROLLBACK; PRAGMA foreign_keys=ON;");
-    return res.status(500).json({ error: "delete failed" });
-  }
+  return res.status(result.status).json(result.body);
 });
 
 // HARD DELETE reward and its dependents (master-only)
