@@ -7,6 +7,7 @@ import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
 import whoAmI from "./routes/adminWhoAmI.js";
 import { listFamilies } from "./routes/families.js";
 import { listActivity } from "./routes/activity.js";
+import { listMembers } from "./routes/members.js";
 
 const router = express.Router();
 const resolveFamily = makeFamilyResolver();
@@ -206,6 +207,8 @@ router.get("/admin/families", (req, res, next) => {
 
   return listFamilies(req, res, next);
 });
+
+router.get("/admin/members", ...listMembers);
 
 router.get("/admin/activity", requireFamilyScope, (req, res) => {
   const fam = req.family;
