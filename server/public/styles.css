@@ -521,6 +521,10 @@
   font: inherit;
 }
 
+.fam-status {
+  min-width: 9.5rem;
+}
+
 .family-form-grid {
   display: grid;
   gap: 12px;
