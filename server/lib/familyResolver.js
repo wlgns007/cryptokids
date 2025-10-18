@@ -48,6 +48,20 @@ export function makeFamilyResolver(database = defaultDb) {
       `)
     : null;
 
+  const byName = database.prepare(`
+    SELECT id,
+           ${
+             shortKeyColumn
+               ? `${shortKeyColumn} AS short_key,`
+               : 'NULL AS short_key,'
+           }
+           name,
+           status
+      FROM ${FAMILY_TABLE}
+     WHERE name = ? COLLATE NOCASE
+     LIMIT 2
+  `);
+
   return function resolveFamily(input) {
     const raw = (input ?? "").trim();
     if (!raw) return null;
@@ -55,6 +69,12 @@ export function makeFamilyResolver(database = defaultDb) {
     let row = byUuid.get(raw);
     if (!row && byKey) {
       row = byKey.get(raw);
+    }
+    if (!row) {
+      const rows = byName.all(raw);
+      if (rows.length === 1) {
+        row = rows[0];
+      }
     }
 
     if (!row) {

@@ -1,4 +1,9 @@
 import { renderHeader } from './header.js';
+import {
+  getFamilyScope,
+  setFamilyScope as persistFamilyScope,
+  clearFamilyScope as resetStoredScope
+} from './scopeStore.js';
 
 (() => {
   'use strict';
@@ -36,6 +41,15 @@ import { renderHeader } from './header.js';
     scopedFamilyName: ''
   };
 
+  if (typeof window !== 'undefined') {
+    const storedScope = getFamilyScope();
+    if (storedScope?.uuid) {
+      state.scopedFamilyId = String(storedScope.uuid);
+      state.scopedFamilyName = storedScope.name ? String(storedScope.name) : '';
+      state.familyKey = storedScope.key ? String(storedScope.key) : '';
+    }
+  }
+
   (function patchFetchForAdmin() {
     if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
     const nativeFetch = window.fetch.bind(window);
@@ -51,6 +65,10 @@ import { renderHeader } from './header.js';
           const headers = new Headers(nextInit.headers || {});
           if (key && !headers.has('x-admin-key')) {
             headers.set('x-admin-key', key);
+          }
+          const scope = getFamilyScope();
+          if (scope?.uuid) {
+            headers.set('x-family', scope.uuid);
           }
           nextInit.headers = headers;
           if (!nextInit.credentials) nextInit.credentials = 'include';
@@ -379,6 +397,7 @@ function initAdmin() {
     masterView: 'templates',
     showInactiveFamilies: false
   };
+  const initialStoredScope = typeof window !== 'undefined' ? getFamilyScope() : null;
   adminState.showInactiveFamilies = !!adminState.showInactiveFamilies;
   state.activeTab = adminState.masterView || 'templates';
   state.showInactive = adminState.showInactiveFamilies;
@@ -401,6 +420,53 @@ function initAdmin() {
       })
       .filter(Boolean);
     state.families = cloneFamilyList(adminState.families);
+  }
+
+  function applyScopeToState(scope) {
+    const uuid = scope?.uuid ? String(scope.uuid) : null;
+    const name = scope?.name ? String(scope.name) : '';
+    const key = scope?.key ? String(scope.key) : '';
+    state.scopedFamilyId = uuid;
+    state.scopedFamilyName = name;
+    state.familyKey = key;
+    if (uuid) {
+      adminState.currentFamilyId = uuid;
+      if (name) adminState.familyName = name;
+      if (key) adminState.familyKey = key;
+    } else {
+      adminState.currentFamilyId = null;
+      if (!state.role || state.role === 'master') {
+        adminState.familyName = '';
+        adminState.familyKey = '';
+      }
+    }
+  }
+
+  if (initialStoredScope?.uuid) {
+    applyScopeToState(initialStoredScope);
+  }
+
+  async function bootstrapScopeFromWhoAmI() {
+    try {
+      const { res, body } = await adminFetch('/api/admin/whoami', { skipScope: true });
+      if (!res.ok) return;
+      const payload = body && typeof body === 'object' ? body : null;
+      if (!payload?.family_uuid) return;
+      const scope = persistFamilyScope({
+        id: payload.family_uuid,
+        key: payload.family_key || null,
+        name: payload.family_name || null,
+        status: payload.family_status || null
+      }) || {
+        uuid: payload.family_uuid,
+        key: payload.family_key || null,
+        name: payload.family_name || null,
+        status: payload.family_status || null
+      };
+      applyScopeToState(scope);
+    } catch (error) {
+      console.warn('bootstrapScopeFromWhoAmI failed', error);
+    }
   }
 
   function persistAdminContextSnapshot() {
@@ -1379,6 +1445,7 @@ function initAdmin() {
     state.familyKey = '';
     state.scopedFamilyId = null;
     state.scopedFamilyName = '';
+    resetStoredScope();
     assignFamilies([]);
     adminState.currentFamilyId = null;
     adminState.masterView = 'templates';
@@ -1809,19 +1876,37 @@ function initAdmin() {
     try {
       const me = await adminGET('/api/admin/whoami');
       const role = typeof me?.role === 'string' ? me.role : null;
-      const rawFamilyId = me?.familyId ?? me?.family_id ?? null;
+      const rawFamilyId =
+        me?.family_uuid ?? me?.familyId ?? me?.family_id ?? null;
       const familyId = rawFamilyId ? String(rawFamilyId) : null;
-      const familyName = typeof me?.familyName === 'string' ? me.familyName : '';
-      const familyKey = typeof me?.familyKey === 'string' ? me.familyKey : '';
+      const familyName = typeof me?.family_name === 'string'
+        ? me.family_name
+        : typeof me?.familyName === 'string'
+          ? me.familyName
+          : '';
+      const familyKey = typeof me?.family_key === 'string'
+        ? me.family_key
+        : typeof me?.familyKey === 'string'
+          ? me.familyKey
+          : '';
+      const familyStatus = typeof me?.family_status === 'string' ? me.family_status : null;
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
       state.familyId = familyId;
       if (role === 'family' && familyId) {
-        state.scopedFamilyId = String(familyId);
-        state.scopedFamilyName = familyName || familyKey || '';
-        state.familyKey = familyKey || '';
-      } else {
-        state.scopedFamilyId = null;
+        const scope = persistFamilyScope({
+          id: familyId,
+          key: familyKey || null,
+          name: familyName || null,
+          status: familyStatus || null
+        }) || {
+          uuid: familyId,
+          key: familyKey || null,
+          name: familyName || null,
+          status: familyStatus || null
+        };
+        applyScopeToState(scope);
+      } else if (!state.scopedFamilyId) {
         state.scopedFamilyName = '';
         state.familyKey = '';
       }
@@ -1842,6 +1927,7 @@ function initAdmin() {
       state.scopedFamilyName = '';
       state.familyKey = '';
       setAdminState({ role: null, family_id: null, familyKey: '', familyName: '' }, { persist: false });
+      resetStoredScope();
     }
     renderRoleBadge();
   };
@@ -2250,9 +2336,18 @@ function initAdmin() {
     const entry = findFamilyEntry(normalized);
     const resolvedName = familyName || entry?.name || '';
     const resolvedKey = familyKey || entry?.family_key || entry?.admin_key || '';
-    state.scopedFamilyId = normalized;
-    state.scopedFamilyName = resolvedName;
-    state.familyKey = resolvedKey ? String(resolvedKey) : '';
+    const scope = persistFamilyScope({
+      id: normalized,
+      key: resolvedKey || null,
+      name: resolvedName || null,
+      status: entry?.status ?? null
+    }) || {
+      uuid: normalized,
+      key: resolvedKey || null,
+      name: resolvedName || null,
+      status: entry?.status ?? null
+    };
+    applyScopeToState(scope);
     if (familyScopeSelect) {
       const options = Array.from(familyScopeSelect.options || []);
       const match = options.find((opt) => normalizeScopeId(opt.value) === normalized);
@@ -2270,9 +2365,8 @@ function initAdmin() {
   }
 
   async function clearScopedFamily() {
-    state.scopedFamilyId = null;
-    state.scopedFamilyName = '';
-    state.familyKey = '';
+    resetStoredScope();
+    applyScopeToState(null);
     if (familyScopeSelect) {
       familyScopeSelect.value = '';
     }
@@ -2869,6 +2963,7 @@ details.member-fold .summary-value {
     } else {
       updateWhoamiBanner();
     }
+    await bootstrapScopeFromWhoAmI();
     await refreshAdminAuth();
     setActiveTab('templates');
     if (saved) {
@@ -3137,10 +3232,11 @@ details.member-fold .summary-value {
       ...(extraHeaders || {})
     };
     mirrorAdminKeyToCookie(key);
+    const storedScope = getFamilyScope();
     if (!skipScope) {
-      const scopeId = state.scopedFamilyId || adminState.currentFamilyId || null;
+      const scopeId = storedScope?.uuid || state.scopedFamilyId || adminState.currentFamilyId || null;
       if (scopeId) {
-        headers['x-act-as-family'] = scopeId;
+        headers['x-family'] = scopeId;
       }
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
@@ -3339,9 +3435,18 @@ details.member-fold .summary-value {
       const payload = await adminGET('/api/admin/whoami');
       const nextState = {
         role: payload.role ?? null,
-        family_id: payload.family_id ?? payload.familyId ?? null,
-        familyKey: typeof payload.familyKey === 'string' ? payload.familyKey : '',
-        familyName: typeof payload.familyName === 'string' ? payload.familyName : ''
+        family_id: payload.family_uuid ?? payload.family_id ?? payload.familyId ?? null,
+        familyKey: typeof payload.family_key === 'string'
+          ? payload.family_key
+          : typeof payload.familyKey === 'string'
+            ? payload.familyKey
+            : '',
+        familyName: typeof payload.family_name === 'string'
+          ? payload.family_name
+          : typeof payload.familyName === 'string'
+            ? payload.familyName
+            : '',
+        familyStatus: payload.family_status ?? null
       };
       if (masterCard) {
         masterCard.hidden = nextState.role !== 'master';
@@ -3378,13 +3483,29 @@ details.member-fold .summary-value {
             nextState.families = [detail];
             nextState.familyKey = nextState.familyKey || detail.family_key || detail.admin_key || '';
             nextState.familyName = nextState.familyName || detail.name || '';
+            nextState.familyStatus = nextState.familyStatus || detail.status || null;
           } else if (Array.isArray(adminState.families)) {
             const existing = adminState.families.find((entry) => entry && entry.id === nextState.family_id);
             if (existing) {
               nextState.families = [existing];
               nextState.familyKey = nextState.familyKey || existing.family_key || existing.admin_key || '';
               nextState.familyName = nextState.familyName || existing.name || '';
+              nextState.familyStatus = nextState.familyStatus || existing.status || null;
             }
+          }
+          if (nextState.currentFamilyId) {
+            const scope = persistFamilyScope({
+              id: nextState.currentFamilyId,
+              key: nextState.familyKey || null,
+              name: nextState.familyName || null,
+              status: nextState.familyStatus || null
+            }) || {
+              uuid: nextState.currentFamilyId,
+              key: nextState.familyKey || null,
+              name: nextState.familyName || null,
+              status: nextState.familyStatus || null
+            };
+            applyScopeToState(scope);
           }
         }
       } else {

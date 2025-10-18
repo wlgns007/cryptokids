@@ -34,7 +34,7 @@ export function createAdminAuth(db) {
 
       const familyRow = safeGet(
         db,
-        `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name
+        `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name, f.status AS family_status
            FROM family_admin fa
            JOIN family f ON f.id = fa.family_id
           WHERE fa.admin_key = ?
@@ -43,7 +43,7 @@ export function createAdminAuth(db) {
       ) ||
         safeGet(
           db,
-          `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name
+          `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name, f.status AS family_status
              FROM family f
             WHERE f.admin_key = ?
             LIMIT 1`,
@@ -56,7 +56,8 @@ export function createAdminAuth(db) {
           adminKey: key,
           familyId: String(familyRow.family_uuid),
           familyKey: familyRow.family_key || null,
-          familyName: familyRow.family_name || ""
+          familyName: familyRow.family_name || "",
+          familyStatus: familyRow.family_status || null
         };
         return next();
       }
