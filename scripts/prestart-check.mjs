@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 
 const DEFAULT_FAMILY_ID = "default";
-const JANG_FAMILY_ID = "JangJ6494";
-const JANG_FAMILY_NAME = "Jang";
-const JANG_ADMIN_KEY = "Mamapapa";
 const MASTER_ADMIN_KEY_RAW = process.env.MASTER_ADMIN_KEY;
 const MASTER_ADMIN_KEY = (MASTER_ADMIN_KEY_RAW || "").trim();
 const DEFAULT_FAMILY_ADMIN_KEY_RAW = process.env.ADMIN_KEY;
@@ -15,6 +12,30 @@ console.log("[prestart] DB checks done.");
 
 function quoteIdentifier(id) {
   return `"${String(id).replaceAll('"', '""')}"`;
+}
+
+try {
+  db.exec("BEGIN");
+  const familyColumns = db
+    .prepare("PRAGMA table_info(\"family\")")
+    .all()
+    .map((column) => column.name.toLowerCase());
+  const shortKeyColumns = [];
+  if (familyColumns.includes("key")) shortKeyColumns.push("key");
+  if (familyColumns.includes("family_key")) shortKeyColumns.push("family_key");
+  if (familyColumns.includes("admin_key")) shortKeyColumns.push("admin_key");
+
+  for (const column of shortKeyColumns) {
+    db.prepare(
+      `DELETE FROM "family" WHERE ${quoteIdentifier(column)} = ? COLLATE NOCASE`
+    ).run("jang");
+  }
+
+  db.prepare("DELETE FROM \"family\" WHERE LOWER(name) = LOWER(?)").run("jang");
+  db.exec("COMMIT");
+} catch (error) {
+  db.exec("ROLLBACK");
+  console.warn("[prestart] Jang cleanup skipped:", error?.message || error);
 }
 
 // ---- helpers ----
@@ -410,49 +431,23 @@ const defaultFamilyAdminKey = ensureFamilyAdminKey(DEFAULT_FAMILY_ID, {
   preset: DEFAULT_FAMILY_ADMIN_KEY,
   allowGenerate: true
 });
-upsertFamily({ id: JANG_FAMILY_ID, name: JANG_FAMILY_NAME, status: "active" });
-const seededJangKey = ensureFamilyAdminKey(JANG_FAMILY_ID, {
-  preset: JANG_ADMIN_KEY,
-  allowGenerate: true
-});
-const duplicationSummary = duplicateFamilyData(DEFAULT_FAMILY_ID, JANG_FAMILY_ID);
 clearDefaultFamilyData();
 
 const familyCount = db.prepare("SELECT COUNT(*) AS count FROM family").get()?.count ?? 0;
-const jangCounts = {};
-for (const table of ["member", "task", "reward", "ledger"]) {
-  if (tableExists(table) && hasFamilyColumn(table)) {
-    const row = db
-      .prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)} WHERE family_id = ?`)
-      .get(JANG_FAMILY_ID);
-    jangCounts[table] = row?.count ?? 0;
-  }
-}
 const defaultAdminPresent = !!db
   .prepare("SELECT 1 FROM family WHERE id = ? AND admin_key IS NOT NULL LIMIT 1")
   .get(DEFAULT_FAMILY_ID);
-const jangAdminPresent = !!db
-  .prepare("SELECT 1 FROM family WHERE id = ? AND admin_key IS NOT NULL LIMIT 1")
-  .get(JANG_FAMILY_ID);
 
 console.log(
   `[prestart] families: ${familyCount} | master key configured: ${MASTER_ADMIN_KEY ? "yes" : "no"} | default admin present: ${
     defaultAdminPresent ? "yes" : "no"
-  } | Jang admin present: ${jangAdminPresent ? "yes" : "no"}`
+  }`
 );
 if (!MASTER_ADMIN_KEY) {
   console.warn("MASTER_ADMIN_KEY env var missing or blank; master admin access disabled");
 }
 if (defaultFamilyAdminKey) {
   console.log("[DEV ONLY] Default family admin key:", defaultFamilyAdminKey);
-}
-if (seededJangKey) {
-  console.log("[DEV] Seeded Jang admin key");
-}
-for (const [table, count] of Object.entries(duplicationSummary)) {
-  if (count > 0) {
-    console.log(`[prestart] Copied ${count} ${table} row(s) from ${DEFAULT_FAMILY_ID} to ${JANG_FAMILY_ID}.`);
-  }
 }
 
 process.exit(0);

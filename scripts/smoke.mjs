@@ -15,8 +15,6 @@ const REPO_ROOT = join(__dirname, "..");
 const DATA_DIR = join(REPO_ROOT, "data");
 const SMITH_KEY_FILE = join(DATA_DIR, "smoke-smith-key.txt");
 const DEFAULT_FAMILY_ID = "default";
-const JANG_FAMILY_ID = "JangJ6494";
-const JANG_ADMIN_KEY = "Mamapapa";
 
 const DEFAULT_PORT = process.env.SMOKE_PORT || "4100";
 const BASE_URL = process.env.SMOKE_BASE_URL || `http://127.0.0.1:${DEFAULT_PORT}`;
@@ -575,35 +573,6 @@ export async function testF1() {
         DB_PATH: dbPath
       },
       async () => {
-        log("validating Jang family seed snapshot");
-        const db = new Database(dbPath, { readonly: true });
-        try {
-          const familyRow = db.prepare("SELECT id FROM family WHERE id = ?").get(JANG_FAMILY_ID);
-          if (!familyRow) {
-            throw new Error("Jang family was not created by prestart seed");
-          }
-          const tables = ["member", "task", "reward", "ledger"];
-          for (const table of tables) {
-            const exists = db
-              .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1")
-              .get(table);
-            if (!exists) {
-              throw new Error(`expected table ${table} to exist for seed validation`);
-            }
-            const row = db
-              .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE family_id = ?`)
-              .get(JANG_FAMILY_ID);
-            const rawCount = row?.count ?? 0;
-            const count = typeof rawCount === "number" ? rawCount : Number(rawCount);
-            log(`${table} rows for ${JANG_FAMILY_ID}: ${count}`);
-            if (!Number.isFinite(count) || count <= 0) {
-              throw new Error(`expected backup rows for ${table} in family ${JANG_FAMILY_ID}`);
-            }
-          }
-        } finally {
-          db.close();
-        }
-
         log("verifying whoami for master key");
         const masterRes = await fetch(new URL("/api/admin/whoami", BASE_URL), {
           headers: { "X-ADMIN-KEY": masterKey }
@@ -612,27 +581,6 @@ export async function testF1() {
         const masterPayload = await masterRes.json();
         if (masterPayload?.role !== "master") {
           throw new Error(`expected master role, received ${masterPayload?.role ?? "unknown"}`);
-        }
-
-        log("verifying whoami for seeded Jang admin key");
-        const jangRes = await fetch(new URL("/api/admin/whoami", BASE_URL), {
-          headers: { "X-ADMIN-KEY": JANG_ADMIN_KEY }
-        });
-        await ensureOk(jangRes, "jang whoami");
-        const jangPayload = await jangRes.json();
-        const jangFamily = jangPayload?.family_id ?? jangPayload?.familyId ?? null;
-        if (jangPayload?.role !== "family" || jangFamily !== JANG_FAMILY_ID) {
-          throw new Error("Jang admin key did not resolve to expected family scope");
-        }
-
-        log("verifying public rewards feed for Jang family");
-        const jangRewardsRes = await fetch(
-          new URL(`/api/public/rewards?family_id=${encodeURIComponent(JANG_FAMILY_ID)}`, BASE_URL)
-        );
-        await ensureOk(jangRewardsRes, "public rewards (jang)");
-        const jangRewards = await jangRewardsRes.json();
-        if (!Array.isArray(jangRewards) || jangRewards.length === 0) {
-          throw new Error("expected public rewards for Jang family to be non-empty");
         }
 
         log("verifying public rewards feed for default family");
@@ -647,19 +595,11 @@ export async function testF1() {
 
         const verifyDb = new Database(dbPath, { readonly: true });
         try {
-          const jangRewardCountRow = verifyDb
-            .prepare("SELECT COUNT(*) AS count FROM reward WHERE family_id = ?")
-            .get(JANG_FAMILY_ID);
           const defaultRewardCountRow = verifyDb
             .prepare("SELECT COUNT(*) AS count FROM reward WHERE family_id = ?")
             .get(DEFAULT_FAMILY_ID);
-          const jangRewardCount = Number(jangRewardCountRow?.count ?? 0);
           const defaultRewardCount = Number(defaultRewardCountRow?.count ?? 0);
-          log(`public rewards returned ${jangRewards.length} Jang rows (expected ${jangRewardCount})`);
           log(`public rewards returned ${defaultRewards.length} default rows (expected ${defaultRewardCount})`);
-          if (jangRewards.length !== jangRewardCount) {
-            throw new Error("public rewards Jang count mismatch");
-          }
           if (defaultRewards.length !== defaultRewardCount) {
             throw new Error("public rewards default count mismatch");
           }
