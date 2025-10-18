@@ -1,4 +1,5 @@
 import { readAdminKey } from "../auth.js";
+import { makeFamilyResolver } from "../lib/familyResolver.js";
 
 function safeGet(db, sql, params) {
   try {
@@ -12,6 +13,20 @@ function safeGet(db, sql, params) {
 }
 
 export function createAdminAuth(db) {
+  const resolveFamily = makeFamilyResolver(db);
+
+  const resolveFamilySafe = (token) => {
+    if (!token) return null;
+    try {
+      return resolveFamily(token);
+    } catch (error) {
+      if (error?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  };
+
   return function adminAuth(req, _res, next) {
     try {
       const key = String(readAdminKey(req) || "").trim();
@@ -32,32 +47,28 @@ export function createAdminAuth(db) {
         return next();
       }
 
-      const familyRow = safeGet(
+      const familyAdminRow = safeGet(
         db,
-        `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name, f.status AS family_status
-           FROM family_admin fa
-           JOIN family f ON f.id = fa.family_id
-          WHERE fa.admin_key = ?
-          LIMIT 1`,
+        'SELECT family_id FROM "family_admin" WHERE admin_key = ? LIMIT 1',
         key
-      ) ||
-        safeGet(
-          db,
-          `SELECT f.id AS family_uuid, f.admin_key AS family_key, f.name AS family_name, f.status AS family_status
-             FROM family f
-            WHERE f.admin_key = ?
-            LIMIT 1`,
-          key
-        );
+      );
 
-      if (familyRow) {
+      let family = null;
+      if (familyAdminRow?.family_id) {
+        family = resolveFamilySafe(familyAdminRow.family_id);
+      }
+      if (!family) {
+        family = resolveFamilySafe(key);
+      }
+
+      if (family) {
         req.auth = {
           role: "family",
           adminKey: key,
-          familyId: String(familyRow.family_uuid),
-          familyKey: familyRow.family_key || null,
-          familyName: familyRow.family_name || "",
-          familyStatus: familyRow.family_status || null
+          familyId: String(family.id),
+          familyKey: family.key || null,
+          familyName: family.name || "",
+          familyStatus: family.status || null
         };
         return next();
       }

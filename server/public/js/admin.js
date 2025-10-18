@@ -516,14 +516,19 @@ function initAdmin() {
       if (!res.ok) return;
       const payload = body && typeof body === 'object' ? body : null;
       if (!payload?.family_uuid) return;
+      const payloadKey = typeof payload.key === 'string'
+        ? payload.key
+        : typeof payload.family_key === 'string'
+          ? payload.family_key
+          : null;
       const scope = persistFamilyScope({
         uuid: payload.family_uuid,
-        key: payload.family_key || null,
+        key: payloadKey,
         name: payload.family_name || null,
         status: payload.family_status || null
       }) || {
         uuid: payload.family_uuid,
-        key: payload.family_key || null,
+        key: payloadKey,
         name: payload.family_name || null,
         status: payload.family_status || null
       };
@@ -1602,7 +1607,7 @@ function initAdmin() {
         }
       }
       if (!familyKeyProvided) {
-        const entryKey = entry?.family_key ?? entry?.admin_key ?? '';
+        const entryKey = entry?.key ?? entry?.family_key ?? entry?.admin_key ?? '';
         if (entryKey) {
           state.familyKey = String(entryKey);
         } else if (adminState.familyKey) {
@@ -1866,7 +1871,8 @@ function initAdmin() {
             const option = document.createElement('option');
             option.value = family.id;
             option.textContent = family.name ? `${family.name} (${family.id})` : family.id;
-            option.dataset.familyKey = family.family_key ? String(family.family_key) : '';
+            const optionKey = family?.key ?? family?.family_key ?? family?.admin_key ?? '';
+            option.dataset.familyKey = optionKey != null ? String(optionKey) : '';
             familyScopeSelect.appendChild(option);
           }
         }
@@ -1948,11 +1954,13 @@ function initAdmin() {
         : typeof me?.familyName === 'string'
           ? me.familyName
           : '';
-      const familyKey = typeof me?.family_key === 'string'
-        ? me.family_key
-        : typeof me?.familyKey === 'string'
-          ? me.familyKey
-          : '';
+      const familyKey = typeof me?.key === 'string'
+        ? me.key
+        : typeof me?.family_key === 'string'
+          ? me.family_key
+          : typeof me?.familyKey === 'string'
+            ? me.familyKey
+            : '';
       const familyStatus = typeof me?.family_status === 'string' ? me.family_status : null;
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
@@ -2090,7 +2098,8 @@ function initAdmin() {
         const rawId = row?.id != null ? String(row.id) : '';
         const name = row?.name ? String(row.name) : '';
         const email = row?.email ? String(row.email) : '';
-        const familyKey = row?.family_key ? String(row.family_key) : '';
+        const rawKey = row?.key ?? row?.family_key ?? row?.admin_key ?? '';
+        const familyKey = rawKey != null ? String(rawKey) : '';
         const status = row?.status ? String(row.status) : 'active';
         const safeKey = escapeHtml(familyKey);
         return `
@@ -2399,7 +2408,7 @@ function initAdmin() {
     if (!normalized) return;
     const entry = findFamilyEntry(normalized);
     const resolvedName = familyName || entry?.name || '';
-    const resolvedKey = familyKey || entry?.family_key || entry?.admin_key || '';
+    const resolvedKey = familyKey || entry?.key || entry?.family_key || entry?.admin_key || '';
     const scope = persistFamilyScope({
       uuid: normalized,
       key: resolvedKey || null,
@@ -3048,7 +3057,7 @@ details.member-fold .summary-value {
       return;
     }
     const entry = findFamilyEntry(selected);
-    await setScopedFamily(selected, entry?.name || '', entry?.family_key || entry?.admin_key || '');
+    await setScopedFamily(selected, entry?.name || '', entry?.key || entry?.family_key || entry?.admin_key || '');
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -3449,14 +3458,32 @@ details.member-fold .summary-value {
   }
 
   async function fetchFamilyDetail(familyId) {
-    if (!familyId) return null;
+    const normalizedId = normalizeScopeId(familyId);
+    const storedScope = getFamilyScope();
+    const scopedId = normalizeScopeId(
+      storedScope?.uuid || state.scopedFamilyId || adminState.currentFamilyId || state.familyId
+    );
+    const useSelf = !normalizedId || (scopedId && normalizedId === scopedId);
+    const endpoint = useSelf
+      ? '/api/admin/families/self'
+      : `/api/admin/families/${encodeURIComponent(normalizedId)}`;
     try {
-      const { res, body } = await adminFetch(`/api/admin/families/${encodeURIComponent(familyId)}`, {
-        skipScope: true
-      });
+      const fetchOptions = useSelf ? {} : { skipScope: true };
+      const { res, body } = await adminFetch(endpoint, fetchOptions);
       if (!res.ok) return null;
       if (body && typeof body === 'object') {
-        return body;
+        const key = typeof body.key === 'string'
+          ? body.key
+          : typeof body.family_key === 'string'
+            ? body.family_key
+            : typeof body.admin_key === 'string'
+              ? body.admin_key
+              : null;
+        return {
+          ...body,
+          key: key || null,
+          family_key: key || body.family_key || ''
+        };
       }
     } catch (error) {
       console.warn('fetchFamilyDetail failed', error);
@@ -3500,11 +3527,13 @@ details.member-fold .summary-value {
       const nextState = {
         role: payload.role ?? null,
         family_id: payload.family_uuid ?? payload.family_id ?? payload.familyId ?? null,
-        familyKey: typeof payload.family_key === 'string'
-          ? payload.family_key
-          : typeof payload.familyKey === 'string'
-            ? payload.familyKey
-            : '',
+        familyKey: typeof payload.key === 'string'
+          ? payload.key
+          : typeof payload.family_key === 'string'
+            ? payload.family_key
+            : typeof payload.familyKey === 'string'
+              ? payload.familyKey
+              : '',
         familyName: typeof payload.family_name === 'string'
           ? payload.family_name
           : typeof payload.familyName === 'string'
@@ -3545,14 +3574,14 @@ details.member-fold .summary-value {
           const detail = await fetchFamilyDetail(nextState.family_id);
           if (detail) {
             nextState.families = [detail];
-            nextState.familyKey = nextState.familyKey || detail.family_key || detail.admin_key || '';
+            nextState.familyKey = nextState.familyKey || detail.key || detail.family_key || detail.admin_key || '';
             nextState.familyName = nextState.familyName || detail.name || '';
             nextState.familyStatus = nextState.familyStatus || detail.status || null;
           } else if (Array.isArray(adminState.families)) {
             const existing = adminState.families.find((entry) => entry && entry.id === nextState.family_id);
             if (existing) {
               nextState.families = [existing];
-              nextState.familyKey = nextState.familyKey || existing.family_key || existing.admin_key || '';
+              nextState.familyKey = nextState.familyKey || existing.key || existing.family_key || existing.admin_key || '';
               nextState.familyName = nextState.familyName || existing.name || '';
               nextState.familyStatus = nextState.familyStatus || existing.status || null;
             }
