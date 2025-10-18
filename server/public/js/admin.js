@@ -10,16 +10,15 @@ const persistFamilyScope = setFamilyScope;
 const resetStoredScope = clearFamilyScope;
 
 async function bootstrapScopeFromWhoAmI() {
-  if (typeof window === 'undefined' || typeof fetch !== 'function') return;
   try {
-    const response = await fetch('/api/admin/whoami', { credentials: 'same-origin' });
-    const me = await response.json().catch(() => null);
-    if (me?.family_uuid && isUUID(me.family_uuid)) {
+    const r = await fetch('/api/admin/whoami', { credentials: 'same-origin' });
+    const me = await r.json();
+    if (me.family_uuid && isUUID(me.family_uuid)) {
       setFamilyScope({
         uuid: me.family_uuid,
         key: me.family_key || null,
         name: me.family_name || null,
-        status: me.family_status || null
+        status: me.family_status || null,
       });
     } else {
       clearFamilyScope();
@@ -28,8 +27,6 @@ async function bootstrapScopeFromWhoAmI() {
     clearFamilyScope();
   }
 }
-
-await bootstrapScopeFromWhoAmI();
 
 if (typeof window !== 'undefined' && window.console) {
   try {
@@ -40,38 +37,30 @@ if (typeof window !== 'undefined' && window.console) {
 }
 
 if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = function patchedFetch(input, init = {}) {
-    const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;
-    const url = request ? request.url : (typeof input === 'string' ? input : input?.url || '');
-    if (typeof url !== 'string' || !url.startsWith('/api/')) {
-      if (request && init && Object.keys(init).length > 0) {
-        const passthroughInit = { ...init };
-        if ('ckSkipFamilyScope' in passthroughInit) delete passthroughInit.ckSkipFamilyScope;
-        return nativeFetch(new Request(request, passthroughInit));
+  (() => {
+    const orig = window.fetch;
+    window.fetch = function patchedFetch(input, init = {}) {
+      const request = typeof Request !== 'undefined' && input instanceof Request ? input : null;
+      const url = request ? request.url : (typeof input === 'string' ? input : input?.url || '');
+      const isApi = typeof url === 'string' && url.startsWith('/api/');
+      if (isApi) {
+        const scope = getFamilyScope();
+        const headers = new Headers((init && init.headers) || (request ? request.headers : undefined) || {});
+        if (scope?.uuid && isUUID(scope.uuid) && !headers.has('x-family')) {
+          headers.set('x-family', scope.uuid);
+        }
+        const nextInit = { ...init, headers };
+        if (request) {
+          return orig(new Request(request, nextInit));
+        }
+        return orig(url, nextInit);
       }
-      return nativeFetch(input, init);
-    }
-
-    const nextInit = init ? { ...init } : {};
-    const skipScope = Boolean(nextInit?.ckSkipFamilyScope);
-    if ('ckSkipFamilyScope' in nextInit) delete nextInit.ckSkipFamilyScope;
-
-    const headers = new Headers(
-      nextInit.headers || (request ? request.headers : undefined) || {}
-    );
-    const scope = getFamilyScope();
-    if (!skipScope && scope?.uuid && isUUID(scope.uuid) && !headers.has('x-family')) {
-      headers.set('x-family', scope.uuid);
-    }
-    nextInit.headers = headers;
-
-    if (request) {
-      return nativeFetch(new Request(request, nextInit));
-    }
-
-    return nativeFetch(url, nextInit);
-  };
+      if (request && init && Object.keys(init).length > 0) {
+        return orig(new Request(request, { ...init }));
+      }
+      return orig(input, init);
+    };
+  })();
 }
 
 (() => {
@@ -3248,6 +3237,8 @@ details.member-fold .summary-value {
       if (scopeId && isUUID(scopeId)) {
         headers['x-family'] = scopeId;
       }
+    } else if (headers['x-family'] === undefined) {
+      headers['x-family'] = '';
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const requestInit = {
@@ -3256,9 +3247,6 @@ details.member-fold .summary-value {
       cache: 'no-store',
       headers
     };
-    if (skipScope) {
-      requestInit.ckSkipFamilyScope = true;
-    }
     const res = await fetch(url, requestInit);
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
@@ -6627,8 +6615,7 @@ setupScanner({
     });
   }
 
-  document.addEventListener('DOMContentLoaded', async () => {
-    console.log('admin.js loaded ok');
+  async function initAdminUI() {
     initI18n();
     loadAdminKey();
     setupCollapsibles();
@@ -6636,5 +6623,13 @@ setupScanner({
     initAdmin();
     await refreshAdminAuth();
     setActiveTab('templates');
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('admin.js loaded ok');
+    (async () => {
+      await bootstrapScopeFromWhoAmI();
+      await initAdminUI();
+    })();
   });
 })();

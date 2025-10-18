@@ -3,94 +3,33 @@ import { randomUUID } from "node:crypto";
 import db from "./db.js";
 import { sendMail } from "./email.js";
 import { makeFamilyResolver } from "./lib/familyResolver.js";
+import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
 
 const router = express.Router();
-const resolveFamily = makeFamilyResolver(db);
-
-function resolveFamilyOptional(raw) {
-  try {
-    return resolveFamily(raw);
-  } catch (error) {
-    if (error?.status === 404) {
-      return null;
-    }
-    throw error;
-  }
-}
+const resolveFamily = makeFamilyResolver();
 
 export const scopeMiddleware = (req, res, next) => {
-  try {
-    const path = typeof req.path === "string" ? req.path : typeof req.url === "string" ? req.url : "";
-    if (path && !path.startsWith("/api")) {
-      return next();
-    }
+  const rawCandidate =
+    req.params?.family ??
+    req.params?.familyId ??
+    req.query?.family ??
+    req.header("x-family") ??
+    "";
+  const raw = typeof rawCandidate === "string" ? rawCandidate.trim() : "";
 
-    const candidates = [
-      req.params?.family,
-      req.params?.familyId,
-      req.params?.family_id,
-      req.params?.id,
-      req.header("x-family"),
-      req.header("x-act-as-family"),
-      req.header("x-family-id"),
-      req.query?.family,
-      req.query?.familyId,
-      req.query?.family_id
-    ];
-    const rawCandidate = candidates.find((value) => typeof value === "string" && value.trim());
-    const raw = rawCandidate ? rawCandidate.trim() : "";
-    try {
-      const fam = raw ? resolveFamily(raw) : null;
-      req.family = fam;
-      res.locals.family = fam;
-      console.log("[scope]", { raw, uuid: req.family?.id, key: req.family?.key, name: req.family?.name });
-      next();
-    } catch (error) {
-      if (error?.status === 404) {
-        console.warn("[scope] fail", { raw, err: error.message });
-        req.family = null;
-        res.locals.family = null;
-        console.log("[scope]", { raw, uuid: req.family?.id, key: req.family?.key, name: req.family?.name });
-        return res.status(404).json({ error: "Family not found for scope token." });
-      }
-      throw error;
-    }
+  if (!raw) {
+    req.family = null;
+    return next();
+  }
+
+  try {
+    const fam = resolveFamily(raw);
+    req.family = fam;
+    return next();
   } catch (error) {
-    next(error);
+    return res.status(404).json({ error: "Family not found for scope token." });
   }
 };
-
-function requireFamilyScope(req, res) {
-  if (req.family) {
-    return req.family;
-  }
-
-  const fallbackCandidates = [
-    req.params?.family,
-    req.params?.familyId,
-    req.params?.family_id,
-    req.params?.id,
-    req.query?.family,
-    req.query?.familyId,
-    req.query?.family_id
-  ];
-  const fallbackRaw = fallbackCandidates.find((value) => typeof value === "string" && value.trim());
-
-  if (!fallbackRaw) {
-    res.status(400).json({ error: "Missing family scope (x-family header)." });
-    return null;
-  }
-
-  const fam = resolveFamilyOptional(fallbackRaw.trim());
-  if (!fam) {
-    res.status(404).json({ error: "Family not found for scope token." });
-    return null;
-  }
-
-  req.family = fam;
-  res.locals.family = fam;
-  return fam;
-}
 
 function allowFamilyOrMaster(req, familyId) {
   return (
@@ -249,20 +188,13 @@ router.get("/admin/whoami", (req, res) => {
   });
 });
 
-router.get("/admin/families/self", (req, res) => {
-  if (!req.family) return res.status(400).json({ error: "Missing family scope (x-family header)." });
+router.get("/admin/families/self", requireFamilyScope, (req, res) => {
   const { id, key, name, status } = req.family;
   return res.json({ id, key, name, status });
 });
 
-router.get("/admin/families/:family", (req, res) => {
-  let fam = req.family;
-  if (!fam) {
-    const raw = typeof req.params?.family === "string" ? req.params.family.trim() : "";
-    fam = raw ? resolveFamilyOptional(raw) : null;
-  }
-  if (!fam) return res.status(404).json({ error: "Family not found." });
-  const { id, key, name, status } = fam;
+router.get("/admin/families/:family", requireFamilyScope, (req, res) => {
+  const { id, key, name, status } = req.family;
   return res.json({ id, key, name, status });
 });
 
@@ -312,9 +244,8 @@ router.get("/admin/families", (req, res) => {
   res.json(normalized);
 });
 
-router.get("/admin/families/:familyId/members", (req, res) => {
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+router.get("/admin/families/:familyId/members", requireFamilyScope, (req, res) => {
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare(
@@ -324,9 +255,8 @@ router.get("/admin/families/:familyId/members", (req, res) => {
   res.json(rows);
 });
 
-router.get("/admin/families/:familyId/tasks", (req, res) => {
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+router.get("/admin/families/:familyId/tasks", requireFamilyScope, (req, res) => {
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
@@ -334,9 +264,8 @@ router.get("/admin/families/:familyId/tasks", (req, res) => {
   res.json(rows);
 });
 
-router.get("/admin/families/:familyId/rewards", (req, res) => {
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+router.get("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) => {
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
@@ -344,9 +273,8 @@ router.get("/admin/families/:familyId/rewards", (req, res) => {
   res.json(rows);
 });
 
-router.get("/admin/families/:familyId/holds", (req, res) => {
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+router.get("/admin/families/:familyId/holds", requireFamilyScope, (req, res) => {
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward_hold WHERE family_id = ? ORDER BY created_at DESC")
@@ -354,9 +282,8 @@ router.get("/admin/families/:familyId/holds", (req, res) => {
   res.json(rows);
 });
 
-router.get("/admin/families/:familyId/activity", (req, res) => {
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+router.get("/admin/families/:familyId/activity", requireFamilyScope, (req, res) => {
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
   const rows = db
@@ -365,11 +292,10 @@ router.get("/admin/families/:familyId/activity", (req, res) => {
   res.json(rows);
 });
 
-router.patch("/admin/families/:id", express.json(), (req, res) => {
+router.patch("/admin/families/:id", express.json(), requireFamilyScope, (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+  const fam = req.family;
   const familyId = String(fam.id);
   const body = req.body || {};
   const normalizedStatus = typeof body.status === "string" ? body.status.trim().toLowerCase() : "";
@@ -482,11 +408,10 @@ router.post(
 );
 
 // List active master tasks not yet adopted by a family
-router.get("/admin/families/:familyId/master-tasks/available", (req, res) => {
+router.get("/admin/families/:familyId/master-tasks/available", requireFamilyScope, (req, res) => {
   if (!req.auth?.role) return res.sendStatus(401);
 
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+  const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
 
   const rows = db
@@ -505,23 +430,26 @@ router.get("/admin/families/:familyId/master-tasks/available", (req, res) => {
 });
 
 // Create a family task from a master template
-router.post("/admin/families/:familyId/tasks/from-master", express.json(), (req, res) => {
-  if (!req.auth?.role) return res.sendStatus(401);
+router.post(
+  "/admin/families/:familyId/tasks/from-master",
+  express.json(),
+  requireFamilyScope,
+  (req, res) => {
+    if (!req.auth?.role) return res.sendStatus(401);
 
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+    const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
 
-  const { master_task_id } = req.body || {};
-  if (!master_task_id) return res.status(400).json({ error: "master_task_id required" });
+    const { master_task_id } = req.body || {};
+    if (!master_task_id) return res.status(400).json({ error: "master_task_id required" });
 
-  const mt = db.prepare(`SELECT * FROM master_task WHERE id = ? AND status = 'active'`).get(master_task_id);
-  if (!mt) return res.status(404).json({ error: "template not found or inactive" });
+    const mt = db.prepare(`SELECT * FROM master_task WHERE id = ? AND status = 'active'`).get(master_task_id);
+    if (!mt) return res.status(404).json({ error: "template not found or inactive" });
 
-  const id = randomUUID();
-  const now = Date.now();
-  const columns = ["id", "family_id"];
-  const values = [id, String(fam.id)];
+    const id = randomUUID();
+    const now = Date.now();
+    const columns = ["id", "family_id"];
+    const values = [id, String(fam.id)];
 
   if (hasColumn(db, "task", "title")) {
     columns.push("title");
@@ -568,17 +496,17 @@ router.post("/admin/families/:familyId/tasks/from-master", express.json(), (req,
     values.push(now);
   }
 
-  const placeholders = columns.map(() => "?");
-  const sql = `INSERT INTO task (${columns.map((col) => `"${col}"`).join(", ")}) VALUES (${placeholders.join(", ")})`;
-  db.prepare(sql).run(...values);
+    const placeholders = columns.map(() => "?");
+    const sql = `INSERT INTO task (${columns.map((col) => `"${col}"`).join(", ")}) VALUES (${placeholders.join(", ")})`;
+    db.prepare(sql).run(...values);
 
-  res.status(201).json({ id });
-});
+    res.status(201).json({ id });
+  }
+);
 
-router.post("/admin/families/:familyId/tasks", (req, res) => {
+router.post("/admin/families/:familyId/tasks", requireFamilyScope, (req, res) => {
   try {
-    const fam = requireFamilyScope(req, res);
-    if (!fam) return;
+    const fam = req.family;
     if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
     const familyId = String(fam.id);
 
@@ -642,10 +570,9 @@ router.post("/admin/families/:familyId/tasks", (req, res) => {
   }
 });
 
-router.post("/admin/families/:familyId/rewards", (req, res) => {
+router.post("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) => {
   try {
-    const fam = requireFamilyScope(req, res);
-    if (!fam) return;
+    const fam = req.family;
     if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
     const familyId = String(fam.id);
 
@@ -709,12 +636,11 @@ router.post("/admin/families/:familyId/rewards", (req, res) => {
   }
 });
 
-router.delete("/admin/families/:id", (req, res) => {
+router.delete("/admin/families/:id", requireFamilyScope, (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
   const hardMode = String(req.query?.hard ?? "").trim().toLowerCase() === "true";
-  const fam = requireFamilyScope(req, res);
-  if (!fam) return;
+  const fam = req.family;
   const result = hardDeleteFamily(fam.id);
   if (hardMode) {
     return res.status(result.status).json(result.body);
