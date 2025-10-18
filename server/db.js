@@ -7,6 +7,87 @@ function q(id) {
   return `"${String(id).replaceAll('"', '""')}"`;
 }
 
+function hasTable(database, name) {
+  if (!name) return false;
+  try {
+    return Boolean(
+      database
+        .prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ? LIMIT 1")
+        .get(String(name))
+    );
+  } catch (error) {
+    console.warn('[db] table lookup failed', { table: name, error: error?.message || error });
+    return false;
+  }
+}
+
+function columnMap(database, table) {
+  try {
+    const info = database.prepare(`PRAGMA table_info(${q(table)})`).all();
+    const map = new Map();
+    for (const column of info) {
+      if (column?.name) {
+        map.set(column.name.toLowerCase(), column.name);
+      }
+    }
+    return map;
+  } catch (error) {
+    console.warn('[db] column inspection failed', { table, error: error?.message || error });
+    return new Map();
+  }
+}
+
+function ensureKidsFamilyScope(database) {
+  const dbRef = database || db;
+  if (!hasTable(dbRef, 'kids')) {
+    return;
+  }
+
+  const columns = columnMap(dbRef, 'kids');
+  let familyColumn = columns.get('family_id');
+
+  if (!familyColumn) {
+    try {
+      dbRef.exec('ALTER TABLE "kids" ADD COLUMN "family_id" TEXT');
+      familyColumn = 'family_id';
+    } catch (error) {
+      console.warn('[db] unable to add kids.family_id', error?.message || error);
+      return;
+    }
+  }
+
+  const fallbackSources = ['family_uuid', 'familyuuid', 'family', 'family_key', 'familykey'];
+  let sourceColumn = null;
+  for (const candidate of fallbackSources) {
+    if (columns.has(candidate)) {
+      sourceColumn = columns.get(candidate);
+      break;
+    }
+  }
+
+  if (sourceColumn) {
+    try {
+      dbRef.exec(`
+        UPDATE "kids"
+           SET "family_id" = TRIM("${sourceColumn}")
+         WHERE ("family_id" IS NULL OR TRIM("family_id") = '')
+           AND TRIM("${sourceColumn}") <> ''
+      `);
+    } catch (error) {
+      console.warn('[db] unable to backfill kids.family_id', {
+        error: error?.message || error,
+        sourceColumn,
+      });
+    }
+  }
+
+  try {
+    dbRef.exec('CREATE INDEX IF NOT EXISTS "idx_kids_family_id" ON "kids"(family_id)');
+  } catch (error) {
+    console.warn('[db] unable to ensure kids.family_id index', error?.message || error);
+  }
+}
+
 export const DATA_DIR = path.resolve(process.cwd(), "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -15,6 +96,37 @@ export const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "cryptokids.db
 export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+
+ensureKidsFamilyScope(db);
+
+function ensureKidsFamilyScopeForFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return;
+    }
+    const connection = new Database(filePath);
+    try {
+      ensureKidsFamilyScope(connection);
+    } finally {
+      connection.close();
+    }
+  } catch (error) {
+    console.warn('[db] unable to inspect legacy database for kids.family_id', {
+      filePath,
+      error: error?.message || error,
+    });
+  }
+}
+
+const LEGACY_DB_PATHS = [
+  path.join(process.cwd(), 'server', 'app.db'),
+  path.join(process.cwd(), 'server', 'parentshop.db'),
+  path.join(process.cwd(), 'server', 'parentshop.backup.db'),
+];
+
+for (const legacyPath of LEGACY_DB_PATHS) {
+  ensureKidsFamilyScopeForFile(legacyPath);
+}
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS family (

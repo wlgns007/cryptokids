@@ -28,6 +28,9 @@
     "multer": "^2.0.2",
     "qrcode": "^1.5.4"
   },
+  "devDependencies": {
+    "supertest": "file:vendor/supertest"
+  },
   "type": "module",
   "directories": {
     "test": "test"
