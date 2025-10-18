@@ -4872,7 +4872,12 @@ app.get("/api/admin/resolve-member", (req, res) => {
   }
 
   const requestedFamilyId = normalizeNullableString(req.query?.familyId ?? req.query?.family_id);
-  const headerFamilyId = normalizeNullableString(req.get?.("x-act-as-family") ?? req.headers?.["x-act-as-family"]);
+  const headerFamilyId = normalizeNullableString(
+    req.get?.("x-family") ??
+      req.headers?.["x-family"] ??
+      req.get?.("x-act-as-family") ??
+      req.headers?.["x-act-as-family"]
+  );
   let scopeFamilyId = requestedFamilyId ?? headerFamilyId;
   let role = null;
 
