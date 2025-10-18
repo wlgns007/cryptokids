@@ -615,23 +615,50 @@ if (typeof db.all !== "function") {
 
 export { ensureMasterCascadeTriggers };
 
+function loadFamilyProfile(database, familyId) {
+  if (!familyId) {
+    return { familyId: null, familyKey: null, familyName: "" };
+  }
+
+  try {
+    const row = database
+      .prepare(`SELECT id, admin_key AS familyKey, name AS familyName FROM "family" WHERE id = ? LIMIT 1`)
+      .get(familyId);
+    if (!row) {
+      return { familyId, familyKey: null, familyName: "" };
+    }
+    return {
+      familyId: row.id || familyId,
+      familyKey: row.familyKey || null,
+      familyName: row.familyName || ""
+    };
+  } catch (error) {
+    console.warn("[db] family profile lookup failed", error?.message || error);
+    return { familyId, familyKey: null, familyName: "" };
+  }
+}
+
 export function resolveAdminContext(database, adminKey) {
   const key = typeof adminKey === "string" ? adminKey.trim() : "";
-  if (!key) return { role: "none", familyId: null, family_id: null };
+  if (!key) {
+    return { role: "none", familyId: null, family_id: null, familyKey: null, familyName: "" };
+  }
 
   try {
     const masterRow = database
       .prepare(`SELECT id FROM "master_admin" WHERE admin_key = ? LIMIT 1`)
       .get(key);
     if (masterRow?.id) {
-      return { role: "master", familyId: null, family_id: null };
+      return { role: "master", familyId: null, family_id: null, familyKey: null, familyName: "" };
     }
   } catch (err) {
     console.warn('[db] master_admin lookup failed', err?.message || err);
   }
 
   const MASTER = process.env.MASTER_ADMIN_KEY?.trim();
-  if (MASTER && key === MASTER) return { role: "master", familyId: null, family_id: null };
+  if (MASTER && key === MASTER) {
+    return { role: "master", familyId: null, family_id: null, familyKey: null, familyName: "" };
+  }
 
   try {
     const adminRow = database
@@ -640,16 +667,37 @@ export function resolveAdminContext(database, adminKey) {
       )
       .get(key);
     if (adminRow?.familyId) {
-      return { role: "family", familyId: adminRow.familyId, family_id: adminRow.familyId };
+      const profile = loadFamilyProfile(database, adminRow.familyId);
+      return {
+        role: "family",
+        familyId: profile.familyId,
+        family_id: profile.familyId,
+        familyKey: profile.familyKey,
+        familyName: profile.familyName
+      };
     }
   } catch (err) {
     console.warn('[db] family_admin lookup failed', err?.message || err);
   }
 
-  const row = database.prepare(`SELECT id FROM "family" WHERE admin_key = ?`).get(key);
-  if (row?.id) return { role: "family", familyId: row.id, family_id: row.id };
+  try {
+    const row = database
+      .prepare(`SELECT id, admin_key AS familyKey, name AS familyName FROM "family" WHERE admin_key = ? LIMIT 1`)
+      .get(key);
+    if (row?.id) {
+      return {
+        role: "family",
+        familyId: row.id,
+        family_id: row.id,
+        familyKey: row.familyKey || null,
+        familyName: row.familyName || ""
+      };
+    }
+  } catch (err) {
+    console.warn('[db] family lookup failed', err?.message || err);
+  }
 
-  return { role: "none", familyId: null, family_id: null };
+  return { role: "none", familyId: null, family_id: null, familyKey: null, familyName: "" };
 }
 
 export default db;

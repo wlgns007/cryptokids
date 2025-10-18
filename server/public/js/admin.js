@@ -30,10 +30,40 @@ import { renderHeader } from './header.js';
     showInactive: false,
     role: null,
     familyId: null,
+    familyKey: '',
     auth: null,
     scopedFamilyId: null,
     scopedFamilyName: ''
   };
+
+  (function patchFetchForAdmin() {
+    if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = function patchedFetch(input, init = {}) {
+      let nextInit = init || {};
+      try {
+        const url = typeof input === 'string'
+          ? input
+          : (typeof Request !== 'undefined' && input instanceof Request ? input.url : input?.url || '');
+        if (typeof url === 'string' && url.includes('/api/admin/')) {
+          nextInit = { ...nextInit };
+          const headers = nextInit.headers instanceof Headers
+            ? new Headers(nextInit.headers)
+            : new Headers(nextInit.headers || {});
+          if (!headers.has('x-admin-key')) {
+            const key = state?.adminKey || getAdminKey?.();
+            if (key) headers.set('x-admin-key', key);
+          }
+          nextInit.headers = headers;
+          if (!nextInit.credentials) nextInit.credentials = 'include';
+          nextInit.cache = 'no-store';
+        }
+      } catch (error) {
+        console.warn('Failed to apply admin fetch patch', error);
+      }
+      return nativeFetch(input, nextInit);
+    };
+  })();
 
   let refreshAdminAuth = async () => {};
   let setActiveTab = () => {};
@@ -344,6 +374,8 @@ function initAdmin() {
   const adminState = {
     role: null,
     familyId: null,
+    familyKey: '',
+    familyName: '',
     families: [],
     currentFamilyId: null,
     masterView: 'templates',
@@ -1342,8 +1374,13 @@ function initAdmin() {
   function clearAdminContext() {
     adminState.role = null;
     adminState.familyId = null;
+    adminState.familyKey = '';
+    adminState.familyName = '';
     state.role = null;
     state.familyId = null;
+    state.familyKey = '';
+    state.scopedFamilyId = null;
+    state.scopedFamilyName = '';
     assignFamilies([]);
     adminState.currentFamilyId = null;
     adminState.masterView = 'templates';
@@ -1371,6 +1408,8 @@ function initAdmin() {
     const previousRole = adminState.role;
     const previousView = adminState.masterView;
     const previousFamilyScope = adminState.currentFamilyId;
+    const familyKeyProvided = Object.prototype.hasOwnProperty.call(partial, 'familyKey');
+    const familyNameProvided = Object.prototype.hasOwnProperty.call(partial, 'familyName');
     if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
       const nextRole = partial.role ?? null;
       if (nextRole === 'master' && previousRole !== 'master') {
@@ -1390,6 +1429,16 @@ function initAdmin() {
     if (Object.prototype.hasOwnProperty.call(partial, 'family_id')) {
       adminState.familyId = normalizeScopeId(partial.family_id);
       state.familyId = adminState.familyId;
+    }
+    if (familyKeyProvided) {
+      adminState.familyKey = partial.familyKey ? String(partial.familyKey) : '';
+      state.familyKey = adminState.familyKey;
+    }
+    if (familyNameProvided) {
+      adminState.familyName = partial.familyName ? String(partial.familyName) : '';
+      if (adminState.familyName) {
+        state.scopedFamilyName = adminState.familyName;
+      }
     }
     if (Object.prototype.hasOwnProperty.call(partial, 'showInactiveFamilies')) {
       adminState.showInactiveFamilies = !!partial.showInactiveFamilies;
@@ -1414,13 +1463,28 @@ function initAdmin() {
     state.scopedFamilyId = adminState.currentFamilyId || null;
     if (state.scopedFamilyId) {
       const entry = findFamilyEntry(state.scopedFamilyId);
-      if (entry && entry.name) {
-        state.scopedFamilyName = String(entry.name);
-      } else if (!state.scopedFamilyName) {
-        state.scopedFamilyName = '';
+      if (!familyNameProvided) {
+        if (adminState.familyName) {
+          state.scopedFamilyName = adminState.familyName;
+        } else if (entry && entry.name) {
+          state.scopedFamilyName = String(entry.name);
+        } else if (!state.scopedFamilyName) {
+          state.scopedFamilyName = '';
+        }
+      }
+      if (!familyKeyProvided) {
+        const entryKey = entry?.family_key ?? entry?.admin_key ?? '';
+        if (entryKey) {
+          state.familyKey = String(entryKey);
+        } else if (adminState.familyKey) {
+          state.familyKey = adminState.familyKey;
+        }
       }
     } else {
       state.scopedFamilyName = '';
+      if (!familyKeyProvided) {
+        state.familyKey = '';
+      }
     }
 
     if (persist) {
@@ -1558,8 +1622,15 @@ function initAdmin() {
       return;
     }
     if (role === 'family') {
-      const familyLabel = state.familyId || adminState.currentFamilyId || adminState.familyId || '';
-      pill.textContent = `Family Admin (${familyLabel || 'unknown'})`;
+      const familyLabel =
+        state.familyKey ||
+        state.scopedFamilyName ||
+        state.scopedFamilyId ||
+        adminState.familyKey ||
+        adminState.currentFamilyId ||
+        adminState.familyId ||
+        '';
+      pill.textContent = familyLabel ? `Family Admin (${familyLabel})` : 'Family Admin';
       return;
     }
     pill.textContent = 'Admin';
@@ -1597,7 +1668,11 @@ function initAdmin() {
 
   function updateWhoamiBanner() {
     if (!whoamiBanner) return;
-    const { role, familyId, families, currentFamilyId } = adminState;
+    const { role, families, currentFamilyId } = adminState;
+    const activeId = state.scopedFamilyId || currentFamilyId || adminState.familyId || state.familyId || null;
+    const displayName = state.scopedFamilyName || (activeId ? findFamilyLabel(activeId) : '');
+    const displayKey = state.familyKey || adminState.familyKey || '';
+
     if (!role) {
       whoamiBanner.hidden = true;
       if (familyScopeWrapper) familyScopeWrapper.hidden = true;
@@ -1617,10 +1692,8 @@ function initAdmin() {
           chip.textContent = 'Master';
         } else if (role === 'family') {
           chip.classList.add('role-chip--family');
-          const familyLabel = adminState.familyId || familyId || '';
-          chip.textContent = familyLabel
-            ? `Family Admin (${familyLabel})`
-            : 'Family Admin';
+          const label = displayKey || displayName || activeId || '';
+          chip.textContent = label ? `Family Admin (${label})` : 'Family Admin';
         } else {
           chip.textContent = role;
         }
@@ -1645,6 +1718,7 @@ function initAdmin() {
             const option = document.createElement('option');
             option.value = family.id;
             option.textContent = family.name ? `${family.name} (${family.id})` : family.id;
+            option.dataset.familyKey = family.family_key ? String(family.family_key) : '';
             familyScopeSelect.appendChild(option);
           }
         }
@@ -1656,14 +1730,17 @@ function initAdmin() {
       }
       if (familyScopeSummary) {
         familyScopeSummary.hidden = false;
-        familyScopeSummary.textContent = currentFamilyId
-          ? `Family scope: ${findFamilyLabel(currentFamilyId)}`
+        const summaryValue = currentFamilyId
+          ? (state.scopedFamilyName || displayName || displayKey || findFamilyLabel(currentFamilyId) || currentFamilyId)
+          : '';
+        familyScopeSummary.textContent = summaryValue
+          ? `Family scope: ${summaryValue}`
           : 'Select a family to manage data.';
       }
       if (familyIdChip) {
-        if (currentFamilyId) {
+        if (currentFamilyId && displayKey) {
           familyIdChip.hidden = false;
-          familyIdChip.textContent = `Family ID: ${currentFamilyId}`;
+          familyIdChip.textContent = `Family key: ${displayKey}`;
         } else {
           familyIdChip.hidden = true;
         }
@@ -1672,19 +1749,19 @@ function initAdmin() {
       if (familyScopeWrapper) {
         familyScopeWrapper.hidden = true;
       }
-      const scopeLabel = adminState.currentFamilyId || familyId || '';
+      const scopeLabel = displayName || displayKey || activeId || '';
       if (familyScopeSummary) {
         if (scopeLabel) {
           familyScopeSummary.hidden = false;
-          familyScopeSummary.textContent = `Family scope: ${findFamilyLabel(scopeLabel)}`;
+          familyScopeSummary.textContent = `Family scope: ${scopeLabel}`;
         } else {
           familyScopeSummary.hidden = true;
         }
       }
       if (familyIdChip) {
-        if (scopeLabel) {
+        if (displayKey) {
           familyIdChip.hidden = false;
-          familyIdChip.textContent = `Family ID: ${scopeLabel}`;
+          familyIdChip.textContent = `Family key: ${displayKey}`;
         } else {
           familyIdChip.hidden = true;
         }
@@ -1715,26 +1792,30 @@ function initAdmin() {
     try {
       const me = await adminGET('/api/admin/whoami');
       const role = typeof me?.role === 'string' ? me.role : null;
-      const familyId = me?.familyId ?? me?.family_id ?? null;
+      const rawFamilyId = me?.familyId ?? me?.family_id ?? null;
+      const familyId = rawFamilyId ? String(rawFamilyId) : null;
       const familyName = typeof me?.familyName === 'string' ? me.familyName : '';
       const familyKey = typeof me?.familyKey === 'string' ? me.familyKey : '';
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
       state.familyId = familyId;
+      state.familyKey = familyKey;
       if (role === 'family' && familyId) {
         state.scopedFamilyId = String(familyId);
         state.scopedFamilyName = familyName || familyKey || '';
       } else if (role === 'master') {
         state.scopedFamilyId = null;
         state.scopedFamilyName = '';
+        state.familyKey = '';
       }
-      setAdminState({ role, family_id: familyId }, { persist: false });
+      setAdminState({ role, family_id: familyId, familyKey, familyName }, { persist: false });
     } catch {
       state.auth = null;
       state.role = null;
       state.familyId = null;
       state.scopedFamilyId = null;
       state.scopedFamilyName = '';
+      state.familyKey = '';
       setAdminState({ role: null, family_id: null }, { persist: false });
     }
     renderRoleBadge();
@@ -1836,10 +1917,12 @@ function initAdmin() {
         const email = row?.email ? String(row.email) : '';
         const familyKey = row?.family_key ? String(row.family_key) : '';
         const status = row?.status ? String(row.status) : 'active';
+        const safeKey = escapeHtml(familyKey);
         return `
           <tr class="cursor-pointer"
               data-family-id="${escapeHtml(rawId)}"
-              data-family-name="${escapeHtml(name)}">
+              data-family-name="${escapeHtml(name)}"
+              data-family-key="${safeKey}">
             <td>${escapeHtml(familyKey)}</td>
             <td>${escapeHtml(name)}</td>
             <td>${escapeHtml(email)}</td>
@@ -2010,9 +2093,9 @@ function initAdmin() {
       event.stopPropagation();
       event.stopImmediatePropagation();
 
-      const { familyId, familyName } = row.dataset || {};
+      const { familyId, familyName, familyKey } = row.dataset || {};
       if (!familyId) return;
-      setScopedFamily(familyId, familyName);
+      setScopedFamily(familyId, familyName, familyKey);
     },
     true
   );
@@ -2095,11 +2178,12 @@ function initAdmin() {
     const fid = select && typeof select.value === 'string' ? select.value.trim() : '';
     const option = select?.selectedOptions?.[0] || null;
     const fname = option ? option.text : '';
+    const fkey = option?.dataset?.familyKey || '';
     if (!fid) {
       toast('Select a family first', 'error');
       return;
     }
-    setScopedFamily(fid, fname).catch((error) => console.warn('Failed to scope family from dropdown', error));
+    setScopedFamily(fid, fname, fkey).catch((error) => console.warn('Failed to scope family from dropdown', error));
   });
 
   function findFamilyEntry(familyId) {
@@ -2135,13 +2219,15 @@ function initAdmin() {
     return date.toLocaleString();
   }
 
-  async function setScopedFamily(familyId, familyName = '') {
+  async function setScopedFamily(familyId, familyName = '', familyKey = '') {
     const normalized = normalizeScopeId(familyId);
     if (!normalized) return;
     const entry = findFamilyEntry(normalized);
     const resolvedName = familyName || entry?.name || '';
+    const resolvedKey = familyKey || entry?.family_key || entry?.admin_key || '';
     state.scopedFamilyId = normalized;
     state.scopedFamilyName = resolvedName;
+    state.familyKey = resolvedKey ? String(resolvedKey) : '';
     if (familyScopeSelect) {
       const options = Array.from(familyScopeSelect.options || []);
       const match = options.find((opt) => normalizeScopeId(opt.value) === normalized);
@@ -2149,8 +2235,10 @@ function initAdmin() {
         familyScopeSelect.value = match.value;
       }
     }
-    if (adminState.currentFamilyId !== normalized) {
-      setAdminState({ currentFamilyId: normalized });
+    const needNameUpdate = resolvedName !== (adminState.familyName || '');
+    const needKeyUpdate = resolvedKey !== (adminState.familyKey || '');
+    if (adminState.currentFamilyId !== normalized || needNameUpdate || needKeyUpdate) {
+      setAdminState({ currentFamilyId: normalized, familyName: resolvedName, familyKey: resolvedKey });
     }
     renderScopePanels();
     await reloadScopedData();
@@ -2159,6 +2247,7 @@ function initAdmin() {
   async function clearScopedFamily() {
     state.scopedFamilyId = null;
     state.scopedFamilyName = '';
+    state.familyKey = '';
     if (familyScopeSelect) {
       familyScopeSelect.value = '';
     }
@@ -2173,19 +2262,22 @@ function initAdmin() {
     const host = document.getElementById('family-scope-panels');
     if (!host) return;
 
-    const scopedId = state.scopedFamilyId || null;
-    if (!scopedId) {
+    const fid = state.scopedFamilyId || null;
+    if (!fid) {
       host.innerHTML = '';
       return;
     }
 
-    const scopeName = state.scopedFamilyName || findFamilyName(scopedId);
-    const chipLabel = scopeName || scopedId;
+    const scopeName = state.scopedFamilyName || findFamilyName(fid);
+    const displayKey = state.familyKey || '';
+    const identity = [scopeName, displayKey].filter(Boolean).join(' · ');
 
     host.innerHTML = `
       <div class="flex items-center justify-between mb-2">
-        <div class="text-sm">
-          <span class="px-2 py-1 rounded bg-slate-100">Viewing: ${escapeHtml(chipLabel)} (${escapeHtml(scopedId)})</span>
+        <div class="text-sm leading-tight">
+          <div class="font-semibold">Family scope</div>
+          <div>${escapeHtml(identity || fid)}</div>
+          <div class="text-xs text-slate-500 mt-1">ID: ${escapeHtml(fid)}</div>
         </div>
         <button id="btnClearScope" class="px-2 py-1 rounded border">Clear</button>
       </div>
@@ -2218,7 +2310,7 @@ function initAdmin() {
       </div>
     `;
 
-    const token = `${scopedId}:${Date.now()}`;
+    const token = `${fid}:${Date.now()}`;
     host.dataset.scopeToken = token;
 
     host
@@ -2232,11 +2324,11 @@ function initAdmin() {
 
     try {
       const [members, tasks, rewards, holds, activity] = await Promise.all([
-        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/members`),
-        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/tasks`),
-        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/rewards`),
-        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/holds`),
-        adminGET(`/api/admin/families/${encodeURIComponent(scopedId)}/activity?limit=50`)
+        adminGET(`/api/admin/families/${encodeURIComponent(fid)}/members`),
+        adminGET(`/api/admin/families/${encodeURIComponent(fid)}/tasks`),
+        adminGET(`/api/admin/families/${encodeURIComponent(fid)}/rewards`),
+        adminGET(`/api/admin/families/${encodeURIComponent(fid)}/holds`),
+        adminGET(`/api/admin/families/${encodeURIComponent(fid)}/activity?limit=50`)
       ]);
 
       if (host.dataset.scopeToken !== token) return;
@@ -2772,7 +2864,7 @@ details.member-fold .summary-value {
       return;
     }
     const entry = findFamilyEntry(selected);
-    await setScopedFamily(selected, entry?.name || '');
+    await setScopedFamily(selected, entry?.name || '', entry?.family_key || entry?.admin_key || '');
   });
 
   const quickFamilyButton = document.querySelector('#btn-list-families');
@@ -3021,7 +3113,7 @@ details.member-fold .summary-value {
     };
     mirrorAdminKeyToCookie(key);
     if (!skipScope) {
-      const scopeId = adminState.currentFamilyId || null;
+      const scopeId = state.scopedFamilyId || adminState.currentFamilyId || null;
       if (scopeId) {
         headers['x-act-as-family'] = scopeId;
       }
@@ -3098,7 +3190,7 @@ details.member-fold .summary-value {
         toast('Title required');
         return;
       }
-      const familyId = state.familyId || adminState.currentFamilyId || adminState.familyId;
+      const familyId = state.scopedFamilyId || adminState.currentFamilyId || state.familyId || adminState.familyId;
       if (!familyId) {
         toast('Select a family scope to create templates.', 'error');
         return;
@@ -3222,7 +3314,9 @@ details.member-fold .summary-value {
       const payload = await adminGET('/api/admin/whoami');
       const nextState = {
         role: payload.role ?? null,
-        family_id: payload.family_id ?? payload.familyId ?? null
+        family_id: payload.family_id ?? payload.familyId ?? null,
+        familyKey: typeof payload.familyKey === 'string' ? payload.familyKey : '',
+        familyName: typeof payload.familyName === 'string' ? payload.familyName : ''
       };
       if (masterCard) {
         masterCard.hidden = nextState.role !== 'master';
@@ -3231,6 +3325,8 @@ details.member-fold .summary-value {
         }
       }
       if (nextState.role === 'master') {
+        nextState.familyKey = '';
+        nextState.familyName = '';
         try {
           const families = (await fetchFamiliesStrict()).filter((family) => family && normalizeScopeId(family.id));
           nextState.families = families;
@@ -3255,10 +3351,14 @@ details.member-fold .summary-value {
           const detail = await fetchFamilyDetail(nextState.family_id);
           if (detail) {
             nextState.families = [detail];
+            nextState.familyKey = nextState.familyKey || detail.family_key || detail.admin_key || '';
+            nextState.familyName = nextState.familyName || detail.name || '';
           } else if (Array.isArray(adminState.families)) {
             const existing = adminState.families.find((entry) => entry && entry.id === nextState.family_id);
             if (existing) {
               nextState.families = [existing];
+              nextState.familyKey = nextState.familyKey || existing.family_key || existing.admin_key || '';
+              nextState.familyName = nextState.familyName || existing.name || '';
             }
           }
         }

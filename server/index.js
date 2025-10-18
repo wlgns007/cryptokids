@@ -28,7 +28,9 @@ function applyAdminContext(req, ctx) {
   req.auth = {
     role: ctx.role,
     familyId: ctx.familyId,
-    family_id: ctx.familyId ?? null
+    family_id: ctx.familyId ?? null,
+    familyKey: ctx.familyKey || null,
+    familyName: ctx.familyName || ""
   };
 }
 
@@ -393,7 +395,12 @@ app.get("/api/admin/whoami", (req, res) => {
     return;
   }
   if (ctx.role === "family" && ctx.familyId) {
-    res.json({ role: "family", familyId: ctx.familyId });
+    res.json({
+      role: "family",
+      familyId: String(ctx.familyId),
+      familyKey: ctx.familyKey ? String(ctx.familyKey) : "",
+      familyName: ctx.familyName ? String(ctx.familyName) : ""
+    });
     return;
   }
   res.json({ role: ctx.role ?? "none" });
@@ -404,7 +411,7 @@ app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const status = statusParam === "active" || statusParam === "inactive" ? statusParam : null;
 
   let sql =
-    "SELECT id, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
+    "SELECT id, admin_key AS family_key, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
   const params = [];
   if (status) {
     sql += " AND status = ?";
@@ -440,7 +447,11 @@ app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
     return;
   }
   const { admin_key, ...rest } = row;
-  res.json(rest);
+  const payload = {
+    ...rest,
+    family_key: admin_key ? String(admin_key) : ""
+  };
+  res.json(payload);
 });
 
 app.post("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
