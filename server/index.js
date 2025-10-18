@@ -27,6 +27,12 @@ const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim
 
 const adminAuth = createAdminAuth(db);
 
+if (process.argv.includes("--help")) {
+  console.log("Parents Shop API");
+  console.log("Usage: node server/index.js [--help]");
+  process.exit(0);
+}
+
 function applyAdminContext(req, ctx) {
   req.auth = {
     role: ctx.role,

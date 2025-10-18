@@ -9,40 +9,25 @@ const router = express.Router();
 const resolveFamily = makeFamilyResolver();
 
 export const scopeMiddleware = (req, res, next) => {
+  const rawCandidate =
+    req.params?.family ??
+    req.params?.familyId ??
+    req.query?.family ??
+    req.header("x-family") ??
+    "";
+  const raw = typeof rawCandidate === "string" ? rawCandidate.trim() : "";
+
+  if (!raw) {
+    req.family = null;
+    return next();
+  }
+
   try {
-    const path = typeof req.path === "string" ? req.path : "";
-    const baseUrl = typeof req.baseUrl === "string" ? req.baseUrl : "";
-    const includeGenericId = path.includes("/families/") || baseUrl.includes("/families");
-    const candidates = [
-      req.params?.family,
-      req.params?.familyId,
-      req.params?.family_id,
-      includeGenericId ? req.params?.id : null,
-      req.header("x-family"),
-      req.header("x-act-as-family"),
-      req.header("x-family-id"),
-      req.query?.family,
-      req.query?.familyId,
-      req.query?.family_id
-    ];
-    const rawCandidate = candidates.find((value) => typeof value === "string" && value.trim());
-    const raw = rawCandidate ? rawCandidate.trim() : "";
-
-    if (!raw) {
-      req.family = null;
-      res.locals.family = null;
-      return next();
-    }
-
     const fam = resolveFamily(raw);
     req.family = fam;
-    res.locals.family = fam;
     return next();
   } catch (error) {
-    if (error?.status === 404) {
-      return res.status(404).json({ error: "Family not found for scope token." });
-    }
-    return next(error);
+    return res.status(404).json({ error: "Family not found for scope token." });
   }
 };
 
