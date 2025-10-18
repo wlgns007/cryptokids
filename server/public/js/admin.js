@@ -30,6 +30,7 @@ import { renderHeader } from './header.js';
     showInactive: false,
     role: null,
     familyId: null,
+    auth: null,
     scopedFamilyId: null,
     scopedFamilyName: ''
   };
@@ -527,26 +528,30 @@ function initAdmin() {
     if (desired === 'families') {
       renderFamilyManagement('');
       if (isMaster) {
+        renderExistingFamiliesCardShell();
         fetchFamilies()
           .then((rows) => {
             const families = Array.isArray(rows) ? rows : [];
             state.families = families;
             assignFamilies(families);
             persistAdminContextSnapshot();
-            renderFamilyManagement('');
+            renderExistingFamiliesCard();
           })
           .catch((error) => {
             console.warn('fetchFamilies failed', error);
             state.families = [];
             assignFamilies([]);
+            renderExistingFamiliesCard();
             const message = String(error) === 'Error: 403'
               ? 'Master key required.'
               : 'Failed to load families.';
             renderFamilyManagement(message);
           });
       } else if (state.role === 'family') {
-        renderFamilyManagement('This list is master-only. Use the panels below for your family.');
+        renderExistingFamiliesCardShell(false);
+        renderScopePanels();
       } else {
+        renderExistingFamiliesCardShell(false);
         renderFamilyManagement('Enter a valid admin key.');
       }
     } else {
@@ -1711,12 +1716,24 @@ function initAdmin() {
       const me = await adminGET('/api/admin/whoami');
       const role = typeof me?.role === 'string' ? me.role : null;
       const familyId = me?.familyId ?? me?.family_id ?? null;
+      const familyName = typeof me?.familyName === 'string' ? me.familyName : '';
+      state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
       state.familyId = familyId;
+      if (role === 'family' && familyId) {
+        state.scopedFamilyId = String(familyId);
+        state.scopedFamilyName = familyName || '';
+      } else if (role === 'master') {
+        state.scopedFamilyId = null;
+        state.scopedFamilyName = '';
+      }
       setAdminState({ role, family_id: familyId }, { persist: false });
     } catch {
+      state.auth = null;
       state.role = null;
       state.familyId = null;
+      state.scopedFamilyId = null;
+      state.scopedFamilyName = '';
       setAdminState({ role: null, family_id: null }, { persist: false });
     }
     renderRoleBadge();
@@ -1780,46 +1797,101 @@ function initAdmin() {
     });
   }
 
+  function renderStatusSelect(status, id) {
+    const normalizedStatus = (status || '').toString().toLowerCase();
+    const s = (value) => (normalizedStatus === value ? 'selected' : '');
+    const escapedId = escapeHtml(String(id ?? ''));
+    return `
+      <select class="fam-status" data-id="${escapedId}">
+        <option value="active" ${s('active')}>Active</option>
+        <option value="inactive" ${s('inactive')}>Inactive</option>
+        <option value="delete">Delete permanently</option>
+      </select>
+    `;
+  }
+
+  function renderRowActions(id) {
+    return `<button class="btn-save" data-id="${escapeHtml(String(id ?? ''))}" type="button">Save</button>`;
+  }
+
   function renderFamiliesTableHTML(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    const buildRow = (row) => {
-      const rawId = row?.id != null ? String(row.id) : '';
-      const displayId = rawId || '—';
-      const name = row?.name ? String(row.name) : '';
-      const email = row?.email ? String(row.email) : '';
-      const status = row?.status ? String(row.status) : '';
-      return `
-          <tr class="cursor-pointer"
-              data-family-id="${escapeHtml(rawId)}"
-              data-family-name="${escapeHtml(name)}">
-            <td>${escapeHtml(displayId)}</td>
-            <td>${escapeHtml(name)}</td>
-            <td>${escapeHtml(email)}</td>
-            <td>${escapeHtml(status)}</td>
-          </tr>
-        `;
-    };
-
-    const rowsHtml = list.map(buildRow).join('');
-    if (!rowsHtml) {
+    if (!list.length) {
       const emptyText = state.showInactive ? 'No inactive families.' : 'No active families.';
       return `
         <table class="table">
+          <thead>
+            <tr><th>Family Key</th><th>Name</th><th>Email</th><th>Status</th><th>Actions</th></tr>
+          </thead>
           <tbody>
             <tr>
-              <td colspan="4" class="muted">${escapeHtml(emptyText)}</td>
+              <td colspan="5" class="muted">${escapeHtml(emptyText)}</td>
             </tr>
           </tbody>
         </table>
       `;
     }
 
+    const rowsHtml = list
+      .map((row) => {
+        const rawId = row?.id != null ? String(row.id) : '';
+        const name = row?.name ? String(row.name) : '';
+        const email = row?.email ? String(row.email) : '';
+        const familyKey = row?.family_key ? String(row.family_key) : '';
+        const status = row?.status ? String(row.status) : 'active';
+        return `
+          <tr class="cursor-pointer"
+              data-family-id="${escapeHtml(rawId)}"
+              data-family-name="${escapeHtml(name)}">
+            <td>${escapeHtml(familyKey)}</td>
+            <td>${escapeHtml(name)}</td>
+            <td>${escapeHtml(email)}</td>
+            <td>${renderStatusSelect(status, rawId)}</td>
+            <td>${renderRowActions(rawId)}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
     return `
       <table class="table">
+        <thead>
+          <tr><th>Family Key</th><th>Name</th><th>Email</th><th>Status</th><th>Actions</th></tr>
+        </thead>
         <tbody>
-        ${rowsHtml}
+          ${rowsHtml}
         </tbody>
       </table>
+    `;
+  }
+
+  function renderExistingFamiliesCardShell(showList = true) {
+    const host = document.getElementById('existingFamiliesCard');
+    if (!host) return;
+
+    const role = state.role ?? adminState.role ?? null;
+    const isMaster = role === 'master';
+    const isFamily = role === 'family';
+
+    let bodyHtml = '';
+    if (showList && isMaster) {
+      bodyHtml = '<div id="familiesTable"></div>';
+    } else if (isFamily) {
+      bodyHtml = '<div class="text-slate-500 text-sm">You can manage only your family.</div>';
+    } else {
+      bodyHtml = '<div class="muted text-sm">Master access required.</div>';
+    }
+
+    host.innerHTML = `
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-base font-semibold">Existing families</h3>
+        ${isMaster
+          ? `<button id="btnToggleInactive" type="button" class="px-3 py-1 rounded border">
+              ${state.showInactive ? 'View active families' : 'View inactive families'}
+            </button>`
+          : ''}
+      </div>
+      ${bodyHtml}
     `;
   }
 
@@ -1828,53 +1900,54 @@ function initAdmin() {
     if (!host) return;
 
     const role = state.role ?? adminState.role ?? null;
-    const isMaster = role === 'master';
+    if (role !== 'master') return;
 
-    if (!isMaster) {
-      host.innerHTML = `
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="text-base font-semibold">Existing families</h3>
-        </div>
-        <div class="muted text-sm">Master access required.</div>
-      `;
+    const tableHost = host.querySelector('#familiesTable');
+    if (!tableHost) {
+      renderExistingFamiliesCardShell();
       return;
     }
 
-    const families = Array.isArray(state.families) ? state.families : [];
+    const toggle = host.querySelector('#btnToggleInactive');
+    if (toggle) {
+      toggle.textContent = state.showInactive ? 'View active families' : 'View inactive families';
+    }
 
-    host.innerHTML = `
-      <div class="flex items-center justify-between mb-2">
-        <h3 class="text-base font-semibold">Existing families</h3>
-        <button id="btnToggleInactive" type="button" class="px-3 py-1 rounded border">
-          ${state.showInactive ? 'View active families' : 'View inactive families'}
-        </button>
-      </div>
-      <div id="familiesTable">${renderFamiliesTableHTML(families)}</div>
-    `;
+    const families = Array.isArray(state.families) ? state.families : [];
+    tableHost.innerHTML = renderFamiliesTableHTML(families);
   }
 
   function renderFamilyManagement(message = '') {
     const host = qs('families-panel');
     const role = state.role ?? adminState.role ?? null;
     const isMaster = role === 'master';
+    const isFamily = role === 'family';
     const showInactive = !!state.showInactive;
     adminState.showInactiveFamilies = showInactive;
 
-    const note = message ? `<div class="text-sm text-rose-600 mb-2">${escapeHtml(message)}</div>` : '';
-    if (host) {
-      if (isMaster) {
-        const copy = '<div class="text-sm text-slate-500">Master admins can review all families.</div>';
-        host.innerHTML = `${note}${copy}`;
-      } else {
-        const fallback = '<p class="muted family-panel-copy">Master access required to manage families.</p>';
-        host.innerHTML = `${note}${fallback}`;
-      }
+    if (isMaster) {
+      renderExistingFamiliesCardShell();
+    } else {
+      renderExistingFamiliesCardShell(false);
     }
 
-    renderExistingFamiliesCard();
+    const note = message ? `<div class="text-sm text-rose-600 mb-2">${escapeHtml(message)}</div>` : '';
+    if (host) {
+      let copy = '<p class="muted family-panel-copy">Master access required to manage families.</p>';
+      if (isMaster) {
+        copy = '<div class="text-sm text-slate-500">Master admins can review all families.</div>';
+      } else if (isFamily) {
+        copy = '<div class="text-sm text-slate-500">You can manage your family using the panels below.</div>';
+      }
+      host.innerHTML = `${note}${copy}`;
+    }
 
     if (!familyManagementPanel) {
-      renderScopePanels();
+      if (isMaster) {
+        renderExistingFamiliesCard();
+      } else {
+        renderScopePanels();
+      }
       return;
     }
 
@@ -1889,6 +1962,7 @@ function initAdmin() {
     }
 
     refreshFamilyIdPreview();
+    renderExistingFamiliesCard();
     renderScopePanels();
   }
 
@@ -1933,6 +2007,7 @@ function initAdmin() {
       if (!row) return;
       const familiesPanel = document.getElementById('panel-families');
       if (!familiesPanel || familiesPanel.classList.contains('hidden')) return;
+      if (target.closest('.fam-status') || target.closest('.btn-save')) return;
 
       event.preventDefault();
       event.stopPropagation();
@@ -1941,6 +2016,49 @@ function initAdmin() {
       const { familyId, familyName } = row.dataset || {};
       if (!familyId) return;
       setScopedFamily(familyId, familyName);
+    },
+    true
+  );
+
+  document.addEventListener(
+    'click',
+    async (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const btn = target.closest('.btn-save[data-id]');
+      if (!btn) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const id = btn.dataset.id ? String(btn.dataset.id).trim() : '';
+      if (!id) return;
+
+      const row = btn.closest('tr');
+      const select = row?.querySelector('.fam-status[data-id]');
+      if (!select || select.tagName !== 'SELECT') return;
+
+      const val = select.value;
+      try {
+        if (val === 'delete') {
+          await deleteFamily(id);
+          toast('Family permanently deleted');
+        } else {
+          await updateFamily(id, { status: val });
+          toast('Family status updated');
+        }
+        if (state.role === 'master') {
+          const rows = await fetchFamilies();
+          const families = Array.isArray(rows) ? rows : [];
+          state.families = families;
+          assignFamilies(families);
+          renderExistingFamiliesCard();
+        }
+      } catch (error) {
+        console.warn('Failed to update family', error);
+        toast('Failed to update family', 'error');
+      }
     },
     true
   );
