@@ -6,33 +6,44 @@ export const listMembers = [
   requireFamilyScope,
   (req, res, next) => {
     try {
-      const table = ["members", "member", "kids", "children"].find((name) => tableExists(name));
-      if (!table) {
-        res.json([]);
-        return;
+      if (tableExists("members")) {
+        if (!hasColumn("members", "family_id")) {
+          return res.json([]);
+        }
+        const nameCols = ["nickname", "display_name", "name", "full_name", "first_name"];
+        const present = nameCols.find((column) => hasColumn("members", column));
+        const nameExpr = present ? `"${present}"` : "'Member'";
+        const avatarCol = hasColumn("members", "avatar_url")
+          ? "avatar_url"
+          : hasColumn("members", "image_url")
+            ? "image_url"
+            : null;
+        const avatarExpr = avatarCol ? `"${avatarCol}"` : "NULL";
+        const statusExpr = hasColumn("members", "status") ? '"status"' : "'active'";
+        const orderExpr = present ? `"${present}" COLLATE NOCASE` : "created_at DESC";
+
+        const sql = `
+          SELECT id, family_id,
+                 ${nameExpr}   AS name,
+                 ${avatarExpr} AS avatar_url,
+                 ${statusExpr} AS status,
+                 created_at, updated_at
+          FROM members
+          WHERE family_id = ?
+          ORDER BY ${orderExpr}
+          LIMIT 500
+        `;
+        const rows = db.prepare(sql).all(req.family.id);
+        return res.json(rows);
       }
 
-      const nameCols = ["nickname", "display_name", "name", "full_name", "first_name"];
-      const present = nameCols.find((c) => hasColumn(table, c));
-      const nameExpr = present ? `"${present}"` : "'Member'";
-      const avatarCol = hasColumn(table, "avatar_url")
-        ? "avatar_url"
-        : hasColumn(table, "image_url")
-          ? "image_url"
-          : null;
-      const avatarExpr = avatarCol ? `"${avatarCol}"` : "NULL";
-      const statusExpr = hasColumn(table, "status") ? '"status"' : "'active'";
+      if (tableExists("kids")) {
+        return res.json([]);
+      }
 
-      const sql = `
-        SELECT id, family_id, ${nameExpr} AS name, ${avatarExpr} AS avatar_url,
-               ${statusExpr} AS status, created_at, updated_at
-        FROM "${table}"
-        WHERE family_id = ?
-        ORDER BY ${present ? `"${present}" COLLATE NOCASE` : "created_at DESC"}
-      `;
-      res.json(db.prepare(sql).all(req.family.id));
-    } catch (e) {
-      next(e);
+      return res.json([]);
+    } catch (error) {
+      next(error);
     }
   }
 ];
