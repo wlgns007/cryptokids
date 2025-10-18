@@ -3,15 +3,18 @@ import { randomUUID } from "node:crypto";
 import db from "./db.js";
 import { createAdminAuth } from "./middleware/adminAuth.js";
 import { sendMail } from "./email.js";
+import makeFamilyResolver from "./lib/familyResolver.js";
 
 export const router = express.Router();
 
 router.use(createAdminAuth(db));
 
+const resolveFamily = makeFamilyResolver(db);
+
 function allowFamilyOrMaster(req, familyId) {
   return (
     req.auth?.role === "master" ||
-    (req.auth?.role === "family" && req.auth.familyId === String(familyId))
+    (req.auth?.role === "family" && String(req.auth.familyId) === String(familyId))
   );
 }
 
@@ -125,13 +128,18 @@ function hardDeleteFamily(id) {
 // whoami
 router.get("/api/admin/whoami", (req, res) => {
   if (!req.auth?.role) return res.status(401).json({ error: "invalid" });
-  const out = { role: req.auth.role };
-  if (req.auth.role === "family") {
-    out.familyId = req.auth.familyId;
-    if (req.auth.familyKey) out.familyKey = req.auth.familyKey;
-    if (req.auth.familyName) out.familyName = req.auth.familyName;
+  if (req.auth.role === "master") {
+    return res.json({ role: "master" });
   }
-  res.json(out);
+  if (req.auth.role === "family") {
+    return res.json({
+      role: "family",
+      familyId: String(req.auth.familyId ?? ""),
+      familyKey: req.auth.familyKey ? String(req.auth.familyKey) : "",
+      familyName: req.auth.familyName ? String(req.auth.familyName) : ""
+    });
+  }
+  return res.status(401).json({ error: "invalid" });
 });
 
 router.get("/api/admin/families", (req, res) => {
@@ -164,63 +172,70 @@ router.get("/api/admin/families", (req, res) => {
 });
 
 router.get("/api/admin/families/:familyId/members", (req, res) => {
-  const fid = String(req.params.familyId ?? "");
-  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare(
       "SELECT id, name, nickname, balance, user_id, created_at, updated_at FROM member WHERE family_id = ? ORDER BY created_at ASC"
     )
-    .all(fid);
+    .all(fam.id);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/tasks", (req, res) => {
-  const fid = String(req.params.familyId ?? "");
-  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(fid);
+    .all(fam.id);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/rewards", (req, res) => {
-  const fid = String(req.params.familyId ?? "");
-  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(fid);
+    .all(fam.id);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/holds", (req, res) => {
-  const fid = String(req.params.familyId ?? "");
-  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const rows = db
     .prepare("SELECT * FROM reward_hold WHERE family_id = ? ORDER BY created_at DESC")
-    .all(fid);
+    .all(fam.id);
   res.json(rows);
 });
 
 router.get("/api/admin/families/:familyId/activity", (req, res) => {
-  const fid = String(req.params.familyId ?? "");
-  if (!allowFamilyOrMaster(req, fid)) return res.sendStatus(403);
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
   const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
   const rows = db
     .prepare("SELECT * FROM activity WHERE family_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(fid, limit);
+    .all(fam.id, limit);
   res.json(rows);
 });
 
 router.patch("/api/admin/families/:id", express.json(), (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
-  const { id } = req.params;
+  const fam = resolveFamily(req.params.id);
+  if (!fam) return res.sendStatus(404);
+  const familyId = String(fam.id);
   const body = req.body || {};
   const normalizedStatus = typeof body.status === "string" ? body.status.trim().toLowerCase() : "";
   const hardMode = body.hard === true || body.hard === "true";
 
   if (hardMode && normalizedStatus === "deleted") {
-    const result = hardDeleteFamily(id);
+    const result = hardDeleteFamily(familyId);
     return res.status(result.status).json(result.body);
   }
 
@@ -246,14 +261,14 @@ router.patch("/api/admin/families/:id", express.json(), (req, res) => {
 
   fields.push(`updated_at = datetime('now')`);
   const sql = `UPDATE "family" SET ${fields.join(", ")} WHERE id = ?`;
-  args.push(id);
+  args.push(familyId);
 
   try {
     const info = db.prepare(sql).run(...args);
     if (info.changes === 0) return res.status(404).json({ error: "not found" });
     const row = db
       .prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`)
-      .get(id);
+      .get(familyId);
     res.json(row);
   } catch (e) {
     const msg = String(e.message || "");
@@ -329,15 +344,9 @@ router.post(
 router.get("/api/admin/families/:familyId/master-tasks/available", (req, res) => {
   if (!req.auth?.role) return res.sendStatus(401);
 
-  const { familyId } = req.params;
-  if (
-    !(
-      req.auth.role === "master" ||
-      (req.auth.role === "family" && req.auth.familyId === String(familyId))
-    )
-  ) {
-    return res.sendStatus(403);
-  }
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
 
   const rows = db
     .prepare(
@@ -349,7 +358,7 @@ router.get("/api/admin/families/:familyId/master-tasks/available", (req, res) =>
           )
         ORDER BY mt.created_at DESC`
     )
-    .all(familyId);
+    .all(fam.id);
 
   res.json(rows);
 });
@@ -358,16 +367,9 @@ router.get("/api/admin/families/:familyId/master-tasks/available", (req, res) =>
 router.post("/api/admin/families/:familyId/tasks/from-master", express.json(), (req, res) => {
   if (!req.auth?.role) return res.sendStatus(401);
 
-  const { familyId } = req.params;
-  const normalizedFamilyId = String(familyId);
-  if (
-    !(
-      req.auth.role === "master" ||
-      (req.auth.role === "family" && req.auth.familyId === normalizedFamilyId)
-    )
-  ) {
-    return res.sendStatus(403);
-  }
+  const fam = resolveFamily(req.params.familyId);
+  if (!fam) return res.sendStatus(404);
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
 
   const { master_task_id } = req.body || {};
   if (!master_task_id) return res.status(400).json({ error: "master_task_id required" });
@@ -378,7 +380,7 @@ router.post("/api/admin/families/:familyId/tasks/from-master", express.json(), (
   const id = randomUUID();
   const now = Date.now();
   const columns = ["id", "family_id"];
-  const values = [id, normalizedFamilyId];
+  const values = [id, String(fam.id)];
 
   if (hasColumn(db, "task", "title")) {
     columns.push("title");
@@ -434,11 +436,10 @@ router.post("/api/admin/families/:familyId/tasks/from-master", express.json(), (
 
 router.post("/api/admin/families/:familyId/tasks", (req, res) => {
   try {
-    const { familyId } = req.params;
-    if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
-
-    const fam = db.prepare("SELECT id FROM family WHERE id = ?").get(String(familyId));
+    const fam = resolveFamily(req.params.familyId);
     if (!fam) return res.sendStatus(404);
+    if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
+    const familyId = String(fam.id);
 
     const {
       title,
@@ -484,7 +485,7 @@ router.post("/api/admin/families/:familyId/tasks", (req, res) => {
     const sql = `INSERT INTO task (${cols.join(",")}) VALUES (${vals.join(",")})`;
     db.prepare(sql).run({
       id,
-      fid: String(familyId),
+      fid: familyId,
       title: titleText,
       points: pointsAmount,
       desc: descText,
@@ -502,11 +503,10 @@ router.post("/api/admin/families/:familyId/tasks", (req, res) => {
 
 router.post("/api/admin/families/:familyId/rewards", (req, res) => {
   try {
-    const { familyId } = req.params;
-    if (!allowFamilyOrMaster(req, familyId)) return res.sendStatus(403);
-
-    const fam = db.prepare("SELECT id FROM family WHERE id = ?").get(String(familyId));
+    const fam = resolveFamily(req.params.familyId);
     if (!fam) return res.sendStatus(404);
+    if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
+    const familyId = String(fam.id);
 
     const {
       title,
@@ -552,7 +552,7 @@ router.post("/api/admin/families/:familyId/rewards", (req, res) => {
     const sql = `INSERT INTO reward (${cols.join(",")}) VALUES (${vals.join(",")})`;
     db.prepare(sql).run({
       id,
-      fid: String(familyId),
+      fid: familyId,
       title: titleText,
       cost: costAmount,
       desc: descText,
@@ -572,7 +572,9 @@ router.delete("/api/admin/families/:id", (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
   const hardMode = String(req.query?.hard ?? "").trim().toLowerCase() === "true";
-  const result = hardDeleteFamily(req.params?.id);
+  const fam = resolveFamily(req.params?.id);
+  if (!fam) return res.status(404).json({ error: "not found" });
+  const result = hardDeleteFamily(fam.id);
   if (hardMode) {
     return res.status(result.status).json(result.body);
   }

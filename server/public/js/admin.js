@@ -46,13 +46,11 @@ import { renderHeader } from './header.js';
           ? input
           : (typeof Request !== 'undefined' && input instanceof Request ? input.url : input?.url || '');
         if (typeof url === 'string' && url.includes('/api/admin/')) {
+          const key = state?.adminKey || getAdminKey?.();
           nextInit = { ...nextInit };
-          const headers = nextInit.headers instanceof Headers
-            ? new Headers(nextInit.headers)
-            : new Headers(nextInit.headers || {});
-          if (!headers.has('x-admin-key')) {
-            const key = state?.adminKey || getAdminKey?.();
-            if (key) headers.set('x-admin-key', key);
+          const headers = new Headers(nextInit.headers || {});
+          if (key && !headers.has('x-admin-key')) {
+            headers.set('x-admin-key', key);
           }
           nextInit.headers = headers;
           if (!nextInit.credentials) nextInit.credentials = 'include';
@@ -1685,19 +1683,38 @@ function initAdmin() {
     if (whoamiRoleLabel) {
       whoamiRoleLabel.innerHTML = '';
       if (role) {
-        const chip = document.createElement('span');
-        chip.className = 'role-chip';
+        const makeChip = (label, value, extraClass) => {
+          const chip = document.createElement('span');
+          chip.className = 'role-chip';
+          if (extraClass) chip.classList.add(extraClass);
+          chip.textContent = value ? `${label}: ${value}` : label;
+          return chip;
+        };
         if (role === 'master') {
-          chip.classList.add('role-chip--master');
-          chip.textContent = 'Master';
+          whoamiRoleLabel.appendChild(makeChip('Master', '', 'role-chip--master'));
         } else if (role === 'family') {
-          chip.classList.add('role-chip--family');
-          const label = displayKey || displayName || activeId || '';
-          chip.textContent = label ? `Family Admin (${label})` : 'Family Admin';
+          const adminValue =
+            state.familyKey ||
+            state.scopedFamilyName ||
+            displayKey ||
+            displayName ||
+            activeId ||
+            '';
+          const scopeValue =
+            state.scopedFamilyName ||
+            state.familyKey ||
+            displayName ||
+            displayKey ||
+            '';
+          const keyValue = state.familyKey || displayKey || '';
+          whoamiRoleLabel.appendChild(makeChip('Family Admin', adminValue, 'role-chip--family'));
+          whoamiRoleLabel.appendChild(makeChip('Family scope', scopeValue, 'role-chip--family'));
+          if (keyValue) {
+            whoamiRoleLabel.appendChild(makeChip('Family key', keyValue, 'role-chip--family'));
+          }
         } else {
-          chip.textContent = role;
+          whoamiRoleLabel.appendChild(makeChip(role, '', ''));
         }
-        whoamiRoleLabel.appendChild(chip);
       }
     }
 
@@ -1799,16 +1816,24 @@ function initAdmin() {
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
       state.familyId = familyId;
-      state.familyKey = familyKey;
       if (role === 'family' && familyId) {
         state.scopedFamilyId = String(familyId);
         state.scopedFamilyName = familyName || familyKey || '';
-      } else if (role === 'master') {
+        state.familyKey = familyKey || '';
+      } else {
         state.scopedFamilyId = null;
         state.scopedFamilyName = '';
         state.familyKey = '';
       }
-      setAdminState({ role, family_id: familyId, familyKey, familyName }, { persist: false });
+      setAdminState(
+        {
+          role,
+          family_id: familyId,
+          familyKey: role === 'family' ? (familyKey || '') : '',
+          familyName: role === 'family' ? (familyName || '') : ''
+        },
+        { persist: false }
+      );
     } catch {
       state.auth = null;
       state.role = null;
@@ -1816,7 +1841,7 @@ function initAdmin() {
       state.scopedFamilyId = null;
       state.scopedFamilyName = '';
       state.familyKey = '';
-      setAdminState({ role: null, family_id: null }, { persist: false });
+      setAdminState({ role: null, family_id: null, familyKey: '', familyName: '' }, { persist: false });
     }
     renderRoleBadge();
   };
