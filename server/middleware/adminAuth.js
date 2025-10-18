@@ -40,11 +40,18 @@ function safeGet(db, sql, ...params) {
 
 export default function adminAuth(req, res, next) {
   try {
+    const path = (req.path || "").toLowerCase();
+    if (req.method === "POST" && (path === "/login" || path === "/login/")) {
+      return next();
+    }
+
     const cookies = parseCookies(req);
     const headerKey =
-      (typeof req.get === "function" && req.get("x-admin-key")) ||
+      (typeof req.get === "function" && (req.get("x-admin-key") || req.get("X-Admin-Key"))) ||
       req.header?.("x-admin-key") ||
+      req.header?.("X-Admin-Key") ||
       req.headers?.["x-admin-key"] ||
+      req.headers?.["X-Admin-Key"] ||
       null;
     const key = (cookies?.ck_admin_key || headerKey || "").toString().trim();
 
