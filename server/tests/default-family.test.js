@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { getFirstActiveFamilyId, buildMasterCookie } from './testUtils.js';
+
 process.env.NODE_ENV = 'test';
 const TEST_DB = path.join(process.cwd(), 'data', `test-default-family-${randomUUID()}.db`);
 process.env.DB_PATH = TEST_DB;
@@ -16,6 +18,7 @@ const { app } = await import('../index.js');
 import db from '../db.js';
 
 const DEFAULT_FAMILY_ID = 'default';
+const MASTER_COOKIE = buildMasterCookie();
 
 function insertFamily({ id = `fam-${randomUUID()}`, name = 'Family', adminKey = `Key-${randomUUID()}` } = {}) {
   const now = new Date().toISOString();
@@ -51,9 +54,9 @@ test('default family is hidden from listings and rejected by scope', async (t) =
   const otherFamily = insertFamily({ id: 'FamOne', name: 'Fam One', adminKey: 'FamOneKey' });
 
   await withServer(t, async (baseUrl) => {
-    const masterHeaders = { 'X-ADMIN-KEY': 'Murasaki' };
-
-    const listRes = await fetch(new URL('/api/admin/families', baseUrl), { headers: masterHeaders });
+    const listRes = await fetch(new URL('/api/admin/families', baseUrl), {
+      headers: { cookie: MASTER_COOKIE },
+    });
     assert.equal(listRes.status, 200);
     const families = await listRes.json();
     assert.ok(Array.isArray(families), 'families payload should be an array');
@@ -63,16 +66,52 @@ test('default family is hidden from listings and rejected by scope', async (t) =
       'non-default families should still appear'
     );
 
-    const defaultRes = await fetch(new URL('/api/admin/families?id=default', baseUrl), { headers: masterHeaders });
+    const defaultRes = await fetch(new URL('/api/admin/families?id=default', baseUrl), {
+      headers: { cookie: MASTER_COOKIE },
+    });
     assert.equal(defaultRes.status, 400);
     const defaultBody = await defaultRes.json();
     assert.deepEqual(defaultBody, { error: 'default family is reserved' });
+  });
+});
 
-    const scopedRes = await fetch(new URL('/api/admin/members', baseUrl), {
-      headers: { ...masterHeaders, 'X-Act-As-Family': 'default' }
+test('scoped endpoints require family scope', async (t) => {
+  insertFamily({ name: 'Scoped Fam', adminKey: 'ScopedKey' });
+
+  await withServer(t, async (baseUrl) => {
+    const res1 = await fetch(new URL('/api/admin/members', baseUrl), {
+      headers: { cookie: MASTER_COOKIE },
     });
-    assert.equal(scopedRes.status, 400);
-    const scopedBody = await scopedRes.json();
-    assert.deepEqual(scopedBody, { error: 'default family is reserved' });
+    assert.equal(res1.status, 400);
+    const body1 = await res1.json();
+    assert.equal(body1.error, 'Missing family scope (x-family)');
+
+    const famId = await getFirstActiveFamilyId(baseUrl, process.env.MASTER_ADMIN_KEY);
+    const res2 = await fetch(new URL('/api/admin/members', baseUrl), {
+      headers: {
+        cookie: MASTER_COOKIE,
+        'x-family': famId,
+      },
+    });
+    assert.equal(res2.status, 200);
+    const rows = await res2.json();
+    assert.ok(Array.isArray(rows));
+  });
+});
+
+test('activity returns empty list for now', async (t) => {
+  insertFamily({ name: 'Activity Fam', adminKey: 'ActivityKey' });
+
+  await withServer(t, async (baseUrl) => {
+    const famId = await getFirstActiveFamilyId(baseUrl, process.env.MASTER_ADMIN_KEY);
+    const res = await fetch(new URL('/api/admin/activity?limit=50', baseUrl), {
+      headers: {
+        cookie: MASTER_COOKIE,
+        'x-family': famId,
+      },
+    });
+    assert.equal(res.status, 200);
+    const rows = await res.json();
+    assert.deepEqual(rows, []);
   });
 });

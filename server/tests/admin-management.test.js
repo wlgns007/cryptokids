@@ -12,6 +12,8 @@ process.env.MASTER_ADMIN_KEY = 'Murasaki';
 
 const fetch = globalThis.fetch;
 
+import { buildMasterCookie } from './testUtils.js';
+
 const { app } = await import('../index.js');
 import db from '../db.js';
 
@@ -162,7 +164,10 @@ test.beforeEach(() => {
   resetTables();
 });
 
-const MASTER_HEADERS = Object.freeze({ 'X-ADMIN-KEY': 'Murasaki' });
+const MASTER_HEADERS = Object.freeze({
+  'x-admin-key': 'Murasaki',
+  cookie: buildMasterCookie(),
+});
 
 test('admin earn templates respects active and inactive modes', async (t) => {
   const family = createFamily();
@@ -249,7 +254,7 @@ test('DELETE /api/admin/families/:id cascades dependents', async (t) => {
   await withServer(t, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/admin/families/${family.id}`, {
       method: 'DELETE',
-      headers: MASTER_HEADERS
+      headers: { ...MASTER_HEADERS, 'x-family': family.id }
     });
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -284,7 +289,7 @@ test('DELETE /api/admin/families/:id?hard=true removes all scoped data', async (
   await withServer(t, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/admin/families/${family.id}?hard=true`, {
       method: 'DELETE',
-      headers: MASTER_HEADERS
+      headers: { ...MASTER_HEADERS, 'x-family': family.id }
     });
     assert.equal(res.status, 200, 'hard delete should succeed');
     const body = await res.json();
