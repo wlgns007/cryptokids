@@ -203,8 +203,10 @@ router.get("/admin/families", (req, res, next) => {
   return listFamilies(req, res, next);
 });
 
+router.get("/api/admin/members", ...listMembers);
 router.get("/admin/members", ...listMembers);
 
+router.get("/api/admin/holds", ...listHolds);
 router.get("/admin/holds", ...listHolds);
 
 router.get("/admin/activity", requireFamilyScope, (req, res) => {
