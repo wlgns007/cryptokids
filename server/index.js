@@ -416,7 +416,7 @@ app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const status = statusParam === "active" || statusParam === "inactive" ? statusParam : null;
 
   let sql =
-    "SELECT id, admin_key AS family_key, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
+    "SELECT id, admin_key, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
   const params = [];
   if (status) {
     sql += " AND status = ?";
@@ -425,7 +425,17 @@ app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   sql += " ORDER BY created_at DESC";
 
   const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
-  res.json(rows);
+  const normalized = rows.map((row) => {
+    const { admin_key, ...rest } = row;
+    const key = admin_key != null ? String(admin_key) : null;
+    return {
+      ...rest,
+      admin_key,
+      key,
+      family_key: key || ""
+    };
+  });
+  res.json(normalized);
 });
 
 app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
@@ -452,9 +462,12 @@ app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
     return;
   }
   const { admin_key, ...rest } = row;
+  const key = admin_key != null ? String(admin_key) : null;
   const payload = {
     ...rest,
-    family_key: admin_key ? String(admin_key) : ""
+    admin_key,
+    key,
+    family_key: key || ""
   };
   res.json(payload);
 });
@@ -6616,6 +6629,12 @@ app.get("/index.html", (_req, res) => {
 
 app.get("/", (_req, res) => {
   res.redirect(`/admin.html?v=${BUILD}`);
+});
+
+app.use((err, req, res, next) => {
+  console.error("[api error]", err);
+  const status = err?.status || 500;
+  res.status(status).json({ error: err?.message || "Internal Server Error" });
 });
 
 if (process.env.NODE_ENV !== "test") {

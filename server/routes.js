@@ -41,19 +41,16 @@ export const scopeMiddleware = (req, res, next) => {
     const raw = rawCandidate ? rawCandidate.trim() : "";
     try {
       const fam = raw ? resolveFamily(raw) : null;
-      if (fam) {
-        console.log("[scope] ok", { raw, uuid: fam.id, key: fam.key, name: fam.name });
-      } else {
-        console.log("[scope] master", { raw });
-      }
       req.family = fam;
       res.locals.family = fam;
+      console.log("[scope]", { raw, uuid: req.family?.id, key: req.family?.key, name: req.family?.name });
       next();
     } catch (error) {
       if (error?.status === 404) {
         console.warn("[scope] fail", { raw, err: error.message });
         req.family = null;
         res.locals.family = null;
+        console.log("[scope]", { raw, uuid: req.family?.id, key: req.family?.key, name: req.family?.name });
         return res.status(404).json({ error: "Family not found for scope token." });
       }
       throw error;
@@ -250,6 +247,23 @@ router.get("/admin/whoami", (req, res) => {
   return res.status(401).json({ error: "invalid" });
 });
 
+router.get("/admin/families/self", (req, res) => {
+  if (!req.family) return res.status(400).json({ error: "Missing family scope." });
+  const { id, key, name, status } = req.family;
+  return res.json({ id, key, name, status });
+});
+
+router.get("/admin/families/:family", (req, res) => {
+  let fam = req.family;
+  if (!fam) {
+    const raw = typeof req.params?.family === "string" ? req.params.family.trim() : "";
+    fam = raw ? resolveFamilyOptional(raw) : null;
+  }
+  if (!fam) return res.status(404).json({ error: "Family not found." });
+  const { id, key, name, status } = fam;
+  return res.json({ id, key, name, status });
+});
+
 router.get("/admin/families", (req, res) => {
   if (req.auth?.role !== "master") return res.sendStatus(403);
 
@@ -260,23 +274,40 @@ router.get("/admin/families", (req, res) => {
     }
     const row = db
       .prepare(
-        `SELECT id, admin_key AS family_key, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`
+        `SELECT id, admin_key, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`
       )
       .get(requestedId);
     if (!row) return res.status(404).json({ error: "not found" });
-    return res.json(row);
+    const { admin_key, ...rest } = row;
+    const key = admin_key != null ? String(admin_key) : null;
+    return res.json({
+      ...rest,
+      admin_key,
+      key,
+      family_key: key || ""
+    });
   }
 
   const status = (req.query.status || "").toString().toLowerCase();
   const rows = db
     .prepare(`
-      SELECT id, admin_key AS family_key, name, email, status
+      SELECT id, admin_key, name, email, status
       FROM family
       WHERE id <> 'default' AND (? = '' OR status = ?)
       ORDER BY created_at DESC
     `)
     .all(status, status);
-  res.json(rows);
+  const normalized = rows.map((row) => {
+    const { admin_key, ...rest } = row;
+    const key = admin_key != null ? String(admin_key) : null;
+    return {
+      ...rest,
+      admin_key,
+      key,
+      family_key: key || ""
+    };
+  });
+  res.json(normalized);
 });
 
 router.get("/admin/families/:familyId/members", (req, res) => {
