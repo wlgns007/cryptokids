@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import db from "./db.js";
 import { sendMail } from "./email.js";
 import { makeFamilyResolver } from "./lib/familyResolver.js";
+import { getFamilyById, listKidsByFamilyId } from "./lib/adminDb.js";
 import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
+import { resolveAdmin, requireCanAccessFamily } from "./middleware/resolveAdmin.js";
 import { listFamilies } from "./routes/families.js";
 import { listActivity } from "./routes/activity.js";
 import { listMembers } from "./routes/members.js";
@@ -24,15 +26,19 @@ export const scopeMiddleware = (req, res, next) => {
 
   if (!raw) {
     req.family = null;
+    req.familyScopeError = null;
     return next();
   }
 
   try {
     const fam = resolveFamily(raw);
     req.family = fam;
+    req.familyScopeError = null;
     return next();
   } catch (error) {
-    return res.status(404).json({ error: "Family not found for scope token." });
+    req.family = null;
+    req.familyScopeError = { code: "family_not_found", input: raw };
+    return next();
   }
 };
 
@@ -216,16 +222,37 @@ router.get("/admin/activity", requireFamilyScope, (req, res) => {
   return listActivity(req, res);
 });
 
-router.get("/admin/families/:familyId/members", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-  const rows = db
-    .prepare(
-      "SELECT id, name, nickname, balance, user_id, created_at, updated_at FROM member WHERE family_id = ? ORDER BY created_at ASC"
-    )
-    .all(fam.id);
-  res.json(rows);
-});
+router.get(
+  "/admin/families/:familyId/members",
+  resolveAdmin,
+  requireCanAccessFamily,
+  (req, res) => {
+    const familyIdRaw = typeof req.params?.familyId === "string" ? req.params.familyId : "";
+    const familyId = familyIdRaw.trim();
+    if (!familyId) {
+      return res.status(404).json({ error: "family_not_found" });
+    }
+
+    const database = req.db || db;
+    try {
+      const family = getFamilyById(database, familyId);
+      if (!family) {
+        return res.status(404).json({ error: "family_not_found" });
+      }
+
+      const members = listKidsByFamilyId(database, familyId);
+      return res.json({ members });
+    } catch (error) {
+      console.error("[admin.members] failed to list members", {
+        familyId,
+        error: error?.message || error,
+      });
+      return res
+        .status(500)
+        .json({ error: "server_error", detail: "members_query_failed" });
+    }
+  }
+);
 
 router.get("/admin/families/:familyId/tasks", requireFamilyScope, (req, res) => {
   const fam = req.family;

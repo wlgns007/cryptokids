@@ -2000,14 +2000,44 @@ function initAdmin() {
   }
 
   async function adminGET(path) {
+    const headers = new Headers();
+    const key = tempAdminKey || getAdminKey();
+    if (key) {
+      headers.set('x-admin-key', key);
+    }
+
     const res = await fetch(path, {
       credentials: 'same-origin',
-      cache: 'no-store'
+      cache: 'no-store',
+      headers
     });
-    if (!res.ok) {
-      throw new Error(String(res.status));
+
+    const contentType = res.headers.get('content-type') || '';
+    let payload = null;
+    if (contentType.includes('application/json')) {
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
+    } else if (res.ok) {
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
     }
-    return res.json();
+
+    if (res.ok) {
+      return payload;
+    }
+
+    const error = new Error(String(res.status));
+    error.status = res.status;
+    if (payload && typeof payload === 'object') {
+      error.payload = payload;
+    }
+    throw error;
   }
 
   async function autoScopeFamilyAdminFromSelf() {
@@ -2660,12 +2690,36 @@ function initAdmin() {
       renderScopedEarn(tasks);
       renderScopedActivity(activity);
     } catch (error) {
-      console.warn('Failed to load scoped family data', error);
-      toast('Failed to load scoped data', 'error');
+      const status = typeof error?.status === 'number' ? error.status : Number(error?.message) || 0;
+      const payload = error && typeof error === 'object' && error.payload && typeof error.payload === 'object'
+        ? error.payload
+        : null;
+      if (payload) {
+        console.warn('Failed to load scoped family data', { status, payload });
+      } else {
+        console.warn('Failed to load scoped family data', error);
+      }
+
+      let message = 'Failed to load scoped data.';
+      if (status === 401) {
+        message = 'Admin key invalid. Please re-enter the key.';
+      } else if (status === 403) {
+        message = 'This key can\u2019t access that family.';
+      } else if (status === 404) {
+        message = 'Family was deleted or ID is wrong.';
+      } else if (status === 500) {
+        const detail = typeof payload?.detail === 'string' ? payload.detail : null;
+        message = detail
+          ? `Server error: ${detail}. Please refresh and try again.`
+          : 'Server error. Please refresh and try again.';
+      }
+
+      toast(message, 'error');
+      const rendered = `<div class="text-rose-600 text-sm">${escapeHtml(message)}</div>`;
       ['fmmBody', 'issueBody', 'holdsBody', 'rewardsBody', 'earnBody', 'activityBody'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) {
-          el.innerHTML = '<div class="text-rose-600 text-sm">Failed to load scoped data.</div>';
+          el.innerHTML = rendered;
         }
       });
     }
