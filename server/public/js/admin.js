@@ -3,7 +3,10 @@ import {
   getFamilyScope,
   setFamilyScope,
   clearFamilyScope,
-  isUUID
+  isUUID,
+  setAdminKeyTemp,
+  clearAdminKeyTemp,
+  getAdminKeyTemp
 } from './scopeStore.js';
 
 const persistFamilyScope = setFamilyScope;
@@ -118,7 +121,14 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
         if (scope?.uuid && isUUID(scope.uuid) && !headers.has('x-family')) {
           headers.set('x-family', scope.uuid);
         }
+        const tmpKey = getAdminKeyTemp();
+        if (tmpKey && !headers.has('x-admin-key')) {
+          headers.set('x-admin-key', tmpKey);
+        }
         const nextInit = { ...init, headers };
+        if (!('credentials' in nextInit)) {
+          nextInit.credentials = 'same-origin';
+        }
         if (request) {
           return orig(new Request(request, nextInit));
         }
@@ -241,6 +251,10 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
     if (!key || typeof document === 'undefined') return;
     const existing = readCookie('ck_admin_key');
     if (existing === key) return;
+    const protocol = typeof window !== 'undefined' ? window.location?.protocol : null;
+    if (protocol && protocol !== 'http:' && protocol !== 'file:') {
+      return;
+    }
     document.cookie = `ck_admin_key=${encodeURIComponent(key)}; Path=/; SameSite=Lax`;
   }
 
@@ -1922,13 +1936,8 @@ function initAdmin() {
   }
 
   async function adminGET(path) {
-    const key = getAdminKey();
-    if (key && typeof document !== 'undefined' && !document.cookie.includes('ck_admin_key=')) {
-      document.cookie = `ck_admin_key=${encodeURIComponent(key)}; Path=/; SameSite=Lax`;
-    }
     const res = await fetch(path, {
-      headers: { 'x-admin-key': key },
-      credentials: 'include',
+      credentials: 'same-origin',
       cache: 'no-store'
     });
     if (!res.ok) {
@@ -1940,6 +1949,7 @@ function initAdmin() {
   refreshAdminAuth = async () => {
     try {
       const me = await adminGET('/api/admin/whoami');
+      clearAdminKeyTemp();
       const role = typeof me?.role === 'string' ? me.role : null;
       const rawFamilyId =
         me?.family_uuid ?? me?.familyId ?? me?.family_id ?? null;
@@ -3003,18 +3013,56 @@ details.member-fold .summary-value {
   if (saveAdminButton) {
     saveAdminButton.addEventListener('click', async () => {
       const value = (keyInput?.value || '').trim();
-      const persisted = setAdminKey(value);
-      toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
-      renderRoleBadge(value ? false : true);
-      await refreshAdminAuth();
-      setActiveTab('templates');
-      if (value) {
+      if (!value) {
+        setAdminKey('');
+        clearAdminKeyTemp();
+        toast('Admin key cleared.');
+        renderRoleBadge(true);
+        await refreshAdminAuth();
+        clearAdminContext();
+        return;
+      }
+
+      setAdminKeyTemp(value);
+      try {
+        const loginRes = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: value }),
+          credentials: 'same-origin'
+        });
+        const loginBody = await loginRes.json().catch(() => ({}));
+        if (!loginRes.ok) {
+          const message = typeof loginBody?.error === 'string' ? loginBody.error : ADMIN_INVALID_MSG;
+          throw new Error(message);
+        }
+
+        const persisted = setAdminKey(value);
+        toast(persisted ? 'Admin key saved' : 'Admin key saved for this session only (storage blocked).');
+        renderRoleBadge(false);
+
+        try {
+          const whoamiRes = await fetch('/api/admin/whoami', {
+            credentials: 'same-origin',
+            cache: 'no-store'
+          });
+          if (whoamiRes.ok) {
+            clearAdminKeyTemp();
+          }
+        } catch {
+          // ignore whoami probe failures here; refreshAdminAuth will handle
+        }
+
+        await refreshAdminAuth();
+        setActiveTab('templates');
         const ok = await refreshAdminContext({ showToastOnError: true });
         if (ok) {
           await loadFeatureFlagsFromServer();
           await reloadScopedData();
         }
-      } else {
+      } catch (error) {
+        clearAdminKeyTemp();
+        toast(error?.message || ADMIN_INVALID_MSG, 'error');
         clearAdminContext();
       }
     });
@@ -3295,7 +3343,6 @@ details.member-fold .summary-value {
       };
     }
     const headers = {
-      'x-admin-key': key,
       'x-actor-role': 'admin',
       ...(extraHeaders || {})
     };
@@ -3311,11 +3358,13 @@ details.member-fold .summary-value {
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const requestInit = {
-      credentials: 'include',
-      ...fetchOpts,
       cache: 'no-store',
+      ...fetchOpts,
       headers
     };
+    if (!('credentials' in requestInit)) {
+      requestInit.credentials = 'same-origin';
+    }
     const res = await fetch(url, requestInit);
     const ct = res.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await res.json().catch(()=>({})) : await res.text().catch(()=> '');
@@ -3396,8 +3445,8 @@ details.member-fold .summary-value {
       try {
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-admin-key': getAdminKey() },
-          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify(body)
         });
         if (!res.ok) {
@@ -3634,10 +3683,9 @@ details.member-fold .summary-value {
       const res = await fetch('/api/admin/families/self-register', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-admin-key': key
+          'Content-Type': 'application/json'
         },
-        credentials: 'include',
+        credentials: 'same-origin',
         cache: 'no-store',
         body: JSON.stringify({ familyName, adminName, email, adminKey })
       });
@@ -3664,10 +3712,9 @@ details.member-fold .summary-value {
       const res = await fetch('/api/admin/families/forgot-admin-key', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-admin-key': key
+          'Content-Type': 'application/json'
         },
-        credentials: 'include',
+        credentials: 'same-origin',
         cache: 'no-store',
         body: JSON.stringify({ email })
       });
