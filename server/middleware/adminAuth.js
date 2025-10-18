@@ -1,9 +1,35 @@
-import { readAdminKey } from "../auth.js";
-import { makeFamilyResolver } from "../lib/familyResolver.js";
+import { db as defaultDb } from "../db.js";
 
-function safeGet(db, sql, params) {
+function parseCookies(req) {
+  if (req.cookies && typeof req.cookies === "object") {
+    return req.cookies;
+  }
+
+  const header = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
+  const cookies = {};
+  if (header) {
+    for (const part of header.split(";")) {
+      if (!part) continue;
+      const index = part.indexOf("=");
+      if (index === -1) continue;
+      const key = part.slice(0, index).trim();
+      if (!key) continue;
+      const rawValue = part.slice(index + 1);
+      try {
+        cookies[key] = decodeURIComponent(rawValue);
+      } catch {
+        cookies[key] = rawValue;
+      }
+    }
+  }
+
+  req.cookies = cookies;
+  return cookies;
+}
+
+function safeGet(db, sql, ...params) {
   try {
-    return db.prepare(sql).get(...(Array.isArray(params) ? params : [params].filter((p) => p !== undefined)));
+    return db.prepare(sql).get(...params);
   } catch (err) {
     if (String(err?.message || "").includes("no such table")) {
       return null;
@@ -12,75 +38,67 @@ function safeGet(db, sql, params) {
   }
 }
 
-export function createAdminAuth(db) {
-  const resolveFamily = makeFamilyResolver(db);
+export default function adminAuth(req, res, next) {
+  try {
+    const cookies = parseCookies(req);
+    const headerKey =
+      (typeof req.get === "function" && req.get("x-admin-key")) ||
+      req.header?.("x-admin-key") ||
+      req.headers?.["x-admin-key"] ||
+      null;
+    const key = (cookies?.ck_admin_key || headerKey || "").toString().trim();
 
-  const resolveFamilySafe = (token) => {
-    if (!token) return null;
-    try {
-      return resolveFamily(token);
-    } catch (error) {
-      if (error?.status === 404) {
-        return null;
-      }
-      throw error;
+    if (!key) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
-  };
 
-  return function adminAuth(req, _res, next) {
-    try {
-      const key = String(readAdminKey(req) || "").trim();
-      if (!key) {
-        req.auth = { role: null };
-        return next();
-      }
+    const db = req.db || defaultDb;
 
-      const masterRow = safeGet(db, 'SELECT id FROM "master_admin" WHERE admin_key = ? LIMIT 1', key);
-      if (masterRow) {
-        req.auth = { role: "master", adminKey: key };
-        return next();
-      }
+    const masterEnv = (process.env.MASTER_ADMIN_KEY || "").trim();
+    const masterRow = safeGet(db, "SELECT id FROM master_admin WHERE admin_key = ? LIMIT 1", key);
+    if (masterRow || (masterEnv && masterEnv === key)) {
+      req.admin = { role: "master" };
+      req.auth = { role: "master", adminKey: key, familyId: null, family_id: null };
+      return next();
+    }
 
-      const masterEnv = (process.env.MASTER_ADMIN_KEY || "").trim();
-      if (masterEnv && masterEnv === key) {
-        req.auth = { role: "master", adminKey: key };
-        return next();
-      }
+    if (!req.family?.id) {
+      return res.status(403).json({ error: "Family scope required" });
+    }
 
-      const familyAdminRow = safeGet(
+    const familyId = req.family.id;
+    let familyRow = safeGet(
+      db,
+      "SELECT id FROM family_admin WHERE admin_key = ? AND family_id = ? LIMIT 1",
+      key,
+      familyId
+    );
+
+    if (!familyRow) {
+      familyRow = safeGet(
         db,
-        'SELECT family_id FROM "family_admin" WHERE admin_key = ? LIMIT 1',
-        key
+        "SELECT id FROM family WHERE admin_key = ? AND id = ? LIMIT 1",
+        key,
+        familyId
       );
-
-      let family = null;
-      if (familyAdminRow?.family_id) {
-        family = resolveFamilySafe(familyAdminRow.family_id);
-      }
-      if (!family) {
-        family = resolveFamilySafe(key);
-      }
-
-      if (family) {
-        req.auth = {
-          role: "family",
-          adminKey: key,
-          familyId: String(family.id),
-          familyKey: family.key || null,
-          familyName: family.name || "",
-          familyStatus: family.status || null
-        };
-        return next();
-      }
-
-      req.auth = { role: null };
-      return next();
-    } catch (error) {
-      console.error("[adminAuth] failed to resolve admin context", error);
-      req.auth = { role: null };
-      return next();
     }
-  };
-}
 
-export default createAdminAuth;
+    if (!familyRow) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    req.admin = { role: "family", family_id: familyId };
+    req.auth = {
+      role: "family",
+      adminKey: key,
+      familyId,
+      family_id: familyId,
+      familyKey: req.family?.key ?? null,
+      familyName: req.family?.name ?? "",
+      familyStatus: req.family?.status ?? null
+    };
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}

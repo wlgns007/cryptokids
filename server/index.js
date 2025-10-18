@@ -13,7 +13,7 @@ import apiRouter, { scopeMiddleware } from "./routes.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
 import { readAdminKey } from "./auth.js";
-import { createAdminAuth } from "./middleware/adminAuth.js";
+import adminAuth from "./middleware/adminAuth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,8 +24,6 @@ const rootPackage = JSON.parse(
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
-
-const adminAuth = createAdminAuth(db);
 
 if (process.argv.includes("--help")) {
   console.log("Parents Shop API");
@@ -382,58 +380,45 @@ function makeKey(len = 24) {
   return Buffer.from(crypto.randomBytes(len)).toString("base64url");
 }
 
+function attachCookies(req, _res, next) {
+  if (req.cookies && typeof req.cookies === "object") {
+    return next();
+  }
+  const header = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
+  const cookies = {};
+  if (header) {
+    for (const part of header.split(";")) {
+      if (!part) continue;
+      const index = part.indexOf("=");
+      if (index === -1) continue;
+      const key = part.slice(0, index).trim();
+      if (!key) continue;
+      const rawValue = part.slice(index + 1);
+      try {
+        cookies[key] = decodeURIComponent(rawValue);
+      } catch {
+        cookies[key] = rawValue;
+      }
+    }
+  }
+  req.cookies = cookies;
+  next();
+}
+
+function attachDatabase(req, _res, next) {
+  req.db = db;
+  next();
+}
+
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(attachCookies);
+app.use(attachDatabase);
 app.use(scopeMiddleware);
 app.use("/api/admin", adminAuth);
 app.use("/api", ledgerRoutes);
 app.use("/api", apiRouter);
-
-app.get("/api/admin/whoami", (req, res) => {
-  const key = readAdminKey(req) || "";
-  if (!key) {
-    res.status(401).json({ error: "invalid" });
-    return;
-  }
-  const ctx = resolveAdminContext(db, key);
-  if (!ctx || ctx.role === "none") {
-    res.status(401).json({ error: "invalid" });
-    return;
-  }
-  const scopedFamily = req.family || null;
-  if (ctx.role === "master") {
-    res.json({
-      role: "master",
-      family_uuid: null,
-      family_key: null,
-      family_name: null,
-      family_status: null,
-    });
-    return;
-  }
-  if (ctx.role === "family") {
-    const familyUuid = scopedFamily?.id ?? ctx.familyId ?? ctx.family_id ?? null;
-    const familyKey = scopedFamily?.key ?? ctx.familyKey ?? null;
-    const familyName = scopedFamily?.name ?? ctx.familyName ?? null;
-    const familyStatus = scopedFamily?.status ?? null;
-    res.json({
-      role: "family",
-      family_uuid: familyUuid ? String(familyUuid) : null,
-      family_key: familyKey ? String(familyKey) : null,
-      family_name: familyName ? String(familyName) : null,
-      family_status: familyStatus ? String(familyStatus) : null,
-    });
-    return;
-  }
-  res.json({
-    role: ctx.role ?? "none",
-    family_uuid: scopedFamily?.id ? String(scopedFamily.id) : null,
-    family_key: scopedFamily?.key ? String(scopedFamily.key) : null,
-    family_name: scopedFamily?.name ? String(scopedFamily.name) : null,
-    family_status: scopedFamily?.status ? String(scopedFamily.status) : null,
-  });
-});
 
 app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const statusParam = (req.query?.status || "").toString().trim().toLowerCase();

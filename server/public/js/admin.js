@@ -28,6 +28,75 @@ async function bootstrapScopeFromWhoAmI() {
   }
 }
 
+async function loadFamiliesForMaster() {
+  try {
+    const res = await fetch('/api/admin/families?status=active', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    if (!res.ok) return;
+    const rows = await res.json();
+    const sel =
+      document.querySelector('#family-scope-select') ||
+      document.getElementById('familyScopeSelect');
+    if (!sel) return;
+
+    const buildLabel = (family) => {
+      const baseName = family?.name || family?.key || '';
+      const suffix = family?.id ? ` (${family.id})` : '';
+      return `${baseName || 'Family'}${suffix}`;
+    };
+
+    const options = Array.isArray(rows)
+      ? rows
+          .filter((family) => family && family.id)
+          .map(
+            (family) =>
+              `<option value="${family.id}">${buildLabel(family)}</option>`
+          )
+      : [];
+
+    sel.innerHTML = `<option value="">Select a family</option>${options.join('')}`;
+
+    if (sel.dataset.masterPickerBound === 'true') {
+      return;
+    }
+
+    const handleChange = async (event) => {
+      const uuid = event?.target?.value || sel.value;
+      if (!uuid) return;
+      try {
+        const scopeRes = await fetch('/api/admin/families/self', {
+          headers: { 'x-family': uuid },
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        if (!scopeRes.ok) return;
+        const fam = await scopeRes.json();
+        setFamilyScope({
+          uuid: fam?.id ?? uuid,
+          key: fam?.key ?? null,
+          name: fam?.name ?? null,
+          status: fam?.status ?? null
+        });
+        if (typeof window.renderScopePanels === 'function') {
+          window.renderScopePanels(fam);
+        }
+        if (typeof window.refreshAllPanels === 'function') {
+          window.refreshAllPanels();
+        }
+      } catch (error) {
+        console.warn('Failed to hydrate family scope', error);
+      }
+    };
+
+    sel.addEventListener('change', handleChange);
+    sel.dataset.masterPickerBound = 'true';
+  } catch (error) {
+    console.warn('loadFamiliesForMaster failed', error);
+  }
+}
+
 if (typeof window !== 'undefined' && window.console) {
   try {
     console.log('[scope/local]', getFamilyScope());
@@ -6630,6 +6699,20 @@ setupScanner({
     (async () => {
       await bootstrapScopeFromWhoAmI();
       await initAdminUI();
+      try {
+        const res = await fetch('/api/admin/whoami', {
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        if (res.ok) {
+          const me = await res.json();
+          if (me?.role === 'master') {
+            await loadFamiliesForMaster();
+          }
+        }
+      } catch (error) {
+        console.warn('Unable to refresh master family picker', error);
+      }
     })();
   });
 })();

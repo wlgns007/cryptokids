@@ -4,6 +4,9 @@ import db from "./db.js";
 import { sendMail } from "./email.js";
 import { makeFamilyResolver } from "./lib/familyResolver.js";
 import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
+import whoAmI from "./routes/adminWhoAmI.js";
+import { listFamilies } from "./routes/families.js";
+import { listActivity } from "./routes/activity.js";
 
 const router = express.Router();
 const resolveFamily = makeFamilyResolver();
@@ -31,11 +34,28 @@ export const scopeMiddleware = (req, res, next) => {
   }
 };
 
-function allowFamilyOrMaster(req, familyId) {
+function getAdminRole(req) {
+  return req.admin?.role || req.auth?.role || null;
+}
+
+function getAdminFamilyId(req) {
   return (
-    req.auth?.role === "master" ||
-    (req.auth?.role === "family" && String(req.auth.familyId) === String(familyId))
+    req.admin?.family_id ||
+    req.admin?.familyId ||
+    req.auth?.familyId ||
+    req.auth?.family_id ||
+    null
   );
+}
+
+function allowFamilyOrMaster(req, familyId) {
+  const role = getAdminRole(req);
+  if (role === "master") return true;
+  if (role === "family") {
+    const scopedId = getAdminFamilyId(req);
+    return scopedId != null && String(scopedId) === String(familyId);
+  }
+  return false;
 }
 
 function attemptFamilyDelete(id, enforceForeignKeys) {
@@ -146,47 +166,7 @@ function hardDeleteFamily(id) {
 }
 
 // whoami
-router.get("/admin/whoami", (req, res) => {
-  if (!req.auth?.role) return res.status(401).json({ error: "invalid" });
-  const scope = req.family || (req.auth.role === "family"
-    ? {
-        id: req.auth.familyId ? String(req.auth.familyId) : null,
-        key: req.auth.familyKey ? String(req.auth.familyKey) : null,
-        name: req.auth.familyName ? String(req.auth.familyName) : null,
-        status: req.auth.familyStatus ? String(req.auth.familyStatus) : null
-      }
-    : null);
-
-  if (req.auth.role === "master") {
-    return res.json({
-      role: "master",
-      family_uuid: null,
-      family_key: null,
-      family_name: null,
-      family_status: null
-    });
-  }
-  if (req.auth.role === "family") {
-    const familyUuid = scope?.id ? String(scope.id) : null;
-    const familyKey = scope?.key ? String(scope.key) : null;
-    const familyName = scope?.name ? String(scope.name) : null;
-    const familyStatus = scope?.status ? String(scope.status) : null;
-    return res.json({
-      role: "family",
-      family_uuid: familyUuid,
-      family_key: familyKey,
-      family_name: familyName,
-      family_status: familyStatus
-    });
-  }
-  return res.json({
-    role: req.auth.role ?? "none",
-    family_uuid: scope?.id ? String(scope.id) : null,
-    family_key: scope?.key ? String(scope.key) : null,
-    family_name: scope?.name ? String(scope.name) : null,
-    family_status: scope?.status ? String(scope.status) : null
-  });
-});
+router.get("/admin/whoami", whoAmI);
 
 router.get("/admin/families/self", requireFamilyScope, (req, res) => {
   const { id, key, name, status } = req.family;
@@ -198,8 +178,10 @@ router.get("/admin/families/:family", requireFamilyScope, (req, res) => {
   return res.json({ id, key, name, status });
 });
 
-router.get("/admin/families", (req, res) => {
-  if (req.auth?.role !== "master") return res.sendStatus(403);
+router.get("/admin/families", (req, res, next) => {
+  if (getAdminRole(req) !== "master") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   const requestedId = (req.query.id || "").toString().trim();
   if (requestedId) {
@@ -222,26 +204,14 @@ router.get("/admin/families", (req, res) => {
     });
   }
 
-  const status = (req.query.status || "").toString().toLowerCase();
-  const rows = db
-    .prepare(`
-      SELECT id, admin_key, name, email, status
-      FROM family
-      WHERE id <> 'default' AND (? = '' OR status = ?)
-      ORDER BY created_at DESC
-    `)
-    .all(status, status);
-  const normalized = rows.map((row) => {
-    const { admin_key, ...rest } = row;
-    const key = admin_key != null ? String(admin_key) : null;
-    return {
-      ...rest,
-      admin_key,
-      key,
-      family_key: key || ""
-    };
-  });
-  res.json(normalized);
+  return listFamilies(req, res, next);
+});
+
+router.get("/admin/activity", requireFamilyScope, (req, res) => {
+  const fam = req.family;
+  if (!fam?.id) return res.status(400).json({ error: "Missing family scope (x-family)" });
+  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
+  return listActivity(req, res);
 });
 
 router.get("/admin/families/:familyId/members", requireFamilyScope, (req, res) => {
@@ -285,11 +255,7 @@ router.get("/admin/families/:familyId/holds", requireFamilyScope, (req, res) => 
 router.get("/admin/families/:familyId/activity", requireFamilyScope, (req, res) => {
   const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-  const limit = Math.min(parseInt(req.query.limit || "50", 10), 200);
-  const rows = db
-    .prepare("SELECT * FROM activity WHERE family_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(fam.id, limit);
-  res.json(rows);
+  return listActivity(req, res);
 });
 
 router.patch("/admin/families/:id", express.json(), requireFamilyScope, (req, res) => {
