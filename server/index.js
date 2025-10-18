@@ -395,20 +395,38 @@ app.get("/api/admin/whoami", (req, res) => {
     res.status(401).json({ error: "invalid" });
     return;
   }
+  const scopedFamily = req.family || null;
   if (ctx.role === "master") {
-    res.json({ role: "master" });
-    return;
-  }
-  if (ctx.role === "family" && ctx.familyId) {
     res.json({
-      role: "family",
-      familyId: String(ctx.familyId),
-      familyKey: ctx.familyKey ? String(ctx.familyKey) : "",
-      familyName: ctx.familyName ? String(ctx.familyName) : ""
+      role: "master",
+      family_uuid: null,
+      family_key: null,
+      family_name: null,
+      family_status: null,
     });
     return;
   }
-  res.json({ role: ctx.role ?? "none" });
+  if (ctx.role === "family") {
+    const familyUuid = scopedFamily?.id ?? ctx.familyId ?? ctx.family_id ?? null;
+    const familyKey = scopedFamily?.key ?? ctx.familyKey ?? null;
+    const familyName = scopedFamily?.name ?? ctx.familyName ?? null;
+    const familyStatus = scopedFamily?.status ?? null;
+    res.json({
+      role: "family",
+      family_uuid: familyUuid ? String(familyUuid) : null,
+      family_key: familyKey ? String(familyKey) : null,
+      family_name: familyName ? String(familyName) : null,
+      family_status: familyStatus ? String(familyStatus) : null,
+    });
+    return;
+  }
+  res.json({
+    role: ctx.role ?? "none",
+    family_uuid: scopedFamily?.id ? String(scopedFamily.id) : null,
+    family_key: scopedFamily?.key ? String(scopedFamily.key) : null,
+    family_name: scopedFamily?.name ? String(scopedFamily.name) : null,
+    family_status: scopedFamily?.status ? String(scopedFamily.status) : null,
+  });
 });
 
 app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {

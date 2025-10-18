@@ -237,18 +237,20 @@ router.get("/admin/whoami", (req, res) => {
       family_uuid: familyUuid,
       family_key: familyKey,
       family_name: familyName,
-      family_status: familyStatus,
-      familyId: familyUuid ?? "",
-      familyKey: familyKey ?? "",
-      familyName: familyName ?? "",
-      familyStatus: familyStatus ?? null
+      family_status: familyStatus
     });
   }
-  return res.status(401).json({ error: "invalid" });
+  return res.json({
+    role: req.auth.role ?? "none",
+    family_uuid: scope?.id ? String(scope.id) : null,
+    family_key: scope?.key ? String(scope.key) : null,
+    family_name: scope?.name ? String(scope.name) : null,
+    family_status: scope?.status ? String(scope.status) : null
+  });
 });
 
 router.get("/admin/families/self", (req, res) => {
-  if (!req.family) return res.status(400).json({ error: "Missing family scope." });
+  if (!req.family) return res.status(400).json({ error: "Missing family scope (x-family header)." });
   const { id, key, name, status } = req.family;
   return res.json({ id, key, name, status });
 });
