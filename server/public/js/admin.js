@@ -1701,8 +1701,8 @@ function initAdmin() {
       document.cookie = `ck_admin_key=${encodeURIComponent(key)}; Path=/; SameSite=Lax`;
     }
     const res = await fetch(path, {
-      headers: { 'X-Admin-Key': key },
-      credentials: 'same-origin',
+      headers: { 'x-admin-key': key },
+      credentials: 'include',
       cache: 'no-store'
     });
     if (!res.ok) {
@@ -1717,12 +1717,13 @@ function initAdmin() {
       const role = typeof me?.role === 'string' ? me.role : null;
       const familyId = me?.familyId ?? me?.family_id ?? null;
       const familyName = typeof me?.familyName === 'string' ? me.familyName : '';
+      const familyKey = typeof me?.familyKey === 'string' ? me.familyKey : '';
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
       state.familyId = familyId;
       if (role === 'family' && familyId) {
         state.scopedFamilyId = String(familyId);
-        state.scopedFamilyName = familyName || '';
+        state.scopedFamilyName = familyName || familyKey || '';
       } else if (role === 'master') {
         state.scopedFamilyId = null;
         state.scopedFamilyName = '';
@@ -1790,11 +1791,7 @@ function initAdmin() {
 
   async function deleteFamily(id) {
     if (!id) throw new Error('Family ID required');
-    const qs = new URLSearchParams({ hard: 'true' }).toString();
-    return apiFetch(`/api/admin/families/${encodeURIComponent(id)}?${qs}`, {
-      method: 'DELETE',
-      skipScope: true
-    });
+    return updateFamily(id, { status: 'deleted', hard: true });
   }
 
   function renderStatusSelect(status, id) {
@@ -3018,7 +3015,7 @@ details.member-fold .summary-value {
       };
     }
     const headers = {
-      'X-Admin-Key': key,
+      'x-admin-key': key,
       'x-actor-role': 'admin',
       ...(extraHeaders || {})
     };
@@ -3031,7 +3028,7 @@ details.member-fold .summary-value {
     }
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
     const requestInit = {
-      credentials: 'same-origin',
+      credentials: 'include',
       ...fetchOpts,
       cache: 'no-store',
       headers
@@ -3116,8 +3113,8 @@ details.member-fold .summary-value {
       try {
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Admin-Key': getAdminKey() },
-          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'x-admin-key': getAdminKey() },
+          credentials: 'include',
           body: JSON.stringify(body)
         });
         if (!res.ok) {
@@ -3302,9 +3299,9 @@ details.member-fold .summary-value {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Admin-Key': key
+          'x-admin-key': key
         },
-        credentials: 'same-origin',
+        credentials: 'include',
         cache: 'no-store',
         body: JSON.stringify({ familyName, adminName, email, adminKey })
       });
@@ -3332,9 +3329,9 @@ details.member-fold .summary-value {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Admin-Key': key
+          'x-admin-key': key
         },
-        credentials: 'same-origin',
+        credentials: 'include',
         cache: 'no-store',
         body: JSON.stringify({ email })
       });
