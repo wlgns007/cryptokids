@@ -1,51 +1,34 @@
-import { db } from "../db.js";
-import { hasColumn, tableExists } from "../lib/dbUtil.js";
-import { requireFamilyScope } from "../middleware/requireFamilyScope.js";
+import { db } from '../db.js';
+import { tableExists, hasColumn } from '../lib/dbUtil.js';
+import { requireFamilyScope } from '../middleware/requireFamilyScope.js';
 
 export const listMembers = [
   requireFamilyScope,
   (req, res, next) => {
     try {
-      if (tableExists("members")) {
-        if (!hasColumn("members", "family_id")) {
-          return res.json([]);
-        }
-        const nameCols = ["nickname", "display_name", "name", "full_name", "first_name"];
-        const present = nameCols.find((column) => hasColumn("members", column));
-        const nameExpr = present ? `"${present}"` : "'Member'";
-        const avatarCol = hasColumn("members", "avatar_url")
-          ? "avatar_url"
-          : hasColumn("members", "image_url")
-            ? "image_url"
-            : null;
-        const avatarExpr = avatarCol ? `"${avatarCol}"` : "NULL";
-        const statusExpr = hasColumn("members", "status") ? '"status"' : "'active'";
-        const orderExpr = present ? `"${present}" COLLATE NOCASE` : "created_at DESC";
+      if (tableExists('members')) {
+        const nameCol = ['nickname','display_name','name','full_name','first_name']
+          .find(c => hasColumn('members', c));
+        const avatarCol = hasColumn('members','avatar_url') ? 'avatar_url'
+                        : hasColumn('members','image_url')  ? 'image_url' : null;
+        const statusCol = hasColumn('members','status') ? 'status' : null;
 
         const sql = `
           SELECT id, family_id,
-                 ${nameExpr}   AS name,
-                 ${avatarExpr} AS avatar_url,
-                 ${statusExpr} AS status,
+                 ${nameCol ? `"${nameCol}"` : `'Member'`}       AS name,
+                 ${avatarCol ? `"${avatarCol}"` : 'NULL'}       AS avatar_url,
+                 ${statusCol ? `"${statusCol}"` : `'active'`}   AS status,
                  created_at, updated_at
           FROM members
           WHERE family_id = ?
-          ORDER BY ${orderExpr}
+          ORDER BY ${nameCol ? `"${nameCol}" COLLATE NOCASE` : 'created_at DESC'}
           LIMIT 500
         `;
-        const rows = db.prepare(sql).all(req.family.id);
-        return res.json(rows);
+        return res.json(db.prepare(sql).all(req.family.id));
       }
 
-      if (tableExists("kids")) {
-        return res.json([]);
-      }
-
+      // No members table in this DB → don’t error
       return res.json([]);
-    } catch (error) {
-      next(error);
-    }
+    } catch (e) { next(e); }
   }
 ];
-
-export default listMembers;

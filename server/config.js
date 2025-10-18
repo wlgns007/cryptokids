@@ -1,7 +1,10 @@
 const MULTITENANT_ENFORCE =
-  (process.env.MULTITENANT_ENFORCE ?? "true").toString().toLowerCase() !== "false";
+  (process.env.MULTITENANT_ENFORCE ?? 'true').toString().toLowerCase() !== 'false';
 
-export { MULTITENANT_ENFORCE };
+const COOKIE_NAME = 'ck_admin_key';
+
+export { MULTITENANT_ENFORCE, COOKIE_NAME };
 export default {
-  MULTITENANT_ENFORCE
+  MULTITENANT_ENFORCE,
+  COOKIE_NAME
 };
