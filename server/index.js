@@ -9,10 +9,11 @@ import QRCode from "qrcode";
 import db, { DATA_DIR, ensureMasterCascadeTriggers, resolveAdminContext } from "./db.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
-import { router as coreRoutes } from "./routes.js";
+import apiRouter, { scopeMiddleware } from "./routes.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
 import { readAdminKey } from "./auth.js";
+import { createAdminAuth } from "./middleware/adminAuth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,6 +24,8 @@ const rootPackage = JSON.parse(
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
+
+const adminAuth = createAdminAuth(db);
 
 function applyAdminContext(req, ctx) {
   req.auth = {
@@ -376,8 +379,10 @@ function makeKey(len = 24) {
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(scopeMiddleware);
+app.use("/api/admin", adminAuth);
 app.use("/api", ledgerRoutes);
-app.use(coreRoutes);
+app.use("/api", apiRouter);
 
 app.get("/api/admin/whoami", (req, res) => {
   const key = readAdminKey(req) || "";

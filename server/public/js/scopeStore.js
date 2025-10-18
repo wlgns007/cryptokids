@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'ck_admin_scope';
+const KEY = 'ck_admin_scope';
 
 function persistScope(scope) {
   try {
@@ -6,10 +6,10 @@ function persistScope(scope) {
       return scope;
     }
     if (!scope) {
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(KEY);
       return null;
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(scope));
+    window.localStorage.setItem(KEY, JSON.stringify(scope));
     return scope;
   } catch (error) {
     console.warn('[scopeStore] persist failed', error);
@@ -17,17 +17,24 @@ function persistScope(scope) {
   }
 }
 
-export function setFamilyScope({ id, key = null, name = null, status = null } = {}) {
-  const uuid = typeof id === 'string' ? id : id != null ? String(id) : '';
-  if (!uuid) {
+export function setFamilyScope({ uuid, id, key = null, name = null, status = null } = {}) {
+  const normalized =
+    typeof uuid === 'string' && uuid.trim()
+      ? uuid.trim()
+      : id != null && String(id).trim()
+        ? String(id).trim()
+        : '';
+
+  if (!normalized) {
     persistScope(null);
     return null;
   }
+
   const scope = {
-    uuid,
+    uuid: normalized,
     key: key ?? null,
     name: name ?? null,
-    status: status ?? null,
+    status: status ?? null
   };
   persistScope(scope);
   return scope;
@@ -42,7 +49,7 @@ export function getFamilyScope() {
     if (typeof window === 'undefined' || !window.localStorage) {
       return null;
     }
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
@@ -50,7 +57,7 @@ export function getFamilyScope() {
       uuid: parsed.uuid ?? null,
       key: parsed.key ?? null,
       name: parsed.name ?? null,
-      status: parsed.status ?? null,
+      status: parsed.status ?? null
     };
   } catch (error) {
     console.warn('[scopeStore] read failed', error);

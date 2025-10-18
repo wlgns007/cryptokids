@@ -42,6 +42,28 @@ import {
   };
 
   if (typeof window !== 'undefined') {
+    try {
+      const rawScope = window.localStorage?.getItem('ck_admin_scope');
+      if (rawScope) {
+        try {
+          const parsedScope = JSON.parse(rawScope);
+          if (parsedScope && !parsedScope.uuid && parsedScope.id) {
+            window.localStorage.setItem('ck_admin_scope', JSON.stringify({
+              uuid: String(parsedScope.id),
+              key: parsedScope.key ?? null,
+              name: parsedScope.name ?? null,
+              status: parsedScope.status ?? null
+            }));
+          }
+        } catch (error) {
+          console.warn('[admin] legacy scope parse failed, clearing', error);
+          window.localStorage.removeItem('ck_admin_scope');
+        }
+      }
+    } catch (error) {
+      console.warn('[admin] scope migration failed', error);
+    }
+
     const storedScope = getFamilyScope();
     if (storedScope?.uuid) {
       state.scopedFamilyId = String(storedScope.uuid);
@@ -53,31 +75,73 @@ import {
   (function patchFetchForAdmin() {
     if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
     const nativeFetch = window.fetch.bind(window);
+
+    function resolveUrl(input) {
+      if (typeof input === 'string') return input;
+      if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+      if (input && typeof input.url === 'string') return input.url;
+      return '';
+    }
+
     window.fetch = function patchedFetch(input, init = {}) {
-      let nextInit = init || {};
+      const url = resolveUrl(input);
+      if (typeof url !== 'string' || !url.startsWith('/api')) {
+        return nativeFetch(input, init);
+      }
+
+      let nextInit = init ? { ...init } : {};
+
       try {
-        const url = typeof input === 'string'
-          ? input
-          : (typeof Request !== 'undefined' && input instanceof Request ? input.url : input?.url || '');
-        if (typeof url === 'string' && url.includes('/api/admin/')) {
+        const headers = new Headers(
+          nextInit.headers || (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined) || {}
+        );
+        const scope = getFamilyScope();
+        const scopeUuid = scope?.uuid ? String(scope.uuid) : '';
+        if (scopeUuid && !headers.has('x-family')) {
+          headers.set('x-family', scopeUuid);
+        }
+
+        if (url.includes('/api/admin/')) {
           const key = state?.adminKey || getAdminKey?.();
-          nextInit = { ...nextInit };
-          const headers = new Headers(nextInit.headers || {});
           if (key && !headers.has('x-admin-key')) {
             headers.set('x-admin-key', key);
           }
-          const scope = getFamilyScope();
-          if (scope?.uuid) {
-            headers.set('x-family', scope.uuid);
-          }
-          nextInit.headers = headers;
           if (!nextInit.credentials) nextInit.credentials = 'include';
           nextInit.cache = 'no-store';
         }
+
+        let requestUrl = url;
+        if (scopeUuid && !/[?&]family=/.test(url)) {
+          const joiner = url.includes('?') ? '&' : '?';
+          requestUrl = `${url}${joiner}family=${encodeURIComponent(scopeUuid)}`;
+        }
+
+        nextInit.headers = headers;
+
+        if (typeof Request !== 'undefined' && input instanceof Request) {
+          const cloned = input.clone();
+          const finalInit = {
+            method: nextInit.method || cloned.method,
+            headers,
+            body: nextInit.body ?? cloned.body,
+            mode: nextInit.mode ?? cloned.mode,
+            credentials: nextInit.credentials ?? cloned.credentials,
+            cache: nextInit.cache ?? cloned.cache,
+            redirect: nextInit.redirect ?? cloned.redirect,
+            referrer: nextInit.referrer ?? cloned.referrer,
+            referrerPolicy: nextInit.referrerPolicy ?? cloned.referrerPolicy,
+            integrity: nextInit.integrity ?? cloned.integrity,
+            keepalive: nextInit.keepalive ?? cloned.keepalive,
+            signal: nextInit.signal ?? cloned.signal
+          };
+          return nativeFetch(new Request(requestUrl, finalInit));
+        }
+
+        return nativeFetch(requestUrl, nextInit);
       } catch (error) {
         console.warn('Failed to apply admin fetch patch', error);
+        return nativeFetch(input, init);
       }
-      return nativeFetch(input, nextInit);
     };
   })();
 
@@ -453,7 +517,7 @@ function initAdmin() {
       const payload = body && typeof body === 'object' ? body : null;
       if (!payload?.family_uuid) return;
       const scope = persistFamilyScope({
-        id: payload.family_uuid,
+        uuid: payload.family_uuid,
         key: payload.family_key || null,
         name: payload.family_name || null,
         status: payload.family_status || null
@@ -1895,7 +1959,7 @@ function initAdmin() {
       state.familyId = familyId;
       if (role === 'family' && familyId) {
         const scope = persistFamilyScope({
-          id: familyId,
+          uuid: familyId,
           key: familyKey || null,
           name: familyName || null,
           status: familyStatus || null
@@ -2337,7 +2401,7 @@ function initAdmin() {
     const resolvedName = familyName || entry?.name || '';
     const resolvedKey = familyKey || entry?.family_key || entry?.admin_key || '';
     const scope = persistFamilyScope({
-      id: normalized,
+      uuid: normalized,
       key: resolvedKey || null,
       name: resolvedName || null,
       status: entry?.status ?? null
@@ -3495,7 +3559,7 @@ details.member-fold .summary-value {
           }
           if (nextState.currentFamilyId) {
             const scope = persistFamilyScope({
-              id: nextState.currentFamilyId,
+              uuid: nextState.currentFamilyId,
               key: nextState.familyKey || null,
               name: nextState.familyName || null,
               status: nextState.familyStatus || null
