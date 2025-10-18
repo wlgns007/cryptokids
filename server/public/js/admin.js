@@ -601,6 +601,12 @@ function initAdmin() {
     }
   }
 
+  function persistAndApplyScope(scope) {
+    const stored = persistFamilyScope(scope) || scope || {};
+    applyScopeToState(stored);
+    return stored;
+  }
+
   if (initialStoredScope?.uuid) {
     applyScopeToState(initialStoredScope);
   }
@@ -2004,6 +2010,38 @@ function initAdmin() {
     return res.json();
   }
 
+  async function autoScopeFamilyAdminFromSelf() {
+    try {
+      const fam = await adminGET('/api/admin/families/self');
+      if (!fam || typeof fam !== 'object') return null;
+      const candidate = fam?.uuid ?? fam?.id ?? fam?.family_id ?? null;
+      const uuid = candidate != null ? String(candidate) : '';
+      if (!isUUID(uuid)) return null;
+
+      const stored = persistAndApplyScope({
+        uuid,
+        key: fam?.key ?? fam?.family_key ?? fam?.admin_key ?? null,
+        name: fam?.name ?? fam?.family_name ?? fam?.title ?? null,
+        status: fam?.status ?? fam?.family_status ?? fam?.state ?? null
+      });
+
+      if (stored?.uuid) {
+        if (typeof window !== 'undefined' && typeof window.renderScopePanels === 'function') {
+          window.renderScopePanels(fam);
+        }
+        if (typeof window !== 'undefined' && typeof window.refreshAllPanels === 'function') {
+          window.refreshAllPanels();
+        }
+        return { scope: stored, family: fam };
+      }
+
+      return null;
+    } catch (error) {
+      console.warn('Failed to auto-scope family admin', error);
+      return null;
+    }
+  }
+
   refreshAdminAuth = async () => {
     try {
       const me = await adminGET('/api/admin/whoami');
@@ -2027,30 +2065,57 @@ function initAdmin() {
       const familyStatus = typeof me?.family_status === 'string' ? me.family_status : null;
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
-      state.familyId = familyId;
-      if (role === 'family' && familyId) {
-        const scope = persistFamilyScope({
-          uuid: familyId,
-          key: familyKey || null,
-          name: familyName || null,
-          status: familyStatus || null
-        }) || {
-          uuid: familyId,
-          key: familyKey || null,
-          name: familyName || null,
-          status: familyStatus || null
-        };
-        applyScopeToState(scope);
-      } else if (!state.scopedFamilyId) {
+
+      let effectiveFamilyId = familyId;
+      let scopeApplied = false;
+
+      if (role === 'family') {
+        if (familyId && isUUID(familyId)) {
+          const scope = persistAndApplyScope({
+            uuid: familyId,
+            key: familyKey || null,
+            name: familyName || null,
+            status: familyStatus || null
+          });
+          if (scope?.uuid) {
+            scopeApplied = true;
+            effectiveFamilyId = scope.uuid;
+          }
+        }
+
+        if (!scopeApplied) {
+          const scoped = await autoScopeFamilyAdminFromSelf();
+          if (scoped?.scope?.uuid) {
+            scopeApplied = true;
+            effectiveFamilyId = scoped.scope.uuid;
+            if (!familyName && scoped.family) {
+              const nameCandidate = scoped.family?.name ?? scoped.family?.family_name ?? scoped.family?.title ?? '';
+              if (nameCandidate) {
+                state.scopedFamilyName = String(nameCandidate);
+              }
+            }
+            if (!familyKey && scoped.family) {
+              const keyCandidate = scoped.family?.key ?? scoped.family?.family_key ?? scoped.family?.admin_key ?? '';
+              if (keyCandidate) {
+                state.familyKey = String(keyCandidate);
+              }
+            }
+          }
+        }
+      }
+
+      state.familyId = effectiveFamilyId || null;
+
+      if (!scopeApplied && !state.scopedFamilyId) {
         state.scopedFamilyName = '';
         state.familyKey = '';
       }
       setAdminState(
         {
           role,
-          family_id: familyId,
-          familyKey: role === 'family' ? (familyKey || '') : '',
-          familyName: role === 'family' ? (familyName || '') : ''
+          family_id: effectiveFamilyId || familyId,
+          familyKey: role === 'family' ? (familyKey || state.familyKey || '') : '',
+          familyName: role === 'family' ? (familyName || state.scopedFamilyName || '') : ''
         },
         { persist: false }
       );
