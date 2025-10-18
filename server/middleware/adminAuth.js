@@ -1,111 +1,54 @@
-import { db as defaultDb } from "../db.js";
-
-function parseCookies(req) {
-  if (req.cookies && typeof req.cookies === "object") {
-    return req.cookies;
-  }
-
-  const header = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
-  const cookies = {};
-  if (header) {
-    for (const part of header.split(";")) {
-      if (!part) continue;
-      const index = part.indexOf("=");
-      if (index === -1) continue;
-      const key = part.slice(0, index).trim();
-      if (!key) continue;
-      const rawValue = part.slice(index + 1);
-      try {
-        cookies[key] = decodeURIComponent(rawValue);
-      } catch {
-        cookies[key] = rawValue;
-      }
-    }
-  }
-
-  req.cookies = cookies;
-  return cookies;
-}
-
-function safeGet(db, sql, ...params) {
-  try {
-    return db.prepare(sql).get(...params);
-  } catch (err) {
-    if (String(err?.message || "").includes("no such table")) {
-      return null;
-    }
-    throw err;
-  }
-}
+import { db } from "../db.js";
+import { tableExists, hasColumn } from "../lib/dbUtil.js";
 
 export default function adminAuth(req, res, next) {
   try {
-    const path = (req.path || "").toLowerCase();
-    if (req.method === "POST" && (path === "/login" || path === "/login/")) {
-      return next();
-    }
+    const key = req.cookies?.ck_admin_key || req.header("x-admin-key") || null;
+    if (!key) return res.status(401).json({ error: "Unauthorized" });
 
-    const cookies = parseCookies(req);
-    const headerKey =
-      (typeof req.get === "function" && (req.get("x-admin-key") || req.get("X-Admin-Key"))) ||
-      req.header?.("x-admin-key") ||
-      req.header?.("X-Admin-Key") ||
-      req.headers?.["x-admin-key"] ||
-      req.headers?.["X-Admin-Key"] ||
-      null;
-    const key = (cookies?.ck_admin_key || headerKey || "").toString().trim();
-
-    if (!key) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const db = req.db || defaultDb;
-
-    const masterEnv = (process.env.MASTER_ADMIN_KEY || "").trim();
-    const masterRow = safeGet(db, "SELECT id FROM master_admin WHERE admin_key = ? LIMIT 1", key);
-    if (masterRow || (masterEnv && masterEnv === key)) {
+    // Master short-circuit
+    if (key === process.env.MASTER_ADMIN_KEY) {
       req.admin = { role: "master" };
-      req.auth = { role: "master", adminKey: key, familyId: null, family_id: null };
       return next();
     }
 
-    if (!req.family?.id) {
-      return res.status(403).json({ error: "Family scope required" });
+    // Family admin needs a scope
+    if (!req.family?.id) return res.status(403).json({ error: "Family scope required" });
+
+    const famId = req.family.id;
+    let ok = false;
+
+    // 1) family_admins(admin_key, family_id)
+    if (!ok && tableExists("family_admins")) {
+      const row = db
+        .prepare(
+          "SELECT 1 FROM family_admins WHERE admin_key = ? AND family_id = ? LIMIT 1"
+        )
+        .get(key, famId);
+      ok = !!row;
     }
 
-    const familyId = req.family.id;
-    let familyRow = safeGet(
-      db,
-      "SELECT id FROM family_admin WHERE admin_key = ? AND family_id = ? LIMIT 1",
-      key,
-      familyId
-    );
-
-    if (!familyRow) {
-      familyRow = safeGet(
-        db,
-        "SELECT id FROM family WHERE admin_key = ? AND id = ? LIMIT 1",
-        key,
-        familyId
-      );
+    // 2) families(admin_key)
+    if (!ok && tableExists("families") && hasColumn("families", "admin_key")) {
+      const row = db
+        .prepare("SELECT 1 FROM families WHERE id = ? AND admin_key = ? LIMIT 1")
+        .get(famId, key);
+      ok = !!row;
     }
 
-    if (!familyRow) {
-      return res.status(403).json({ error: "Forbidden" });
+    // 3) admins(key, family_id) (legacy)
+    if (!ok && tableExists("admins") && hasColumn("admins", "key")) {
+      const row = db
+        .prepare("SELECT 1 FROM admins WHERE key = ? AND family_id = ? LIMIT 1")
+        .get(key, famId);
+      ok = !!row;
     }
 
-    req.admin = { role: "family", family_id: familyId };
-    req.auth = {
-      role: "family",
-      adminKey: key,
-      familyId,
-      family_id: familyId,
-      familyKey: req.family?.key ?? null,
-      familyName: req.family?.name ?? "",
-      familyStatus: req.family?.status ?? null
-    };
-    return next();
-  } catch (error) {
-    return next(error);
+    if (!ok) return res.status(403).json({ error: "Forbidden" });
+
+    req.admin = { role: "family", family_id: famId };
+    next();
+  } catch (e) {
+    next(e);
   }
 }
