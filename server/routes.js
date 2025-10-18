@@ -16,8 +16,10 @@ function adminAuth(req, _res, next) {
     req.auth = { role: "master" };
     return next();
   }
-  const row = db.prepare("SELECT id FROM family WHERE admin_key = ?").get(key);
-  req.auth = row ? { role: "family", familyId: String(row.id) } : { role: null };
+  const row = db.prepare("SELECT id, name FROM family WHERE admin_key = ?").get(key);
+  req.auth = row
+    ? { role: "family", familyId: String(row.id), familyName: row.name ? String(row.name) : "" }
+    : { role: null };
   next();
 }
 
@@ -34,7 +36,10 @@ function allowFamilyOrMaster(req, familyId) {
 router.get("/api/admin/whoami", (req, res) => {
   if (!req.auth?.role) return res.status(401).json({ error: "invalid" });
   const out = { role: req.auth.role };
-  if (req.auth.role === "family") out.familyId = req.auth.familyId;
+  if (req.auth.role === "family") {
+    out.familyId = req.auth.familyId;
+    if (req.auth.familyName) out.familyName = req.auth.familyName;
+  }
   res.json(out);
 });
 
@@ -47,7 +52,9 @@ router.get("/api/admin/families", (req, res) => {
       return res.status(400).json({ error: "default family is reserved" });
     }
     const row = db
-      .prepare(`SELECT id, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`)
+      .prepare(
+        `SELECT id, admin_key AS family_key, name, email, status, created_at, updated_at FROM "family" WHERE id = ?`
+      )
       .get(requestedId);
     if (!row) return res.status(404).json({ error: "not found" });
     return res.json(row);
@@ -56,7 +63,8 @@ router.get("/api/admin/families", (req, res) => {
   const status = (req.query.status || "").toString().toLowerCase();
   const rows = db
     .prepare(`
-      SELECT * FROM family
+      SELECT id, admin_key AS family_key, name, email, status
+      FROM family
       WHERE id <> 'default' AND (? = '' OR status = ?)
       ORDER BY created_at DESC
     `)
