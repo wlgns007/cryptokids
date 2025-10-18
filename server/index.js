@@ -17,6 +17,7 @@ import adminAuth from "./middleware/adminAuth.js";
 import softAdminAuth from "./middleware/softAdminAuth.js";
 import { whoAmI } from "./routes/adminWhoAmI.js";
 import { adminLogin } from "./routes/adminLogin.js";
+import { familyForCurrentAdmin } from "./routes/familiesSelf.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -422,6 +423,7 @@ app.use(scopeMiddleware);
 
 app.post("/api/admin/login", adminLogin);
 app.get("/api/admin/whoami", softAdminAuth, whoAmI);
+app.get("/api/admin/families/self", familyForCurrentAdmin);
 
 app.use("/api/admin", adminAuth);
 app.use("/api", ledgerRoutes);

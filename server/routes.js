@@ -7,6 +7,8 @@ import { requireFamilyScope } from "./middleware/requireFamilyScope.js";
 import { listFamilies } from "./routes/families.js";
 import { listActivity } from "./routes/activity.js";
 import { listMembers } from "./routes/members.js";
+import { listHolds } from "./routes/holds.js";
+import { familyForCurrentAdmin } from "./routes/familiesSelf.js";
 
 const router = express.Router();
 const resolveFamily = makeFamilyResolver();
@@ -165,10 +167,7 @@ function hardDeleteFamily(id) {
   return { status: 500, body: { error: "delete failed" } };
 }
 
-router.get("/admin/families/self", requireFamilyScope, (req, res) => {
-  const { id, key, name, status } = req.family;
-  return res.json({ id, key, name, status });
-});
+router.get("/admin/families/self", familyForCurrentAdmin);
 
 router.get("/admin/families/:family", requireFamilyScope, (req, res) => {
   const { id, key, name, status } = req.family;
@@ -206,6 +205,8 @@ router.get("/admin/families", (req, res, next) => {
 
 router.get("/admin/members", ...listMembers);
 
+router.get("/admin/holds", ...listHolds);
+
 router.get("/admin/activity", requireFamilyScope, (req, res) => {
   const fam = req.family;
   if (!fam?.id) return res.status(400).json({ error: "Missing family scope (x-family)" });
@@ -242,14 +243,7 @@ router.get("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) =
   res.json(rows);
 });
 
-router.get("/admin/families/:familyId/holds", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-  const rows = db
-    .prepare("SELECT * FROM reward_hold WHERE family_id = ? ORDER BY created_at DESC")
-    .all(fam.id);
-  res.json(rows);
-});
+router.get("/admin/families/:familyId/holds", ...listHolds);
 
 router.get("/admin/families/:familyId/activity", requireFamilyScope, (req, res) => {
   const fam = req.family;
@@ -258,7 +252,7 @@ router.get("/admin/families/:familyId/activity", requireFamilyScope, (req, res) 
 });
 
 router.patch("/admin/families/:id", express.json(), requireFamilyScope, (req, res) => {
-  if (req.auth?.role !== "master") return res.sendStatus(403);
+  if (getAdminRole(req) !== "master") return res.sendStatus(403);
 
   const fam = req.family;
   const familyId = String(fam.id);
@@ -374,7 +368,7 @@ router.post(
 
 // List active master tasks not yet adopted by a family
 router.get("/admin/families/:familyId/master-tasks/available", requireFamilyScope, (req, res) => {
-  if (!req.auth?.role) return res.sendStatus(401);
+  if (!getAdminRole(req)) return res.sendStatus(401);
 
   const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
@@ -400,7 +394,7 @@ router.post(
   express.json(),
   requireFamilyScope,
   (req, res) => {
-    if (!req.auth?.role) return res.sendStatus(401);
+    if (!getAdminRole(req)) return res.sendStatus(401);
 
     const fam = req.family;
   if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
@@ -602,7 +596,7 @@ router.post("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) 
 });
 
 router.delete("/admin/families/:id", requireFamilyScope, (req, res) => {
-  if (req.auth?.role !== "master") return res.sendStatus(403);
+  if (getAdminRole(req) !== "master") return res.sendStatus(403);
 
   const hardMode = String(req.query?.hard ?? "").trim().toLowerCase() === "true";
   const fam = req.family;
@@ -618,7 +612,7 @@ router.delete("/admin/families/:id", requireFamilyScope, (req, res) => {
 
 // HARD DELETE reward and its dependents (master-only)
 router.delete("/admin/rewards/:id", (req, res) => {
-  if (req.auth?.role !== "master") return res.sendStatus(403);
+  if (getAdminRole(req) !== "master") return res.sendStatus(403);
 
   const { id } = req.params;
   if (!id) return res.status(400).json({ error: "invalid id" });

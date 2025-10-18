@@ -29,10 +29,19 @@ function clearAdminKeyTemp() {
 const persistFamilyScope = setFamilyScope;
 const resetStoredScope = clearFamilyScope;
 
-async function bootstrapScopeFromWhoAmI() {
+async function refreshFamilyScopeFromWhoAmI() {
   try {
-    const r = await fetch('/api/admin/whoami', { credentials: 'same-origin' });
-    const me = await r.json();
+    const whoamiRes = await fetch('/api/admin/whoami', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    if (!whoamiRes.ok) {
+      clearFamilyScope();
+      return null;
+    }
+
+    const me = await whoamiRes.json();
+
     if (me.family_uuid && isUUID(me.family_uuid)) {
       setFamilyScope({
         uuid: me.family_uuid,
@@ -40,12 +49,48 @@ async function bootstrapScopeFromWhoAmI() {
         name: me.family_name || null,
         status: me.family_status || null,
       });
-    } else {
-      clearFamilyScope();
+      return me;
     }
-  } catch {
+
+    if (me.role === 'family') {
+      try {
+        const r = await fetch('/api/admin/families/self', {
+          credentials: 'same-origin',
+          cache: 'no-store'
+        });
+        if (r.ok) {
+          const fam = await r.json();
+          const uuid = fam?.uuid ?? fam?.id ?? fam?.family_id ?? null;
+          if (uuid) {
+            setFamilyScope({
+              uuid,
+              key: fam?.key ?? fam?.family_key ?? fam?.admin_key ?? null,
+              name: fam?.name ?? fam?.family_name ?? fam?.title ?? null,
+              status: fam?.status ?? fam?.family_status ?? fam?.state ?? null
+            });
+            if (typeof window.renderScopePanels === 'function') window.renderScopePanels(fam);
+            if (typeof window.refreshAllPanels === 'function') window.refreshAllPanels();
+            return me;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to resolve family scope for admin', error);
+      }
+      clearFamilyScope();
+      return me;
+    }
+
     clearFamilyScope();
+    return me;
+  } catch (error) {
+    console.warn('refreshFamilyScopeFromWhoAmI failed', error);
+    clearFamilyScope();
+    return null;
   }
+}
+
+async function bootstrapScopeFromWhoAmI() {
+  await refreshFamilyScopeFromWhoAmI();
 }
 
 async function loadFamiliesForMaster() {
@@ -3067,6 +3112,7 @@ details.member-fold .summary-value {
         }
 
         await refreshAdminAuth();
+        await refreshFamilyScopeFromWhoAmI();
         setActiveTab('templates');
         const ok = await refreshAdminContext({ showToastOnError: true });
         if (ok) {
