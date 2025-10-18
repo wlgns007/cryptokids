@@ -14,6 +14,9 @@ import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
 import { readAdminKey } from "./auth.js";
 import adminAuth from "./middleware/adminAuth.js";
+import softAdminAuth from "./middleware/softAdminAuth.js";
+import { whoAmI } from "./routes/adminWhoAmI.js";
+import { adminLogin } from "./routes/adminLogin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -416,6 +419,10 @@ app.use(express.urlencoded({ extended: false }));
 app.use(attachCookies);
 app.use(attachDatabase);
 app.use(scopeMiddleware);
+
+app.post("/api/admin/login", adminLogin);
+app.get("/api/admin/whoami", softAdminAuth, whoAmI);
+
 app.use("/api/admin", adminAuth);
 app.use("/api", ledgerRoutes);
 app.use("/api", apiRouter);
