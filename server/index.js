@@ -243,9 +243,16 @@ function mapTaskRow(row) {
   if (!row) return null;
   const title = row.title ?? row.name ?? "";
   const pointsValue = Number(row.points ?? row.base_points ?? 0) || 0;
+  const basePointsValue = Number(row.base_points ?? row.points ?? 0) || 0;
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
   const sourceTemplateId = row.source_template_id || row.master_task_id || null;
   const masterTaskId = row.master_task_id || null;
+  const scopeRaw = row.scope || null;
+  const normalizedScope = scopeRaw
+    ? String(scopeRaw).trim().toLowerCase()
+    : row.family_id
+    ? "family"
+    : "global";
   const source = sourceTemplateId ? "master" : row.source || null;
   const sortOrder = Number(row.sort_order ?? 0) || 0;
   const youtubeUrl = row.youtube_url ?? null;
@@ -259,12 +266,14 @@ function mapTaskRow(row) {
     description: row.description ?? "",
     icon: row.icon ?? null,
     points: pointsValue,
+    base_points: basePointsValue,
     status,
     source,
     master_task_id: masterTaskId,
     source_template_id: sourceTemplateId,
     source_version: sourceVersion,
     is_customized: isCustomized,
+    scope: normalizedScope || "family",
     family_id: row.family_id || null,
     created_at: Number(row.created_at ?? 0) || null,
     updated_at: Number(row.updated_at ?? 0) || null,
@@ -1008,6 +1017,886 @@ app.patch("/api/master/rewards/:id", authenticateAdmin, requireMaster, (req, res
   res.json({ item: mapMasterRewardRow(updated) });
 });
 
+app.get("/api/admin/templates/tasks", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("task")) {
+    res.json({ items: [] });
+    return;
+  }
+
+  const columns = getTableColumns("task");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "task_scope_missing" });
+    return;
+  }
+
+  const statusParam = (req.query?.status || "all").toString().trim().toLowerCase();
+  const params = [];
+  let sql = "SELECT * FROM task WHERE scope = 'global'";
+
+  if (columns.includes("status")) {
+    if (statusParam === "active") {
+      sql += " AND status = 'active'";
+    } else if (statusParam === "inactive") {
+      sql += " AND status = 'inactive'";
+    } else if (statusParam && statusParam !== "all") {
+      sql += " AND status = ?";
+      params.push(statusParam);
+    }
+  }
+
+  if (columns.includes("updated_at")) {
+    sql += " ORDER BY updated_at DESC, id DESC";
+  } else {
+    sql += " ORDER BY id DESC";
+  }
+
+  const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
+  res.json({ items: rows.map(mapGlobalTask) });
+});
+
+app.post("/api/admin/templates/tasks", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("task")) {
+    res.status(500).json({ error: "task_table_missing" });
+    return;
+  }
+
+  const columns = getTableColumns("task");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "task_scope_missing" });
+    return;
+  }
+  if (!columns.includes("id")) {
+    res.status(500).json({ error: "task_table_missing" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const title = (body.title ?? "").toString().trim();
+  if (!title) {
+    res.status(400).json({ error: "title required" });
+    return;
+  }
+
+  let basePoints = coerceInteger(body.base_points ?? body.basePoints ?? body.points, 0);
+  if (!Number.isFinite(basePoints) || basePoints < 0) {
+    basePoints = 0;
+  }
+
+  const description = normalizeNullableString(body.description);
+  const icon = normalizeNullableString(body.icon);
+  const youtubeUrl = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+  const status = normalizeMasterStatus(body.status);
+
+  const now = Date.now();
+  const newId = crypto.randomUUID();
+  const record = { id: newId };
+
+  if (columns.includes("scope")) record.scope = "global";
+  if (columns.includes("family_id")) record.family_id = null;
+  if (columns.includes("title")) record.title = title;
+  if (columns.includes("name")) record.name = title;
+  if (columns.includes("description")) record.description = description;
+  if (columns.includes("icon")) record.icon = icon;
+  if (columns.includes("points")) record.points = basePoints;
+  if (columns.includes("base_points")) record.base_points = basePoints;
+  if (columns.includes("status")) record.status = status;
+  if (columns.includes("source")) record.source = "master";
+  if (columns.includes("master_task_id")) record.master_task_id = null;
+  if (columns.includes("source_template_id")) record.source_template_id = null;
+  if (columns.includes("source_version")) record.source_version = 1;
+  if (columns.includes("is_customized")) record.is_customized = 0;
+  if (columns.includes("sort_order")) record.sort_order = 0;
+  if (columns.includes("youtube_url")) record.youtube_url = youtubeUrl;
+  if (columns.includes("created_at")) record.created_at = now;
+  if (columns.includes("updated_at")) record.updated_at = now;
+
+  const keys = Object.keys(record);
+  const insertSql = `INSERT INTO task (${keys.map(quoteIdent).join(", ")}) VALUES (${keys
+    .map(key => `@${key}`)
+    .join(", ")})`;
+  db.prepare(insertSql).run(record);
+
+  const inserted = db.prepare("SELECT * FROM task WHERE id = ?").get(newId);
+  res.status(201).json({ item: mapGlobalTask(inserted) });
+});
+
+app.patch("/api/admin/templates/tasks/:id", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("task")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const columns = getTableColumns("task");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "task_scope_missing" });
+    return;
+  }
+
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "task id required" });
+    return;
+  }
+
+  const existing = db.prepare("SELECT * FROM task WHERE id = ? AND scope = 'global'").get(id);
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  let title = existing.title ?? existing.name ?? "";
+  let description = existing.description ?? null;
+  let icon = existing.icon ?? null;
+  let youtubeUrl = existing.youtube_url ?? null;
+  let basePoints = coerceInteger(existing.base_points ?? existing.points ?? 0, 0);
+  if (!Number.isFinite(basePoints) || basePoints < 0) basePoints = 0;
+  let status = existing.status ?? "active";
+  let hasChange = false;
+
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
+    const nextTitle = (body.title ?? "").toString().trim();
+    if (!nextTitle) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+    title = nextTitle;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    description = normalizeNullableString(body.description);
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "icon")) {
+    icon = normalizeNullableString(body.icon);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "youtube_url") ||
+    Object.prototype.hasOwnProperty.call(body, "youtubeUrl")
+  ) {
+    youtubeUrl = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "base_points") ||
+    Object.prototype.hasOwnProperty.call(body, "basePoints") ||
+    Object.prototype.hasOwnProperty.call(body, "points")
+  ) {
+    const nextPoints = coerceInteger(body.base_points ?? body.basePoints ?? body.points, basePoints);
+    basePoints = nextPoints < 0 ? 0 : nextPoints;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "status")) {
+    status = normalizeMasterStatus(body.status);
+    hasChange = true;
+  }
+
+  if (!hasChange) {
+    res.json({ item: mapGlobalTask(existing) });
+    return;
+  }
+
+  const now = Date.now();
+  const nextVersion = columns.includes("source_version")
+    ? Number(existing.source_version ?? 1) + 1
+    : null;
+
+  const updateFields = [];
+  const params = { id };
+
+  if (columns.includes("title")) {
+    updateFields.push("title = @title");
+    params.title = title;
+  }
+  if (columns.includes("name")) {
+    updateFields.push("name = @name");
+    params.name = title;
+  }
+  if (columns.includes("description")) {
+    updateFields.push("description = @description");
+    params.description = description;
+  }
+  if (columns.includes("icon")) {
+    updateFields.push("icon = @icon");
+    params.icon = icon;
+  }
+  if (columns.includes("points")) {
+    updateFields.push("points = @points");
+    params.points = basePoints;
+  }
+  if (columns.includes("base_points")) {
+    updateFields.push("base_points = @base_points");
+    params.base_points = basePoints;
+  }
+  if (columns.includes("status")) {
+    updateFields.push("status = @status");
+    params.status = status;
+  }
+  if (columns.includes("youtube_url")) {
+    updateFields.push("youtube_url = @youtube_url");
+    params.youtube_url = youtubeUrl;
+  }
+  if (columns.includes("source")) {
+    updateFields.push("source = @source");
+    params.source = "master";
+  }
+  if (columns.includes("source_version") && nextVersion !== null) {
+    updateFields.push("source_version = @source_version");
+    params.source_version = nextVersion;
+  }
+  if (columns.includes("updated_at")) {
+    updateFields.push("updated_at = @updated_at");
+    params.updated_at = now;
+  }
+
+  const updateSql = `UPDATE task SET ${updateFields.join(", ")} WHERE id = @id`;
+  db.prepare(updateSql).run(params);
+
+  const updated = db.prepare("SELECT * FROM task WHERE id = ?").get(id);
+
+  if (columns.includes("source_template_id")) {
+    const propagateParts = [];
+    const propagateParams = {
+      template_id: id,
+      version: nextVersion ?? Number(existing.source_version ?? 0)
+    };
+
+    if (columns.includes("title")) {
+      propagateParts.push("title = @prop_title");
+      propagateParams.prop_title = title;
+    }
+    if (columns.includes("name")) {
+      propagateParts.push("name = @prop_name");
+      propagateParams.prop_name = title;
+    }
+    if (columns.includes("description")) {
+      propagateParts.push("description = @prop_description");
+      propagateParams.prop_description = description;
+    }
+    if (columns.includes("icon")) {
+      propagateParts.push("icon = @prop_icon");
+      propagateParams.prop_icon = icon;
+    }
+    if (columns.includes("points")) {
+      propagateParts.push("points = @prop_points");
+      propagateParams.prop_points = basePoints;
+    }
+    if (columns.includes("base_points")) {
+      propagateParts.push("base_points = @prop_base_points");
+      propagateParams.prop_base_points = basePoints;
+    }
+    if (columns.includes("youtube_url")) {
+      propagateParts.push("youtube_url = @prop_youtube");
+      propagateParams.prop_youtube = youtubeUrl;
+    }
+    if (columns.includes("source_version") && nextVersion !== null) {
+      propagateParts.push("source_version = @version");
+    }
+    if (columns.includes("updated_at")) {
+      propagateParts.push("updated_at = @prop_updated_at");
+      propagateParams.prop_updated_at = now;
+    }
+
+    if (propagateParts.length) {
+      const propagateSql = `
+        UPDATE task
+           SET ${propagateParts.join(", ")}
+         WHERE source_template_id = @template_id
+           AND (is_customized IS NULL OR is_customized = 0)
+           AND (scope IS NULL OR scope <> 'global')
+      `;
+      try {
+        db.prepare(propagateSql).run(propagateParams);
+      } catch (err) {
+        console.warn("[admin.templates] propagate task update failed", err?.message || err);
+      }
+    }
+  }
+
+  res.json({ item: mapGlobalTask(updated) });
+});
+
+app.post(
+  "/api/admin/templates/tasks/:id/propagate",
+  authenticateAdmin,
+  requireMaster,
+  (req, res) => {
+    if (!tableExists("task")) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const columns = getTableColumns("task");
+    if (!columns.includes("scope") || !columns.includes("family_id")) {
+      res.status(500).json({ error: "task_scope_missing" });
+      return;
+    }
+
+    const id = (req.params?.id ?? "").toString().trim();
+    if (!id) {
+      res.status(400).json({ error: "task id required" });
+      return;
+    }
+
+    const template = db
+      .prepare("SELECT * FROM task WHERE id = ? AND scope = 'global'")
+      .get(id);
+    if (!template) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const templateStatus = (template.status || "active").toString().trim().toLowerCase();
+    if (templateStatus !== "active") {
+      res.status(409).json({ error: "template_inactive" });
+      return;
+    }
+
+    const payload = req.body ?? {};
+    const rawFamilies = Array.isArray(payload.familyIds)
+      ? payload.familyIds
+      : Array.isArray(payload.family_ids)
+      ? payload.family_ids
+      : Array.isArray(payload.families)
+      ? payload.families
+      : [];
+
+    const normalizedFamilies = Array.from(
+      new Set(
+        rawFamilies
+          .map(value => (value === null || value === undefined ? "" : String(value).trim()))
+          .filter(Boolean)
+      )
+    );
+
+    if (!normalizedFamilies.length) {
+      res.status(400).json({ error: "family_ids required" });
+      return;
+    }
+
+    const now = Date.now();
+    const inserted = [];
+    const skipped = [];
+
+    const tx = db.transaction(targetFamilies => {
+      for (const familyId of targetFamilies) {
+        if (!familyId) continue;
+
+        let duplicate = null;
+        if (columns.includes("source_template_id")) {
+          duplicate = db
+            .prepare(
+              `SELECT id FROM task WHERE family_id = ? AND source_template_id = ? LIMIT 1`
+            )
+            .get(familyId, id);
+        }
+        if (!duplicate && columns.includes("master_task_id")) {
+          duplicate = db
+            .prepare(`SELECT id FROM task WHERE family_id = ? AND master_task_id = ? LIMIT 1`)
+            .get(familyId, id);
+        }
+        if (duplicate?.id) {
+          skipped.push({ family_id: familyId, task_id: duplicate.id });
+          continue;
+        }
+
+        const newId = crypto.randomUUID();
+        const record = { id: newId };
+
+        if (columns.includes("scope")) record.scope = "family";
+        if (columns.includes("family_id")) record.family_id = familyId;
+        if (columns.includes("title")) record.title = template.title ?? template.name ?? "";
+        if (columns.includes("name")) record.name = template.name ?? template.title ?? "";
+        if (columns.includes("description")) record.description = template.description ?? null;
+        if (columns.includes("icon")) record.icon = template.icon ?? null;
+        const templatePoints = Number(template.points ?? template.base_points ?? 0) || 0;
+        if (columns.includes("points")) record.points = templatePoints;
+        if (columns.includes("base_points")) record.base_points = template.base_points ?? templatePoints;
+        if (columns.includes("status")) record.status = template.status ?? "active";
+        if (columns.includes("source")) record.source = "master";
+        if (columns.includes("master_task_id")) record.master_task_id = template.master_task_id ?? null;
+        if (columns.includes("source_template_id")) record.source_template_id = template.id;
+        if (columns.includes("source_version")) record.source_version = template.source_version ?? 1;
+        if (columns.includes("is_customized")) record.is_customized = 0;
+        if (columns.includes("sort_order")) record.sort_order = 0;
+        if (columns.includes("youtube_url")) record.youtube_url = template.youtube_url ?? null;
+        if (columns.includes("created_at")) record.created_at = now;
+        if (columns.includes("updated_at")) record.updated_at = now;
+
+        const keys = Object.keys(record);
+        const insertSql = `INSERT INTO task (${keys.map(quoteIdent).join(", ")}) VALUES (${keys
+          .map(key => `@${key}`)
+          .join(", ")})`;
+        db.prepare(insertSql).run(record);
+        inserted.push({ family_id: familyId, task_id: newId });
+
+        deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: id });
+      }
+    });
+
+    tx(normalizedFamilies);
+
+    res.json({
+      inserted,
+      skipped,
+      totalInserted: inserted.length,
+      totalSkipped: skipped.length
+    });
+  }
+);
+
+app.get("/api/admin/templates/rewards", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("reward")) {
+    res.json({ items: [] });
+    return;
+  }
+
+  const columns = getTableColumns("reward");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "reward_scope_missing" });
+    return;
+  }
+
+  const statusParam = (req.query?.status || "all").toString().trim().toLowerCase();
+  const params = [];
+  let sql = "SELECT * FROM reward WHERE scope = 'global'";
+
+  if (columns.includes("status")) {
+    if (statusParam === "active") {
+      sql += " AND status = 'active'";
+    } else if (statusParam === "inactive") {
+      sql += " AND status = 'inactive'";
+    } else if (statusParam && statusParam !== "all") {
+      sql += " AND status = ?";
+      params.push(statusParam);
+    }
+  }
+
+  if (columns.includes("updated_at")) {
+    sql += " ORDER BY updated_at DESC, id DESC";
+  } else {
+    sql += " ORDER BY id DESC";
+  }
+
+  const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
+  res.json({ items: rows.map(mapGlobalReward) });
+});
+
+app.post("/api/admin/templates/rewards", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("reward")) {
+    res.status(500).json({ error: "reward_table_missing" });
+    return;
+  }
+
+  const columns = getTableColumns("reward");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "reward_scope_missing" });
+    return;
+  }
+  if (!columns.includes("id")) {
+    res.status(500).json({ error: "reward_table_missing" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const title = (body.title ?? body.name ?? "").toString().trim();
+  if (!title) {
+    res.status(400).json({ error: "title required" });
+    return;
+  }
+
+  let baseCost = coerceInteger(body.base_cost ?? body.baseCost ?? body.cost ?? body.price, 0);
+  if (!Number.isFinite(baseCost) || baseCost < 0) {
+    baseCost = 0;
+  }
+
+  const description = normalizeNullableString(body.description);
+  const icon = normalizeNullableString(body.icon ?? body.image_url ?? body.imageUrl);
+  const youtubeUrl = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+  const status = normalizeMasterStatus(body.status);
+
+  const now = Date.now();
+  const newId = crypto.randomUUID();
+  const record = { id: newId };
+
+  if (columns.includes("scope")) record.scope = "global";
+  if (columns.includes("family_id")) record.family_id = null;
+  if (columns.includes("name")) record.name = title;
+  if (columns.includes("title")) record.title = title;
+  if (columns.includes("description")) record.description = description ?? "";
+  if (columns.includes("icon")) record.icon = icon;
+  if (columns.includes("image_url")) record.image_url = icon ?? "";
+  if (columns.includes("cost")) record.cost = baseCost;
+  if (columns.includes("price")) record.price = baseCost;
+  if (columns.includes("status")) record.status = status;
+  if (columns.includes("source")) record.source = "master";
+  if (columns.includes("master_reward_id")) record.master_reward_id = null;
+  if (columns.includes("source_template_id")) record.source_template_id = null;
+  if (columns.includes("source_version")) record.source_version = 1;
+  if (columns.includes("is_customized")) record.is_customized = 0;
+  if (columns.includes("youtube_url")) record.youtube_url = youtubeUrl ?? "";
+  if (columns.includes("created_at")) record.created_at = now;
+  if (columns.includes("updated_at")) record.updated_at = now;
+
+  const keys = Object.keys(record);
+  const insertSql = `INSERT INTO reward (${keys.map(quoteIdent).join(", ")}) VALUES (${keys
+    .map(key => `@${key}`)
+    .join(", ")})`;
+  db.prepare(insertSql).run(record);
+
+  const inserted = db.prepare("SELECT * FROM reward WHERE id = ?").get(newId);
+  res.status(201).json({ item: mapGlobalReward(inserted) });
+});
+
+app.patch("/api/admin/templates/rewards/:id", authenticateAdmin, requireMaster, (req, res) => {
+  if (!tableExists("reward")) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const columns = getTableColumns("reward");
+  if (!columns.includes("scope")) {
+    res.status(500).json({ error: "reward_scope_missing" });
+    return;
+  }
+
+  const id = (req.params?.id ?? "").toString().trim();
+  if (!id) {
+    res.status(400).json({ error: "reward id required" });
+    return;
+  }
+
+  const existing = db.prepare("SELECT * FROM reward WHERE id = ? AND scope = 'global'").get(id);
+  if (!existing) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  const body = req.body ?? {};
+  let title = existing.title ?? existing.name ?? "";
+  let description = existing.description ?? "";
+  let icon = existing.icon ?? existing.image_url ?? null;
+  let youtubeUrl = existing.youtube_url ?? null;
+  let baseCost = coerceInteger(existing.base_cost ?? existing.cost ?? existing.price ?? 0, 0);
+  if (!Number.isFinite(baseCost) || baseCost < 0) baseCost = 0;
+  let status = existing.status ?? "active";
+  let hasChange = false;
+
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
+    const nextTitle = (body.title ?? body.name ?? "").toString().trim();
+    if (!nextTitle) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+    title = nextTitle;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    description = normalizeNullableString(body.description) ?? "";
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "icon")) {
+    icon = normalizeNullableString(body.icon ?? body.image_url ?? body.imageUrl);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "youtube_url") ||
+    Object.prototype.hasOwnProperty.call(body, "youtubeUrl")
+  ) {
+    youtubeUrl = normalizeNullableString(body.youtube_url ?? body.youtubeUrl);
+    hasChange = true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "base_cost") ||
+    Object.prototype.hasOwnProperty.call(body, "baseCost") ||
+    Object.prototype.hasOwnProperty.call(body, "cost") ||
+    Object.prototype.hasOwnProperty.call(body, "price")
+  ) {
+    const nextCost = coerceInteger(
+      body.base_cost ?? body.baseCost ?? body.cost ?? body.price,
+      baseCost
+    );
+    baseCost = nextCost < 0 ? 0 : nextCost;
+    hasChange = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "status")) {
+    status = normalizeMasterStatus(body.status);
+    hasChange = true;
+  }
+
+  if (!hasChange) {
+    res.json({ item: mapGlobalReward(existing) });
+    return;
+  }
+
+  const now = Date.now();
+  const nextVersion = columns.includes("source_version")
+    ? Number(existing.source_version ?? 1) + 1
+    : null;
+
+  const updateFields = [];
+  const params = { id };
+
+  if (columns.includes("title")) {
+    updateFields.push("title = @title");
+    params.title = title;
+  }
+  if (columns.includes("name")) {
+    updateFields.push("name = @name");
+    params.name = title;
+  }
+  if (columns.includes("description")) {
+    updateFields.push("description = @description");
+    params.description = description ?? "";
+  }
+  if (columns.includes("icon")) {
+    updateFields.push("icon = @icon");
+    params.icon = icon;
+  }
+  if (columns.includes("image_url")) {
+    updateFields.push("image_url = @image_url");
+    params.image_url = icon ?? "";
+  }
+  if (columns.includes("cost")) {
+    updateFields.push("cost = @cost");
+    params.cost = baseCost;
+  }
+  if (columns.includes("price")) {
+    updateFields.push("price = @price");
+    params.price = baseCost;
+  }
+  if (columns.includes("status")) {
+    updateFields.push("status = @status");
+    params.status = status;
+  }
+  if (columns.includes("youtube_url")) {
+    updateFields.push("youtube_url = @youtube_url");
+    params.youtube_url = youtubeUrl ?? "";
+  }
+  if (columns.includes("source")) {
+    updateFields.push("source = @source");
+    params.source = "master";
+  }
+  if (columns.includes("source_version") && nextVersion !== null) {
+    updateFields.push("source_version = @source_version");
+    params.source_version = nextVersion;
+  }
+  if (columns.includes("updated_at")) {
+    updateFields.push("updated_at = @updated_at");
+    params.updated_at = now;
+  }
+
+  const updateSql = `UPDATE reward SET ${updateFields.join(", ")} WHERE id = @id`;
+  db.prepare(updateSql).run(params);
+
+  const updated = db.prepare("SELECT * FROM reward WHERE id = ?").get(id);
+
+  if (columns.includes("source_template_id")) {
+    const propagateParts = [];
+    const propagateParams = {
+      template_id: id,
+      version: nextVersion ?? Number(existing.source_version ?? 0)
+    };
+
+    if (columns.includes("name")) {
+      propagateParts.push("name = @prop_name");
+      propagateParams.prop_name = title;
+    }
+    if (columns.includes("title")) {
+      propagateParts.push("title = @prop_title");
+      propagateParams.prop_title = title;
+    }
+    if (columns.includes("description")) {
+      propagateParts.push("description = @prop_description");
+      propagateParams.prop_description = description ?? "";
+    }
+    if (columns.includes("icon")) {
+      propagateParts.push("icon = @prop_icon");
+      propagateParams.prop_icon = icon;
+    }
+    if (columns.includes("image_url")) {
+      propagateParts.push("image_url = @prop_image_url");
+      propagateParams.prop_image_url = icon ?? "";
+    }
+    if (columns.includes("cost")) {
+      propagateParts.push("cost = @prop_cost");
+      propagateParams.prop_cost = baseCost;
+    }
+    if (columns.includes("price")) {
+      propagateParts.push("price = @prop_price");
+      propagateParams.prop_price = baseCost;
+    }
+    if (columns.includes("youtube_url")) {
+      propagateParts.push("youtube_url = @prop_youtube");
+      propagateParams.prop_youtube = youtubeUrl ?? "";
+    }
+    if (columns.includes("source_version") && nextVersion !== null) {
+      propagateParts.push("source_version = @version");
+    }
+    if (columns.includes("updated_at")) {
+      propagateParts.push("updated_at = @prop_updated_at");
+      propagateParams.prop_updated_at = now;
+    }
+
+    if (propagateParts.length) {
+      const propagateSql = `
+        UPDATE reward
+           SET ${propagateParts.join(", ")}
+         WHERE source_template_id = @template_id
+           AND (is_customized IS NULL OR is_customized = 0)
+           AND (scope IS NULL OR scope <> 'global')
+      `;
+      try {
+        db.prepare(propagateSql).run(propagateParams);
+      } catch (err) {
+        console.warn("[admin.templates] propagate reward update failed", err?.message || err);
+      }
+    }
+  }
+
+  res.json({ item: mapGlobalReward(updated) });
+});
+
+app.post(
+  "/api/admin/templates/rewards/:id/propagate",
+  authenticateAdmin,
+  requireMaster,
+  (req, res) => {
+    if (!tableExists("reward")) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const columns = getTableColumns("reward");
+    if (!columns.includes("scope") || !columns.includes("family_id")) {
+      res.status(500).json({ error: "reward_scope_missing" });
+      return;
+    }
+
+    const id = (req.params?.id ?? "").toString().trim();
+    if (!id) {
+      res.status(400).json({ error: "reward id required" });
+      return;
+    }
+
+    const template = db
+      .prepare("SELECT * FROM reward WHERE id = ? AND scope = 'global'")
+      .get(id);
+    if (!template) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const templateStatus = (template.status || "active").toString().trim().toLowerCase();
+    if (templateStatus !== "active") {
+      res.status(409).json({ error: "template_inactive" });
+      return;
+    }
+
+    const payload = req.body ?? {};
+    const rawFamilies = Array.isArray(payload.familyIds)
+      ? payload.familyIds
+      : Array.isArray(payload.family_ids)
+      ? payload.family_ids
+      : Array.isArray(payload.families)
+      ? payload.families
+      : [];
+
+    const normalizedFamilies = Array.from(
+      new Set(
+        rawFamilies
+          .map(value => (value === null || value === undefined ? "" : String(value).trim()))
+          .filter(Boolean)
+      )
+    );
+
+    if (!normalizedFamilies.length) {
+      res.status(400).json({ error: "family_ids required" });
+      return;
+    }
+
+    const now = Date.now();
+    const inserted = [];
+    const skipped = [];
+
+    const tx = db.transaction(targetFamilies => {
+      for (const familyId of targetFamilies) {
+        if (!familyId) continue;
+
+        let duplicate = null;
+        if (columns.includes("source_template_id")) {
+          duplicate = db
+            .prepare(
+              `SELECT id FROM reward WHERE family_id = ? AND source_template_id = ? LIMIT 1`
+            )
+            .get(familyId, id);
+        }
+        if (!duplicate && columns.includes("master_reward_id")) {
+          duplicate = db
+            .prepare(`SELECT id FROM reward WHERE family_id = ? AND master_reward_id = ? LIMIT 1`)
+            .get(familyId, id);
+        }
+        if (duplicate?.id) {
+          skipped.push({ family_id: familyId, reward_id: duplicate.id });
+          continue;
+        }
+
+        const newId = crypto.randomUUID();
+        const record = { id: newId };
+
+        if (columns.includes("scope")) record.scope = "family";
+        if (columns.includes("family_id")) record.family_id = familyId;
+        if (columns.includes("name")) record.name = template.name ?? template.title ?? "";
+        if (columns.includes("title")) record.title = template.title ?? template.name ?? "";
+        if (columns.includes("description")) record.description = template.description ?? "";
+        if (columns.includes("icon")) record.icon = template.icon ?? null;
+        if (columns.includes("image_url")) record.image_url = template.image_url ?? template.icon ?? "";
+        const templateCost = Number(template.cost ?? template.price ?? template.base_cost ?? 0) || 0;
+        if (columns.includes("cost")) record.cost = templateCost;
+        if (columns.includes("price")) record.price = templateCost;
+        if (columns.includes("status")) record.status = template.status ?? "active";
+        if (columns.includes("source")) record.source = "master";
+        if (columns.includes("master_reward_id")) record.master_reward_id = template.master_reward_id ?? null;
+        if (columns.includes("source_template_id")) record.source_template_id = template.id;
+        if (columns.includes("source_version")) record.source_version = template.source_version ?? 1;
+        if (columns.includes("is_customized")) record.is_customized = 0;
+        if (columns.includes("youtube_url")) record.youtube_url = template.youtube_url ?? "";
+        if (columns.includes("created_at")) record.created_at = now;
+        if (columns.includes("updated_at")) record.updated_at = now;
+
+        const keys = Object.keys(record);
+        const insertSql = `INSERT INTO reward (${keys.map(quoteIdent).join(", ")}) VALUES (${keys
+          .map(key => `@${key}`)
+          .join(", ")})`;
+        db.prepare(insertSql).run(record);
+        inserted.push({ family_id: familyId, reward_id: newId });
+
+        deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "reward", master_id: id });
+      }
+    });
+
+    tx(normalizedFamilies);
+
+    res.json({
+      inserted,
+      skipped,
+      totalInserted: inserted.length,
+      totalSkipped: skipped.length
+    });
+  }
+);
+
 app.get("/api/family/pending/templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
   const familyId = req.scope?.family_id;
   if (!familyId) {
@@ -1020,42 +1909,86 @@ app.get("/api/family/pending/templates", authenticateAdmin, resolveFamilyScope, 
     const dismissedSet = new Set(dismissed.map(row => `${row.kind}:${row.master_id}`));
     const items = [];
 
-    const adoptedTaskIds = getAdoptedMasterIds("task", "master_task_id", familyId);
-    for (const row of listMasterTasksStmt.all()) {
-      if (!row?.id) continue;
-      const status = row.status ?? "active";
-      if (status !== "active") continue;
-      const masterId = String(row.id);
-      if (adoptedTaskIds.has(masterId)) continue;
-      if (dismissedSet.has(`task:${masterId}`)) continue;
-      const basePoints = Number(row.base_points);
-      items.push({
-        kind: "task",
-        master_id: masterId,
-        title: row.title ?? "",
-        description: row.description ?? null,
-        icon: row.icon ?? null,
-        base_points: Number.isFinite(basePoints) ? basePoints : 0
-      });
+    if (tableExists("task")) {
+      const taskColumns = getTableColumns("task");
+      if (taskColumns.includes("scope")) {
+        const adoptedTaskIds = taskColumns.includes("family_id")
+          ? db
+              .prepare(
+                `SELECT source_template_id, master_task_id
+                   FROM task
+                  WHERE family_id = ?`
+              )
+              .all(familyId)
+              .reduce((set, row) => {
+                if (row?.source_template_id) set.add(String(row.source_template_id));
+                if (row?.master_task_id) set.add(String(row.master_task_id));
+                return set;
+              }, new Set())
+          : new Set();
+
+        const globalTasks = db
+          .prepare("SELECT * FROM task WHERE scope = 'global'")
+          .all();
+        for (const row of globalTasks) {
+          if (!row?.id) continue;
+          const status = (row.status || "active").toString().trim().toLowerCase();
+          if (status !== "active") continue;
+          const templateId = String(row.id);
+          if (adoptedTaskIds.has(templateId)) continue;
+          if (row.master_task_id && adoptedTaskIds.has(String(row.master_task_id))) continue;
+          if (dismissedSet.has(`task:${templateId}`)) continue;
+          items.push({
+            kind: "task",
+            master_id: templateId,
+            title: row.title ?? row.name ?? "",
+            description: row.description ?? null,
+            icon: row.icon ?? null,
+            base_points: Number(row.points ?? row.base_points ?? 0) || 0
+          });
+        }
+      }
     }
 
-    const adoptedRewardIds = getAdoptedMasterIds("reward", "master_reward_id", familyId);
-    for (const row of listMasterRewardsStmt.all()) {
-      if (!row?.id) continue;
-      const status = row.status ?? "active";
-      if (status !== "active") continue;
-      const masterId = String(row.id);
-      if (adoptedRewardIds.has(masterId)) continue;
-      if (dismissedSet.has(`reward:${masterId}`)) continue;
-      const baseCost = Number(row.base_cost);
-      items.push({
-        kind: "reward",
-        master_id: masterId,
-        title: row.title ?? "",
-        description: row.description ?? null,
-        icon: row.icon ?? null,
-        base_cost: Number.isFinite(baseCost) ? baseCost : 0
-      });
+    if (tableExists("reward")) {
+      const rewardColumns = getTableColumns("reward");
+      if (rewardColumns.includes("scope")) {
+        const adoptedRewardIds = rewardColumns.includes("family_id")
+          ? db
+              .prepare(
+                `SELECT source_template_id, master_reward_id
+                   FROM reward
+                  WHERE family_id = ?`
+              )
+              .all(familyId)
+              .reduce((set, row) => {
+                if (row?.source_template_id) set.add(String(row.source_template_id));
+                if (row?.master_reward_id) set.add(String(row.master_reward_id));
+                return set;
+              }, new Set())
+          : new Set();
+
+        const globalRewards = db
+          .prepare("SELECT * FROM reward WHERE scope = 'global'")
+          .all();
+        for (const row of globalRewards) {
+          if (!row?.id) continue;
+          const status = (row.status || "active").toString().trim().toLowerCase();
+          if (status !== "active") continue;
+          const templateId = String(row.id);
+          if (adoptedRewardIds.has(templateId)) continue;
+          if (row.master_reward_id && adoptedRewardIds.has(String(row.master_reward_id))) continue;
+          if (dismissedSet.has(`reward:${templateId}`)) continue;
+          items.push({
+            kind: "reward",
+            master_id: templateId,
+            title: row.title ?? row.name ?? "",
+            description: row.description ?? null,
+            icon: row.icon ?? row.image_url ?? null,
+            base_cost: Number(row.cost ?? row.price ?? row.base_cost ?? 0) || 0
+          });
+        }
+      }
     }
 
     res.json({ items });
@@ -1088,102 +2021,160 @@ app.post("/api/family/adopt", authenticateAdmin, resolveFamilyScope, (req, res) 
 
   try {
     if (kind === "task") {
-      const master = selectMasterTaskStmt.get(masterId);
-      if (!master) {
-        res.status(404).json({ error: "master_not_found" });
-        return;
-      }
-      const columns = getTableColumns("task");
-      if (!columns.length || !columns.includes("id")) {
+      if (!tableExists("task")) {
         res.status(500).json({ error: "task_table_missing" });
         return;
       }
-      if (getAdoptedMasterIds("task", "master_task_id", familyId).has(masterId)) {
-        res.status(409).json({ error: "already_adopted" });
+      const columns = getTableColumns("task");
+      if (!columns.includes("scope")) {
+        res.status(500).json({ error: "task_scope_missing" });
         return;
       }
+      const template = db
+        .prepare("SELECT * FROM task WHERE id = ? AND scope = 'global'")
+        .get(masterId);
+      if (!template) {
+        res.status(404).json({ error: "template_not_found" });
+        return;
+      }
+      const templateStatus = (template.status || "active").toString().trim().toLowerCase();
+      if (templateStatus !== "active") {
+        res.status(409).json({ error: "template_inactive" });
+        return;
+      }
+
+      const existing = columns.includes("family_id")
+        ? db
+            .prepare(
+              `SELECT source_template_id, master_task_id
+                 FROM task
+                WHERE family_id = ?`
+            )
+            .all(familyId)
+        : [];
+      for (const row of existing) {
+        if (row?.source_template_id && String(row.source_template_id) === masterId) {
+          res.status(409).json({ error: "already_adopted" });
+          return;
+        }
+        if (row?.master_task_id && String(row.master_task_id) === masterId) {
+          res.status(409).json({ error: "already_adopted" });
+          return;
+        }
+      }
+
       const record = {};
       const newId = crypto.randomUUID();
       record.id = newId;
-      const title = master.title ?? "";
+      const title = template.title ?? template.name ?? "";
+      if (columns.includes("scope")) record.scope = "family";
       if (columns.includes("title")) record.title = title;
       if (columns.includes("name")) record.name = title;
-      if (columns.includes("description")) record.description = master.description ?? null;
-      if (columns.includes("icon")) record.icon = master.icon ?? null;
-      const basePoints = coerceInteger(master.base_points, 0);
-      const masterVersion = Number(master.version ?? 1) || 1;
+      if (columns.includes("description")) record.description = template.description ?? null;
+      if (columns.includes("icon")) record.icon = template.icon ?? null;
+      const basePoints = Number(template.points ?? template.base_points ?? 0) || 0;
+      const templateVersion = Number(template.source_version ?? 1) || 1;
       if (columns.includes("points")) record.points = basePoints;
-      if (columns.includes("base_points")) record.base_points = basePoints;
-      if (columns.includes("status")) record.status = master.status ?? "active";
+      if (columns.includes("base_points")) record.base_points = template.base_points ?? basePoints;
+      if (columns.includes("status")) record.status = template.status ?? "active";
       if (columns.includes("family_id")) record.family_id = familyId;
-      if (columns.includes("master_task_id")) record.master_task_id = masterId;
-      if (columns.includes("source_template_id")) record.source_template_id = masterId;
-      if (columns.includes("source_version")) record.source_version = masterVersion;
+      if (columns.includes("master_task_id")) record.master_task_id = template.master_task_id ?? null;
+      if (columns.includes("source_template_id")) record.source_template_id = template.id;
+      if (columns.includes("source_version")) record.source_version = templateVersion;
       if (columns.includes("is_customized")) record.is_customized = 0;
       if (columns.includes("created_at")) record.created_at = now;
       if (columns.includes("updated_at")) record.updated_at = now;
       insertRecord("task", record);
-      deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: masterId });
+      deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: template.id });
       res.status(201).json({
         item: {
           kind: "task",
           id: newId,
-          master_id: masterId,
+          master_id: template.id,
           title,
-          description: master.description ?? null,
-          icon: master.icon ?? null,
+          description: template.description ?? null,
+          icon: template.icon ?? null,
           base_points: basePoints
         }
       });
       return;
     }
 
-    const master = selectMasterRewardStmt.get(masterId);
-    if (!master) {
-      res.status(404).json({ error: "master_not_found" });
-      return;
-    }
-    const columns = getTableColumns("reward");
-    if (!columns.length || !columns.includes("id")) {
+    if (!tableExists("reward")) {
       res.status(500).json({ error: "reward_table_missing" });
       return;
     }
-    if (getAdoptedMasterIds("reward", "master_reward_id", familyId).has(masterId)) {
-      res.status(409).json({ error: "already_adopted" });
+    const rewardColumns = getTableColumns("reward");
+    if (!rewardColumns.includes("scope")) {
+      res.status(500).json({ error: "reward_scope_missing" });
       return;
     }
+    const template = db
+      .prepare("SELECT * FROM reward WHERE id = ? AND scope = 'global'")
+      .get(masterId);
+    if (!template) {
+      res.status(404).json({ error: "template_not_found" });
+      return;
+    }
+    const templateStatus = (template.status || "active").toString().trim().toLowerCase();
+    if (templateStatus !== "active") {
+      res.status(409).json({ error: "template_inactive" });
+      return;
+    }
+
+    const existingRewards = rewardColumns.includes("family_id")
+      ? db
+          .prepare(
+            `SELECT source_template_id, master_reward_id
+               FROM reward
+              WHERE family_id = ?`
+          )
+          .all(familyId)
+      : [];
+    for (const row of existingRewards) {
+      if (row?.source_template_id && String(row.source_template_id) === masterId) {
+        res.status(409).json({ error: "already_adopted" });
+        return;
+      }
+      if (row?.master_reward_id && String(row.master_reward_id) === masterId) {
+        res.status(409).json({ error: "already_adopted" });
+        return;
+      }
+    }
+
     const record = {};
     const newId = crypto.randomUUID();
     record.id = newId;
-    const title = master.title ?? "";
-    if (columns.includes("title")) record.title = title;
-    if (columns.includes("name")) record.name = title;
-    if (columns.includes("description")) record.description = master.description ?? null;
-    if (columns.includes("icon")) record.icon = master.icon ?? null;
-    if (columns.includes("image_url")) record.image_url = master.icon ?? null;
-    const baseCost = coerceInteger(master.base_cost, 0);
-    const masterVersion = Number(master.version ?? 1) || 1;
-    if (columns.includes("cost")) record.cost = baseCost;
-    if (columns.includes("base_cost")) record.base_cost = baseCost;
-    if (columns.includes("status")) record.status = master.status ?? "active";
-    if (columns.includes("source")) record.source = "master";
-    if (columns.includes("family_id")) record.family_id = familyId;
-    if (columns.includes("master_reward_id")) record.master_reward_id = masterId;
-    if (columns.includes("source_template_id")) record.source_template_id = masterId;
-    if (columns.includes("source_version")) record.source_version = masterVersion;
-    if (columns.includes("is_customized")) record.is_customized = 0;
-    if (columns.includes("created_at")) record.created_at = now;
-    if (columns.includes("updated_at")) record.updated_at = now;
+    const title = template.title ?? template.name ?? "";
+    if (rewardColumns.includes("scope")) record.scope = "family";
+    if (rewardColumns.includes("title")) record.title = title;
+    if (rewardColumns.includes("name")) record.name = title;
+    if (rewardColumns.includes("description")) record.description = template.description ?? null;
+    if (rewardColumns.includes("icon")) record.icon = template.icon ?? null;
+    if (rewardColumns.includes("image_url")) record.image_url = template.image_url ?? template.icon ?? null;
+    const baseCost = Number(template.cost ?? template.price ?? template.base_cost ?? 0) || 0;
+    const templateVersion = Number(template.source_version ?? 1) || 1;
+    if (rewardColumns.includes("cost")) record.cost = baseCost;
+    if (rewardColumns.includes("base_cost")) record.base_cost = template.base_cost ?? baseCost;
+    if (rewardColumns.includes("status")) record.status = template.status ?? "active";
+    if (rewardColumns.includes("source")) record.source = "master";
+    if (rewardColumns.includes("family_id")) record.family_id = familyId;
+    if (rewardColumns.includes("master_reward_id")) record.master_reward_id = template.master_reward_id ?? null;
+    if (rewardColumns.includes("source_template_id")) record.source_template_id = template.id;
+    if (rewardColumns.includes("source_version")) record.source_version = templateVersion;
+    if (rewardColumns.includes("is_customized")) record.is_customized = 0;
+    if (rewardColumns.includes("created_at")) record.created_at = now;
+    if (rewardColumns.includes("updated_at")) record.updated_at = now;
     insertRecord("reward", record);
-    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "reward", master_id: masterId });
+    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "reward", master_id: template.id });
     res.status(201).json({
       item: {
         kind: "reward",
         id: newId,
-        master_id: masterId,
+        master_id: template.id,
         title,
-        description: master.description ?? null,
-        icon: master.icon ?? null,
+        description: template.description ?? null,
+        icon: template.icon ?? template.image_url ?? null,
         base_cost: baseCost
       }
     });
@@ -1456,28 +2447,11 @@ app.post(
       return;
     }
 
-    if (!tableExists("master_task")) {
-      res.status(404).json({ error: "template_not_found" });
-      return;
-    }
-
     const scopeFamily = req.scope?.family_id || null;
     const queryFamily = (req.query?.familyId || req.query?.family_id || "").toString().trim();
     const familyId = scopeFamily || (queryFamily ? queryFamily : null);
     if (!familyId) {
       res.status(400).json({ error: "family_id required" });
-      return;
-    }
-
-    const master = selectMasterTaskStmt.get(templateId);
-    if (!master) {
-      res.status(404).json({ error: "template_not_found" });
-      return;
-    }
-
-    const masterStatus = (master.status || "active").toString().trim().toLowerCase() || "active";
-    if (masterStatus !== "active") {
-      res.status(409).json({ error: "template_inactive" });
       return;
     }
 
@@ -1489,6 +2463,23 @@ app.post(
     const columns = getTableColumns("task");
     if (!columns.includes("id")) {
       res.status(500).json({ error: "task_table_missing" });
+      return;
+    }
+    if (!columns.includes("scope")) {
+      res.status(500).json({ error: "task_scope_missing" });
+      return;
+    }
+    const template = db
+      .prepare("SELECT * FROM task WHERE id = ? AND scope = 'global'")
+      .get(templateId);
+    if (!template) {
+      res.status(404).json({ error: "template_not_found" });
+      return;
+    }
+
+    const templateStatus = (template.status || "active").toString().trim().toLowerCase() || "active";
+    if (templateStatus !== "active") {
+      res.status(409).json({ error: "template_inactive" });
       return;
     }
     if (MULTITENANT_ENFORCE && !columns.includes("family_id")) {
@@ -1516,29 +2507,30 @@ app.post(
 
     const now = Date.now();
     const newId = crypto.randomUUID();
-    const basePoints = coerceInteger(master.base_points, 0);
-    const masterVersion = Number(master.version ?? 1) || 1;
+    const basePoints = Number(template.points ?? template.base_points ?? 0) || 0;
+    const templateVersion = Number(template.source_version ?? 1) || 1;
     const record = { id: newId };
+    if (columns.includes("scope")) record.scope = "family";
     if (columns.includes("family_id")) record.family_id = familyId;
-    if (columns.includes("title")) record.title = master.title ?? "";
-    if (columns.includes("name")) record.name = master.title ?? "";
-    if (columns.includes("description")) record.description = master.description ?? null;
-    if (columns.includes("icon")) record.icon = master.icon ?? null;
+    if (columns.includes("title")) record.title = template.title ?? template.name ?? "";
+    if (columns.includes("name")) record.name = template.name ?? template.title ?? "";
+    if (columns.includes("description")) record.description = template.description ?? null;
+    if (columns.includes("icon")) record.icon = template.icon ?? null;
     if (columns.includes("points")) record.points = basePoints;
-    if (columns.includes("base_points")) record.base_points = basePoints;
-    if (columns.includes("status")) record.status = "active";
+    if (columns.includes("base_points")) record.base_points = template.base_points ?? basePoints;
+    if (columns.includes("status")) record.status = template.status ?? "active";
     if (columns.includes("source")) record.source = "master";
-    if (columns.includes("master_task_id")) record.master_task_id = master.id;
-    if (columns.includes("source_template_id")) record.source_template_id = master.id;
-    if (columns.includes("source_version")) record.source_version = masterVersion;
+    if (columns.includes("master_task_id")) record.master_task_id = template.master_task_id ?? null;
+    if (columns.includes("source_template_id")) record.source_template_id = template.id;
+    if (columns.includes("source_version")) record.source_version = templateVersion;
     if (columns.includes("is_customized")) record.is_customized = 0;
     if (columns.includes("sort_order")) record.sort_order = 0;
-    if (columns.includes("youtube_url")) record.youtube_url = master.youtube_url ?? null;
+    if (columns.includes("youtube_url")) record.youtube_url = template.youtube_url ?? null;
     if (columns.includes("created_at")) record.created_at = now;
     if (columns.includes("updated_at")) record.updated_at = now;
 
     insertRecord("task", record);
-    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: master.id });
+    deleteDismissedTemplateStmt.run({ family_id: familyId, kind: "task", master_id: template.id });
 
     res.status(201).json({ taskId: newId });
   }
@@ -1568,77 +2560,109 @@ app.get("/api/admin/templates/available", authenticateAdmin, (req, res) => {
   const familyId = rawFamilyId;
 
   if (kind === "task") {
-    if (!tableExists("master_task")) {
+    if (!tableExists("task")) {
       res.json([]);
       return;
     }
-    const hasTaskTable = tableExists("task");
-    const sql = hasTaskTable
-      ? `SELECT mt.id, mt.title, mt.description, mt.icon, mt.base_points, mt.youtube_url, mt.version
-           FROM master_task mt
-          WHERE mt.status = 'active'
-            AND NOT EXISTS (
-              SELECT 1
-                FROM task t
-               WHERE t.family_id = ?
-                 AND ((t.source_template_id IS NOT NULL AND t.source_template_id = mt.id)
-                   OR (t.master_task_id IS NOT NULL AND t.master_task_id = mt.id))
-            )
-          ORDER BY mt.updated_at DESC, mt.id DESC`
-      : `SELECT mt.id, mt.title, mt.description, mt.icon, mt.base_points, mt.youtube_url, mt.version
-           FROM master_task mt
-          WHERE mt.status = 'active'
-          ORDER BY mt.updated_at DESC, mt.id DESC`;
-    const rows = hasTaskTable
-      ? db.prepare(sql).all(familyId)
-      : db.prepare(sql).all();
-    const items = rows.map((row) => ({
-      id: row.id,
-      title: row.title ?? "",
-      description: row.description ?? null,
-      icon: row.icon ?? null,
-      points: Number(row.base_points ?? 0) || 0,
-      youtube_url: row.youtube_url ?? null,
-      version: Number(row.version ?? 1) || 1
-    }));
+    const taskColumns = getTableColumns("task");
+    if (!taskColumns.includes("scope")) {
+      res.status(500).json({ error: "task_scope_missing" });
+      return;
+    }
+
+    const existingRows = taskColumns.includes("family_id")
+      ? db
+          .prepare(
+            `SELECT source_template_id, master_task_id
+               FROM task
+              WHERE family_id = ?`
+          )
+          .all(familyId)
+      : [];
+    const adopted = new Set();
+    for (const row of existingRows) {
+      if (row?.source_template_id) adopted.add(String(row.source_template_id));
+      if (row?.master_task_id) adopted.add(String(row.master_task_id));
+    }
+
+    const globalTasks = db
+      .prepare("SELECT * FROM task WHERE scope = 'global'")
+      .all();
+    const items = [];
+    for (const row of globalTasks) {
+      if (!row?.id) continue;
+      const status = (row.status || "active").toString().trim().toLowerCase();
+      if (status !== "active") continue;
+      const templateId = String(row.id);
+      if (adopted.has(templateId)) continue;
+      if (row.master_task_id && adopted.has(String(row.master_task_id))) continue;
+
+      items.push({
+        id: templateId,
+        title: row.title ?? row.name ?? "",
+        description: row.description ?? null,
+        icon: row.icon ?? null,
+        points: Number(row.points ?? row.base_points ?? 0) || 0,
+        youtube_url: row.youtube_url ?? null,
+        version: Number(row.source_version ?? 1) || 1
+      });
+    }
+
+    items.sort((a, b) => b.version - a.version || a.title.localeCompare(b.title));
     res.json(items);
     return;
   }
 
-  if (!tableExists("master_reward")) {
+  if (!tableExists("reward")) {
     res.json([]);
     return;
   }
-  const hasRewardTable = tableExists("reward");
-  const rewardSql = hasRewardTable
-    ? `SELECT mr.id, mr.title, mr.description, mr.icon, mr.base_cost, mr.youtube_url, mr.version
-         FROM master_reward mr
-        WHERE mr.status = 'active'
-          AND NOT EXISTS (
-            SELECT 1
-              FROM reward r
-             WHERE r.family_id = ?
-               AND ((r.source_template_id IS NOT NULL AND r.source_template_id = mr.id)
-                 OR (r.master_reward_id IS NOT NULL AND r.master_reward_id = mr.id))
-          )
-        ORDER BY mr.updated_at DESC, mr.id DESC`
-    : `SELECT mr.id, mr.title, mr.description, mr.icon, mr.base_cost, mr.youtube_url, mr.version
-         FROM master_reward mr
-        WHERE mr.status = 'active'
-        ORDER BY mr.updated_at DESC, mr.id DESC`;
-  const rows = hasRewardTable
-    ? db.prepare(rewardSql).all(familyId)
-    : db.prepare(rewardSql).all();
-  const items = rows.map((row) => ({
-    id: row.id,
-    title: row.title ?? "",
-    description: row.description ?? null,
-    icon: row.icon ?? null,
-    cost: Number(row.base_cost ?? 0) || 0,
-    youtube_url: row.youtube_url ?? null,
-    version: Number(row.version ?? 1) || 1
-  }));
-  res.json(items);
+  const rewardColumns = getTableColumns("reward");
+  if (!rewardColumns.includes("scope")) {
+    res.status(500).json({ error: "reward_scope_missing" });
+    return;
+  }
+
+  const existingRewards = rewardColumns.includes("family_id")
+    ? db
+        .prepare(
+          `SELECT source_template_id, master_reward_id
+             FROM reward
+            WHERE family_id = ?`
+        )
+        .all(familyId)
+    : [];
+  const adoptedRewards = new Set();
+  for (const row of existingRewards) {
+    if (row?.source_template_id) adoptedRewards.add(String(row.source_template_id));
+    if (row?.master_reward_id) adoptedRewards.add(String(row.master_reward_id));
+  }
+
+  const globalRewards = db
+    .prepare("SELECT * FROM reward WHERE scope = 'global'")
+    .all();
+  const rewardItems = [];
+  for (const row of globalRewards) {
+    if (!row?.id) continue;
+    const status = (row.status || "active").toString().trim().toLowerCase();
+    if (status !== "active") continue;
+    const templateId = String(row.id);
+    if (adoptedRewards.has(templateId)) continue;
+    if (row.master_reward_id && adoptedRewards.has(String(row.master_reward_id))) continue;
+
+    rewardItems.push({
+      id: templateId,
+      title: row.title ?? row.name ?? "",
+      description: row.description ?? null,
+      icon: row.icon ?? row.image_url ?? null,
+      cost: Number(row.cost ?? row.price ?? row.base_cost ?? 0) || 0,
+      youtube_url: row.youtube_url ?? null,
+      version: Number(row.source_version ?? 1) || 1
+    });
+  }
+
+  rewardItems.sort((a, b) => b.version - a.version || a.title.localeCompare(b.title));
+  res.json(rewardItems);
 });
 
 function buildTaskStatusUpdater(targetStatus) {
@@ -2127,6 +3151,188 @@ function tableExists(name) {
   return !!db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
     .get(String(name));
+}
+
+function rebuildMenuTableForScope(tableName, { scopeDefault = "family" } = {}) {
+  if (!tableName || !tableExists(tableName)) {
+    return;
+  }
+
+  let info;
+  try {
+    info = db.prepare(`PRAGMA table_info(${quoteIdent(tableName)})`).all();
+  } catch (error) {
+    console.warn(`[migration] unable to inspect ${tableName}`, error?.message || error);
+    return;
+  }
+
+  if (!Array.isArray(info) || info.length === 0) {
+    return;
+  }
+
+  const hasScopeColumn = info.some(col => col?.name === "scope");
+  const familyColumn = info.find(col => col?.name === "family_id");
+  const familyIsNotNull = familyColumn ? Number(familyColumn.notnull) !== 0 : false;
+
+  if (hasScopeColumn && !familyIsNotNull) {
+    return;
+  }
+
+  const indices = db
+    .prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? AND sql IS NOT NULL"
+    )
+    .all(tableName);
+
+  const scopeDefaultSql = `'${scopeDefault}'`;
+
+  const columns = info.map(col => {
+    if (!col?.name) return col;
+    if (col.name === "family_id") {
+      return { ...col, notnull: 0 };
+    }
+    if (col.name === "scope") {
+      return {
+        ...col,
+        notnull: 1,
+        dflt_value: col.dflt_value ?? scopeDefaultSql
+      };
+    }
+    return { ...col };
+  });
+
+  if (!hasScopeColumn) {
+    columns.push({
+      cid: columns.length,
+      name: "scope",
+      type: "TEXT",
+      notnull: 1,
+      dflt_value: scopeDefaultSql,
+      pk: 0
+    });
+  }
+
+  const tempName = `${tableName}_scope_legacy_${Date.now()}`;
+  const columnDefs = columns.map(col => {
+    const parts = [quoteIdent(col.name)];
+    if (col.type) {
+      parts.push(col.type);
+    }
+    if (col.pk) {
+      parts.push("PRIMARY KEY");
+    }
+    if (col.notnull && !col.pk) {
+      parts.push("NOT NULL");
+    }
+    if (col.dflt_value !== null && col.dflt_value !== undefined) {
+      parts.push(`DEFAULT ${col.dflt_value}`);
+    }
+    return parts.join(" ");
+  });
+
+  const newColumnNames = columns.map(col => col.name);
+  const oldColumnNames = info.map(col => col.name);
+
+  db.exec("BEGIN");
+  let renamed = false;
+  try {
+    db.exec(`ALTER TABLE ${quoteIdent(tableName)} RENAME TO ${quoteIdent(tempName)}`);
+    renamed = true;
+    db.exec(`CREATE TABLE ${quoteIdent(tableName)} (${columnDefs.join(", ")});`);
+
+    const selectParts = newColumnNames.map(name => {
+      if (oldColumnNames.includes(name)) {
+        return `${quoteIdent(name)} AS ${quoteIdent(name)}`;
+      }
+      if (name === "scope") {
+        return `${scopeDefaultSql} AS ${quoteIdent(name)}`;
+      }
+      return `NULL AS ${quoteIdent(name)}`;
+    });
+
+    db.exec(
+      `INSERT INTO ${quoteIdent(tableName)} (${newColumnNames.map(quoteIdent).join(", ")})
+       SELECT ${selectParts.join(", ")}
+         FROM ${quoteIdent(tempName)};`
+    );
+    db.exec(`DROP TABLE ${quoteIdent(tempName)};`);
+
+    for (const index of indices) {
+      if (index?.sql) {
+        try {
+          db.exec(index.sql);
+        } catch (indexError) {
+          console.warn(
+            `[migration] unable to recreate index ${index?.name || "unknown"} on ${tableName}`,
+            indexError?.message || indexError
+          );
+        }
+      }
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    console.warn(`[migration] unable to rebuild ${tableName} for scope`, error?.message || error);
+    if (renamed) {
+      try {
+        if (tableExists(tempName) && !tableExists(tableName)) {
+          db.exec(`ALTER TABLE ${quoteIdent(tempName)} RENAME TO ${quoteIdent(tableName)}`);
+        }
+      } catch (restoreError) {
+        console.warn(
+          `[migration] unable to restore ${tableName} after failed scope migration`,
+          restoreError?.message || restoreError
+        );
+      }
+    }
+    return;
+  }
+
+  try {
+    db.exec(
+      `UPDATE ${quoteIdent(tableName)} SET scope = ${scopeDefaultSql}
+         WHERE scope IS NULL OR TRIM(scope) = ''`
+    );
+  } catch (error) {
+    console.warn(`[migration] unable to backfill scope for ${tableName}`, error?.message || error);
+  }
+}
+
+function mapGlobalTask(row) {
+  const mapped = mapTaskRow(row);
+  if (!mapped) return null;
+  return {
+    id: mapped.id,
+    title: mapped.title || mapped.name || "",
+    description: mapped.description || null,
+    icon: mapped.icon || null,
+    youtube_url: mapped.youtube_url || null,
+    base_points: Number(mapped.base_points ?? mapped.points ?? 0) || 0,
+    status: mapped.status || "active",
+    scope: mapped.scope || "family",
+    created_at: mapped.created_at,
+    updated_at: mapped.updated_at,
+    source_version: mapped.source_version ?? 0
+  };
+}
+
+function mapGlobalReward(row) {
+  const mapped = mapRewardRow(row);
+  if (!mapped) return null;
+  return {
+    id: mapped.id,
+    title: mapped.title || mapped.name || "",
+    description: mapped.description || null,
+    icon: mapped.icon || mapped.image_url || null,
+    youtube_url: mapped.youtube_url || null,
+    base_cost: Number(mapped.base_cost ?? mapped.cost ?? mapped.price ?? 0) || 0,
+    status: mapped.status || "active",
+    scope: mapped.scope || "family",
+    created_at: mapped.created_at,
+    updated_at: mapped.updated_at,
+    source_version: mapped.source_version ?? 0
+  };
 }
 
 function normalizeLegacyMemberId(raw) {
@@ -2716,7 +3922,8 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task (
       id TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'family',
+      family_id TEXT,
       title TEXT NOT NULL,
       description TEXT,
       icon TEXT,
@@ -2742,7 +3949,8 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
       id TEXT PRIMARY KEY,
-      family_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'family',
+      family_id TEXT,
       name TEXT NOT NULL,
       cost INTEGER NOT NULL,
       description TEXT DEFAULT '',
@@ -2972,6 +4180,20 @@ const ensureLedgerSchemaTx = db.transaction(() => {
 function ensureSchema() {
   // Base tables + seeds run inside a transaction for atomicity.
   ensureBaseSchema();
+
+  rebuildMenuTableForScope("task", { scopeDefault: "family" });
+  rebuildMenuTableForScope("reward", { scopeDefault: "family" });
+
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_task_scope_family ON task(scope, family_id)");
+  } catch (err) {
+    console.warn("[schema] unable to ensure idx_task_scope_family", err?.message || err);
+  }
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_reward_scope_family ON reward(scope, family_id)");
+  } catch (err) {
+    console.warn("[schema] unable to ensure idx_reward_scope_family", err?.message || err);
+  }
 
   // Rebuild legacy -> modern ledger outside the transaction so we can
   // temporarily disable foreign key checks while swapping tables.
@@ -3689,8 +4911,16 @@ function mapRewardRow(row) {
   }
   const status = (row.status || "active").toString().trim().toLowerCase() || "active";
   const cost = Number(row.cost ?? row.price ?? 0) || 0;
+  const baseCost = Number(row.base_cost ?? row.cost ?? row.price ?? 0) || 0;
+  const icon = row.icon || row.image_url || "";
   const sourceTemplateId = row.source_template_id || row.master_reward_id || null;
   const masterRewardId = row.master_reward_id || null;
+  const scopeRaw = row.scope || null;
+  const normalizedScope = scopeRaw
+    ? String(scopeRaw).trim().toLowerCase()
+    : row.family_id
+    ? "family"
+    : "global";
   const source = sourceTemplateId ? "master" : row.source || null;
   const sourceVersion = Number(row.source_version ?? 0) || 0;
   const isCustomized = Number(row.is_customized ?? 0) ? 1 : 0;
@@ -3700,9 +4930,11 @@ function mapRewardRow(row) {
     title: row.name || "",
     cost,
     price: cost,
+    base_cost: baseCost,
     description: row.description || "",
-    image_url: row.image_url || "",
-    imageUrl: row.image_url || "",
+    icon,
+    image_url: row.image_url || icon || "",
+    imageUrl: row.image_url || icon || "",
     youtube_url: row.youtube_url || "",
     youtubeUrl: row.youtube_url || "",
     status,
@@ -3714,6 +4946,7 @@ function mapRewardRow(row) {
     source_template_id: sourceTemplateId,
     source_version: sourceVersion,
     is_customized: isCustomized,
+    scope: normalizedScope || "family",
     created_at: Number(row.created_at ?? 0) || null,
     updated_at: Number(row.updated_at ?? 0) || null,
     family_id: row.family_id || null

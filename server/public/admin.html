@@ -101,6 +101,35 @@
       background: #0008;
     }
 
+    .propagate-family-list {
+      max-height: 320px;
+      overflow-y: auto;
+      margin: 12px 0;
+      padding-right: 4px;
+    }
+
+    .propagate-family-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 4px;
+      border-radius: 6px;
+    }
+
+    .propagate-family-option:hover,
+    .propagate-family-option:focus-within {
+      background: rgba(37, 99, 235, 0.08);
+    }
+
+    .propagate-family-option small {
+      color: var(--muted);
+    }
+
+    .propagate-family-option input {
+      margin: 0;
+      flex-shrink: 0;
+    }
+
     .modal-dialog {
       position: relative;
       width: min(92vw, 800px);
@@ -1233,6 +1262,23 @@
                 <button data-close="#modal-forgot-key" class="btn">Cancel</button>
               </div>
               <p id="fk-msg" class="text-sm mt-2"></p>
+            </div>
+          </div>
+          <div id="modal-propagate-template" class="modal hidden" data-admin-role="master">
+            <div class="modal-backdrop" data-close></div>
+            <div class="modal-box">
+              <h3 id="propagateModalTitle">Push template to families</h3>
+              <p id="propagateModalDescription" class="text-sm muted"></p>
+              <div class="flex gap-2 mt-2" id="propagateModalControls">
+                <button type="button" class="btn" id="propagateSelectAll">Select all</button>
+                <button type="button" class="btn" id="propagateSelectNone">Select none</button>
+              </div>
+              <div id="propagateFamilyList" class="propagate-family-list"></div>
+              <p id="propagateModalStatus" class="text-sm muted"></p>
+              <div class="flex gap-2 mt-3 modal-actions">
+                <button type="button" class="btn-primary" id="propagateConfirm">Push to families</button>
+                <button type="button" class="btn" data-close="#modal-propagate-template">Cancel</button>
+              </div>
             </div>
           </div>
         </div>
