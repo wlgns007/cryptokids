@@ -3135,22 +3135,23 @@ function initAdmin() {
     if (!body) return;
     const list = Array.isArray(members) ? members : [];
     if (!list.length) {
-      body.innerHTML = '<div class="muted text-sm">No members found.</div>';
+      body.innerHTML = '<div class="muted text-sm">No members found for this family.</div>';
       return;
     }
+    const monoStyle = 'style="font-family:var(--font-mono, monospace); word-break:break-all; font-size:12px;"';
     const rows = list
       .map((member) => {
-        const name = escapeHtml(String(pickValue(member, 'name', 'fullName') || '—'));
-        const nickname = escapeHtml(String(pickValue(member, 'nickname') || '—'));
-        const balance = escapeHtml(formatNumber(pickValue(member, 'balance', 'tokens', 'points')) || '0');
-        const id = escapeHtml(String(pickValue(member, 'id', 'userId', 'user_id') || ''));
-        return `<tr><td>${id || '—'}</td><td>${name}</td><td>${nickname}</td><td class="text-right">${balance}</td></tr>`;
+        const id = escapeHtml(String(pickValue(member, 'id', 'userId', 'user_id') || '')) || '—';
+        const name = escapeHtml(String(pickValue(member, 'name', 'fullName') || '—')) || '—';
+        const address = escapeHtml(String(pickValue(member, 'addr', 'address') || '—')) || '—';
+        const publicKey = escapeHtml(String(pickValue(member, 'pk', 'public_key', 'publicKey') || '—')) || '—';
+        return `<tr><td>${id}</td><td>${name}</td><td ${monoStyle}>${address}</td><td ${monoStyle}>${publicKey}</td></tr>`;
       })
       .join('');
     body.innerHTML = `
       <table class="family-table compact">
         <thead>
-          <tr><th>ID</th><th>Name</th><th>Nickname</th><th class="text-right">Balance</th></tr>
+          <tr><th>ID</th><th>Name</th><th>Address</th><th>Public Key</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>

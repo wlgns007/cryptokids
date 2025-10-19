@@ -37,13 +37,194 @@ function columnMap(database, table) {
   }
 }
 
+function quoteSqlLiteral(value) {
+  if (value === null || value === undefined) {
+    return 'NULL';
+  }
+  const text = String(value);
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+function determineDefaultFamilyId(database) {
+  try {
+    if (!hasTable(database, 'family')) {
+      return null;
+    }
+
+    const active = database
+      .prepare(
+        `SELECT id
+           FROM "family"
+          WHERE COALESCE(LOWER(status), 'active') <> 'deleted'
+          ORDER BY created_at
+          LIMIT 1`
+      )
+      .get();
+    if (active?.id) {
+      return String(active.id);
+    }
+
+    const any = database.prepare('SELECT id FROM "family" LIMIT 1').get();
+    if (any?.id) {
+      return String(any.id);
+    }
+  } catch (error) {
+    console.warn('[db] unable to determine default family id', error?.message || error);
+  }
+  return null;
+}
+
+function adjustKidsCreateSql(originalSql) {
+  if (!originalSql || typeof originalSql !== 'string') {
+    return null;
+  }
+  let updated = originalSql;
+  if (!/family_id/i.test(updated)) {
+    updated = updated.replace(/\)\s*;?\s*$/i, ', family_id TEXT NOT NULL$&');
+  } else {
+    updated = updated.replace(/family_id[^,)]*/i, (segment) => {
+      if (/NOT\s+NULL/i.test(segment)) {
+        return segment;
+      }
+      return `${segment} NOT NULL`;
+    });
+  }
+  return updated;
+}
+
+function rebuildKidsTableWithFamilyScope(database, options = {}) {
+  try {
+    const tableRow = database
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'kids' LIMIT 1`)
+      .get();
+    const originalSql = tableRow?.sql || null;
+    const adjustedSql = adjustKidsCreateSql(originalSql);
+    if (!adjustedSql || !/CREATE\s+TABLE/i.test(adjustedSql)) {
+      return;
+    }
+
+    const indexes = database
+      .prepare(
+        `SELECT name, sql
+           FROM sqlite_master
+          WHERE type = 'index' AND tbl_name = 'kids' AND sql IS NOT NULL`
+      )
+      .all();
+
+    const tempName = `kids__legacy_${Date.now()}`;
+    const familyColumnName = options.familyColumnName || 'family_id';
+    const fallbackColumnName = options.fallbackColumnName || null;
+    const defaultFamilyId = options.defaultFamilyId || determineDefaultFamilyId(database) || 'default';
+    const defaultLiteral = quoteSqlLiteral(defaultFamilyId);
+
+    database.exec('PRAGMA foreign_keys=OFF; BEGIN;');
+    let renamed = false;
+    try {
+      database.exec(`ALTER TABLE "kids" RENAME TO "${tempName}"`);
+      renamed = true;
+      database.exec(adjustedSql);
+
+      const newColumns = database
+        .prepare(`PRAGMA table_info(${q('kids')})`)
+        .all()
+        .map((col) => col.name);
+      const oldColumns = database
+        .prepare(`PRAGMA table_info(${q(tempName)})`)
+        .all()
+        .map((col) => col.name);
+
+      const fallbackSources = [
+        'family_id',
+        'familyId',
+        'family_uuid',
+        'familyUuid',
+        'family',
+        'family_key',
+        'familyKey',
+        'family_code',
+        'familyCode'
+      ];
+
+      let fallbackSource = fallbackColumnName;
+      if (!fallbackSource) {
+        for (const candidate of fallbackSources) {
+          if (candidate === familyColumnName) continue;
+          if (oldColumns.includes(candidate)) {
+            fallbackSource = candidate;
+            break;
+          }
+        }
+      }
+
+      const fallbackExpr = fallbackSource && fallbackSource !== familyColumnName
+        ? `NULLIF(TRIM(${q(fallbackSource)}), '')`
+        : defaultLiteral;
+
+      const hasFamilyColumn = oldColumns.includes(familyColumnName);
+      const familyExpr = hasFamilyColumn
+        ? `COALESCE(NULLIF(TRIM(${q(familyColumnName)}), ''), ${fallbackExpr}, ${defaultLiteral})`
+        : fallbackSource
+          ? `COALESCE(NULLIF(TRIM(${q(fallbackSource)}), ''), ${defaultLiteral})`
+          : defaultLiteral;
+
+      const selectExpressions = newColumns.map((name) => {
+        if (name === familyColumnName) {
+          return familyExpr;
+        }
+        if (oldColumns.includes(name)) {
+          return q(name);
+        }
+        return 'NULL';
+      });
+
+      const insertSql = `INSERT INTO ${q('kids')} (${newColumns.map(q).join(', ')})
+        SELECT ${selectExpressions.join(', ')} FROM ${q(tempName)};`;
+      database.exec(insertSql);
+
+      for (const index of indexes) {
+        if (!index?.sql) continue;
+        try {
+          database.exec(index.sql);
+        } catch (error) {
+          console.warn('[db] unable to rebuild kids index', {
+            name: index?.name || 'unknown',
+            error: error?.message || error,
+          });
+        }
+      }
+
+      database.exec(`DROP TABLE ${q(tempName)};`);
+      database.exec('COMMIT; PRAGMA foreign_keys=ON;');
+    } catch (error) {
+      database.exec('ROLLBACK; PRAGMA foreign_keys=ON;');
+      console.warn('[db] unable to rebuild kids table for family scope', error?.message || error);
+      if (renamed) {
+        try {
+          if (hasTable(database, 'kids')) {
+            database.exec('DROP TABLE "kids";');
+          }
+        } catch {
+          // ignore
+        }
+        try {
+          database.exec(`ALTER TABLE ${q(tempName)} RENAME TO ${q('kids')}`);
+        } catch (restoreError) {
+          console.warn('[db] unable to restore kids table after failed rebuild', restoreError?.message || restoreError);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[db] unable to inspect kids table for rebuild', error?.message || error);
+  }
+}
+
 export function ensureKidsFamilyScope(database) {
   const dbRef = database || db;
   if (!hasTable(dbRef, 'kids')) {
     return;
   }
 
-  const columns = columnMap(dbRef, 'kids');
+  let columns = columnMap(dbRef, 'kids');
   let familyColumn = columns.get('family_id');
 
   if (!familyColumn) {
@@ -55,6 +236,8 @@ export function ensureKidsFamilyScope(database) {
       return;
     }
   }
+
+  columns = columnMap(dbRef, 'kids');
 
   const fallbackSources = ['family_uuid', 'familyuuid', 'family', 'family_key', 'familykey'];
   let sourceColumn = null;
@@ -79,6 +262,38 @@ export function ensureKidsFamilyScope(database) {
         sourceColumn,
       });
     }
+  }
+
+  const defaultFamilyId = determineDefaultFamilyId(dbRef) || 'default';
+  const defaultLiteral = quoteSqlLiteral(defaultFamilyId);
+
+  try {
+    dbRef.exec(`
+      UPDATE "kids"
+         SET "family_id" = ${defaultLiteral}
+       WHERE "family_id" IS NULL OR TRIM("family_id") = ''
+    `);
+  } catch (error) {
+    console.warn('[db] unable to enforce kids.family_id default', error?.message || error);
+  }
+
+  let familyInfo = null;
+  try {
+    familyInfo = dbRef
+      .prepare(`PRAGMA table_info(${q('kids')})`)
+      .all()
+      .find((col) => col?.name && col.name.toLowerCase() === familyColumn.toLowerCase());
+  } catch (error) {
+    console.warn('[db] unable to inspect kids.family_id column', error?.message || error);
+  }
+
+  const isNotNull = Number(familyInfo?.notnull ?? 0) === 1;
+  if (!isNotNull) {
+    rebuildKidsTableWithFamilyScope(dbRef, {
+      familyColumnName: familyColumn,
+      fallbackColumnName: sourceColumn,
+      defaultFamilyId,
+    });
   }
 
   try {

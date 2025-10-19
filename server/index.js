@@ -19,6 +19,8 @@ import { whoAmI } from "./routes/adminWhoAmI.js";
 import { adminLogin } from "./routes/adminLogin.js";
 import { familyForCurrentAdmin } from "./routes/familiesSelf.js";
 import { getActiveFamilies } from "./models/families.js";
+import { listKidsByFamilyId } from "./lib/adminDb.js";
+import { requireCanAccessFamily } from "./middleware/resolveAdmin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -496,6 +498,40 @@ app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {
   };
   res.json(payload);
 });
+
+app.get(
+  "/api/admin/families/:familyId/members",
+  requireCanAccessFamily,
+  (req, res) => {
+    const familyIdRaw = typeof req.params?.familyId === "string" ? req.params.familyId : "";
+    const familyId = familyIdRaw.trim();
+    if (!familyId) {
+      res.status(400).json({ error: "family_id required" });
+      return;
+    }
+
+    const database = req.db || db;
+    try {
+      const normalized = familyId.toLowerCase();
+      const family = database
+        .prepare('SELECT id FROM "family" WHERE LOWER(id) = ? LIMIT 1')
+        .get(normalized);
+      if (!family?.id) {
+        res.status(404).json({ error: "family_not_found" });
+        return;
+      }
+
+      const members = listKidsByFamilyId(database, family.id);
+      res.json({ members });
+    } catch (error) {
+      console.error('[api.admin.families.members] failed to list members', {
+        familyId,
+        error: error?.message || error,
+      });
+      res.status(500).json({ error: "server_error", detail: "members_query_failed" });
+    }
+  }
+);
 
 app.post("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
   const body = req.body ?? {};
