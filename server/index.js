@@ -9,7 +9,7 @@ import QRCode from "qrcode";
 import db, { DATA_DIR, ensureMasterCascadeTriggers, resolveAdminContext } from "./db.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
-import apiRouter, { scopeMiddleware } from "./routes.js";
+import apiRouter, { scopeMiddleware, familyAccessChain } from "./routes.js";
 import { balanceOf, recordLedgerEntry } from "./ledger/core.js";
 import { generateIcon, knownIcon } from "./iconFactory.js";
 import { readAdminKey } from "./auth.js";
@@ -2359,7 +2359,7 @@ app.get(
   }
 );
 
-app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/api/admin/earn-templates", ...familyAccessChain, (req, res) => {
   if (!tableExists("task")) {
     res.json([]);
     return;
@@ -2381,14 +2381,14 @@ app.get("/api/admin/earn-templates", authenticateAdmin, resolveFamilyScope, (req
   const hasSourceVersion = columns.includes("source_version");
   const hasIsCustomized = columns.includes("is_customized");
 
-  const scopedFamilyId = req.scope?.family_id ?? null;
+  const scopedFamilyId = req.family?.id || null;
   if (MULTITENANT_ENFORCE) {
     if (!hasFamilyColumn) {
       res.status(500).json({ error: "task_missing_family_scope" });
       return;
     }
     if (!scopedFamilyId) {
-      res.status(400).json({ error: "family_id required" });
+      res.status(400).json({ error: "family_scope_required" });
       return;
     }
   }
@@ -6639,16 +6639,16 @@ app.delete("/api/admin/members/:userId", authenticateAdmin, resolveFamilyScope, 
   res.json({ ok: true });
 });
 
-app.get("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/api/earn-templates", ...familyAccessChain, (req, res) => {
   const { active, sort } = req.query || {};
   const filters = [];
   const params = [];
 
-  const scopedFamilyId = req.scope?.family_id ?? null;
+  const scopedFamilyId = req.family?.id || null;
 
   if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
     if (!scopedFamilyId) {
-      res.status(400).json({ error: "family_id required" });
+      res.status(400).json({ error: "family_scope_required" });
       return;
     }
     filters.push("family_id = ?");
@@ -6677,14 +6677,12 @@ app.get("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res)
   res.json(rows.map(mapEarnTemplate));
 });
 
-app.post("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/api/earn-templates", ...familyAccessChain, (req, res) => {
   const { title, points, description = "", youtube_url = null, active = true, sort_order = 0 } = req.body || {};
   if (!title || !Number.isFinite(Number(points))) {
     return res.status(400).json({ error: "invalid_template" });
   }
-  if (MULTITENANT_ENFORCE && EARN_TEMPLATES_HAS_FAMILY_COLUMN && !req.scope?.family_id) {
-    return res.status(400).json({ error: "family_id required" });
-  }
+  const scopedFamilyId = req.family?.id || null;
 
   const columns = [
     "title",
@@ -6708,12 +6706,11 @@ app.post("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res
   values.push(ts, ts);
 
   if (EARN_TEMPLATES_HAS_FAMILY_COLUMN) {
-    const familyId = req.scope?.family_id || (!MULTITENANT_ENFORCE ? "default" : null);
-    if (MULTITENANT_ENFORCE && !familyId) {
-      return res.status(400).json({ error: "family_id required" });
+    if (!scopedFamilyId) {
+      return res.status(400).json({ error: "family_scope_required" });
     }
     columns.push("family_id");
-    values.push(familyId);
+    values.push(scopedFamilyId);
   } else if (MULTITENANT_ENFORCE) {
     return res.status(500).json({ error: "earn_templates_missing_family_scope" });
   }
@@ -6727,7 +6724,7 @@ app.post("/api/earn-templates", authenticateAdmin, resolveFamilyScope, (req, res
   res.status(201).json(mapEarnTemplate(row));
 });
 
-app.patch("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.patch("/api/earn-templates/:id", ...familyAccessChain, (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const fields = [];
@@ -6749,14 +6746,14 @@ app.patch("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req
   const whereParams = [id];
 
   if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
-    if (!req.scope?.family_id) {
-      return res.status(400).json({ error: "family_id required" });
+    if (!req.family?.id) {
+      return res.status(400).json({ error: "family_scope_required" });
     }
     sql += " AND family_id = ?";
-    whereParams.push(req.scope.family_id);
-  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.scope?.family_id) {
+    whereParams.push(req.family.id);
+  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.family?.id) {
     sql += " AND family_id = ?";
-    whereParams.push(req.scope.family_id);
+    whereParams.push(req.family.id);
   }
 
   const info = db.prepare(sql).run(...params, ...whereParams);
@@ -6765,21 +6762,21 @@ app.patch("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req
   res.json(mapEarnTemplate(row));
 });
 
-app.delete("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.delete("/api/earn-templates/:id", ...familyAccessChain, (req, res) => {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: "invalid_id" });
   let sql = "DELETE FROM earn_templates WHERE id = ?";
   const params = [id];
 
   if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && MULTITENANT_ENFORCE) {
-    if (!req.scope?.family_id) {
-      return res.status(400).json({ error: "family_id required" });
+    if (!req.family?.id) {
+      return res.status(400).json({ error: "family_scope_required" });
     }
     sql += " AND family_id = ?";
-    params.push(req.scope.family_id);
-  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.scope?.family_id) {
+    params.push(req.family.id);
+  } else if (EARN_TEMPLATES_HAS_FAMILY_COLUMN && req.family?.id) {
     sql += " AND family_id = ?";
-    params.push(req.scope.family_id);
+    params.push(req.family.id);
   }
 
   const info = db.prepare(sql).run(...params);
@@ -6787,15 +6784,12 @@ app.delete("/api/earn-templates/:id", authenticateAdmin, resolveFamilyScope, (re
   res.json({ ok: true });
 });
 
-app.post("/ck/refund", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/ck/refund", ...familyAccessChain, (req, res) => {
   const body = req.body || {};
   const actorId = (req.headers["x-admin-actor"] || "").toString().trim() || "admin";
   const idempotencyKey = body.idempotency_key ? String(body.idempotency_key).trim() : null;
   const normalizedUser = normId(body.user_id);
-  const familyId = req.scope?.family_id ?? null;
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId: normalizedUser }));
-  }
+  const familyId = req.family?.id || null;
   if (!FEATURE_FLAGS.refunds) {
     return res.status(403).json(buildErrorResponse({ err: { message: "FEATURE_DISABLED" }, userId: normalizedUser }));
   }
@@ -6852,11 +6846,11 @@ app.post("/ck/refund", authenticateAdmin, resolveFamilyScope, (req, res) => {
         idempotencyKey
       });
       recordTelemetry("refund", { ok: false, error: err?.message, durationMs: Date.now() - started });
-      res.status(409).json(buildErrorResponse({ err, userId: normalizedUser, fallback: "REFUND_EXISTS" }));
+      res.status(409).json(buildErrorResponse({ err, userId: normalizedUser, fallback: "refund_exists" }));
       return;
     }
     recordTelemetry("refund", { ok: false, error: err?.message, durationMs: Date.now() - started });
-    const payload = buildErrorResponse({ err, userId: normalizedUser, fallback: "REFUND_FAILED" });
+    const payload = buildErrorResponse({ err, userId: normalizedUser, fallback: "refund_failed" });
     console.error("[refund] failed", {
       userId: normalizedUser,
       redeemTxId: body.redeem_tx_id,
@@ -6868,31 +6862,27 @@ app.post("/ck/refund", authenticateAdmin, resolveFamilyScope, (req, res) => {
   }
 });
 
-app.get("/ck/ledger/:userId", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/ck/ledger/:userId", ...familyAccessChain, (req, res) => {
   const userId = normId(req.params.userId);
-  if (!userId) return res.status(400).json({ error: "userId required" });
-  const familyId = req.scope?.family_id ?? null;
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json({ error: "family_id required" });
+  if (!userId) {
+    return res.status(400).json({ error: "invalid_member" });
   }
+  const familyId = req.family?.id || null;
   const data = getLedgerViewForUser(userId, familyId);
   const hints = getStateHints(userId, familyId);
   res.json({ ...data, hints });
 });
 
-app.post("/ck/earn", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
+app.post("/ck/earn", express.json(), ...familyAccessChain, (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const amount = Math.floor(Number(req.body?.amount ?? 0));
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_manual";
   const action = req.body?.action ? String(req.body.action) : "earn_manual";
-  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+    return res.status(400).json(buildErrorResponse({ err: { message: "invalid_amount" }, userId }));
   }
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
-  }
+  const familyId = req.family?.id || null;
   const started = Date.now();
   try {
     const result = applyLedger({
@@ -6918,23 +6908,20 @@ app.post("/ck/earn", authenticateAdmin, resolveFamilyScope, express.json(), (req
   } catch (err) {
     recordTelemetry("earn", { ok: false, error: err?.message, durationMs: Date.now() - started });
     const status = err?.status || (err?.message === "INSUFFICIENT_FUNDS" ? 409 : 400);
-    res.status(status).json(buildErrorResponse({ err, userId, fallback: "EARN_FAILED" }));
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "earn_failed" }));
   }
 });
 
-app.post("/ck/redeem", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
+app.post("/ck/redeem", express.json(), ...familyAccessChain, (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const amount = Math.floor(Number(req.body?.amount ?? 0));
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_redeem_manual";
   const action = req.body?.action ? String(req.body.action) : "spend_manual";
-  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_AMOUNT" }, userId }));
+    return res.status(400).json(buildErrorResponse({ err: { message: "invalid_amount" }, userId }));
   }
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
-  }
+  const familyId = req.family?.id || null;
   const started = Date.now();
   try {
     const result = applyLedger({
@@ -6960,23 +6947,20 @@ app.post("/ck/redeem", authenticateAdmin, resolveFamilyScope, express.json(), (r
   } catch (err) {
     recordTelemetry("redeem", { ok: false, error: err?.message, durationMs: Date.now() - started });
     const status = err?.message === "INSUFFICIENT_FUNDS" ? 409 : err?.status || 400;
-    res.status(status).json(buildErrorResponse({ err, userId, fallback: "REDEEM_FAILED" }));
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "redeem_failed" }));
   }
 });
 
-app.post("/ck/adjust", authenticateAdmin, resolveFamilyScope, express.json(), (req, res) => {
+app.post("/ck/adjust", express.json(), ...familyAccessChain, (req, res) => {
   const userId = normId(req.body?.user_id ?? req.body?.userId);
   const deltaRaw = Number(req.body?.delta ?? 0);
   const delta = Math.trunc(deltaRaw);
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   const actorLabel = (req.headers["x-admin-actor"] || "").toString().trim() || "admin_adjust";
-  const familyId = req.scope?.family_id ?? null;
   if (!userId || !Number.isFinite(delta) || delta === 0) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "INVALID_DELTA" }, userId }));
+    return res.status(400).json(buildErrorResponse({ err: { message: "invalid_delta" }, userId }));
   }
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
-  }
+  const familyId = req.family?.id || null;
   const started = Date.now();
   try {
     const action = req.body?.action ? String(req.body.action) : delta > 0 ? "adjust_credit" : "adjust_debit";
@@ -7003,28 +6987,23 @@ app.post("/ck/adjust", authenticateAdmin, resolveFamilyScope, express.json(), (r
   } catch (err) {
     recordTelemetry("adjust", { ok: false, error: err?.message, durationMs: Date.now() - started });
     const status = err?.status || (err?.message === "INSUFFICIENT_FUNDS" ? 409 : 400);
-    res.status(status).json(buildErrorResponse({ err, userId, fallback: "ADJUST_FAILED" }));
+    res.status(status).json(buildErrorResponse({ err, userId, fallback: "adjust_failed" }));
   }
 });
 
-app.get("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.get("/api/admin/rewards", ...familyAccessChain, (req, res) => {
   const filters = [];
   const params = [];
   const query = req.query || {};
-  const scopedFamilyId = req.scope?.family_id ?? null;
+  const scopedFamilyId = req.family?.id || null;
 
   if (REWARD_HAS_FAMILY_COLUMN) {
-    if (MULTITENANT_ENFORCE) {
-      if (!scopedFamilyId) {
-        res.status(400).json({ error: "family_id required" });
-        return;
-      }
-      filters.push("r.family_id = ?");
-      params.push(scopedFamilyId);
-    } else if (scopedFamilyId) {
-      filters.push("r.family_id = ?");
-      params.push(scopedFamilyId);
+    if (!scopedFamilyId) {
+      res.status(400).json({ error: "family_scope_required" });
+      return;
     }
+    filters.push("r.family_id = ?");
+    params.push(scopedFamilyId);
   } else if (MULTITENANT_ENFORCE) {
     res.status(500).json({ error: "reward_missing_family_scope" });
     return;
@@ -7122,7 +7101,7 @@ app.get("/api/features", (_req, res) => {
   res.json({ ...FEATURE_FLAGS });
 });
 
-app.post("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/api/admin/rewards", ...familyAccessChain, (req, res) => {
   try {
     const body = req.body || {};
     const name = (body.name || "").toString().trim();
@@ -7143,9 +7122,9 @@ app.post("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res)
 
     let familyId = null;
     if (REWARD_HAS_FAMILY_COLUMN) {
-      familyId = req.scope?.family_id || (!MULTITENANT_ENFORCE ? "default" : null);
-      if (MULTITENANT_ENFORCE && !familyId) {
-        return res.status(400).json({ error: "family_id required" });
+      familyId = req.family?.id || null;
+      if (!familyId) {
+        return res.status(400).json({ error: "family_scope_required" });
       }
     } else if (MULTITENANT_ENFORCE) {
       return res.status(500).json({ error: "reward_missing_family_scope" });
@@ -7210,7 +7189,7 @@ app.post("/api/admin/rewards", authenticateAdmin, resolveFamilyScope, (req, res)
   }
 });
 
-app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.patch("/api/admin/rewards/:id", ...familyAccessChain, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   const body = req.body || {};
@@ -7218,17 +7197,13 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
   const params = [];
   const rewardColumns = getTableColumns("reward");
   const hasFamilyColumn = rewardColumns.includes("family_id");
-  const scopedFamilyId = req.scope?.family_id ?? null;
+  const scopedFamilyId = req.family?.id || null;
   let guardFamilyId = null;
   if (hasFamilyColumn) {
-    if (MULTITENANT_ENFORCE) {
-      if (!scopedFamilyId) {
-        return res.status(400).json({ error: "family_id required" });
-      }
-      guardFamilyId = scopedFamilyId;
-    } else if (scopedFamilyId) {
-      guardFamilyId = scopedFamilyId;
+    if (!scopedFamilyId) {
+      return res.status(400).json({ error: "family_scope_required" });
     }
+    guardFamilyId = scopedFamilyId;
   } else if (MULTITENANT_ENFORCE) {
     return res.status(500).json({ error: "reward_missing_family_scope" });
   }
@@ -7242,14 +7217,7 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
 
   const existingFamilyId = hasFamilyColumn ? existing.family_id ?? null : null;
   if (hasFamilyColumn) {
-    if (MULTITENANT_ENFORCE) {
-      if (!scopedFamilyId) {
-        return res.status(400).json({ error: "family_id required" });
-      }
-      if (existingFamilyId && scopedFamilyId !== existingFamilyId) {
-        return res.status(404).json({ error: "not_found" });
-      }
-    } else if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
+    if (scopedFamilyId && existingFamilyId && scopedFamilyId !== existingFamilyId) {
       return res.status(404).json({ error: "not_found" });
     }
   }
@@ -7357,7 +7325,7 @@ app.patch("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req,
   res.json({ ok: true, reward: mapRewardRow(updated) });
 });
 
-app.delete("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.delete("/api/admin/rewards/:id", ...familyAccessChain, (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "invalid_id" });
   try {
@@ -7365,16 +7333,12 @@ app.delete("/api/admin/rewards/:id", authenticateAdmin, resolveFamilyScope, (req
     const params = [id];
 
     if (REWARD_HAS_FAMILY_COLUMN) {
-      if (MULTITENANT_ENFORCE) {
-        if (!req.scope?.family_id) {
-          return res.status(400).json({ error: "family_id required" });
-        }
-        sql += " AND family_id = ?";
-        params.push(req.scope.family_id);
-      } else if (req.scope?.family_id) {
-        sql += " AND family_id = ?";
-        params.push(req.scope.family_id);
+      const scopedFamilyId = req.family?.id || null;
+      if (!scopedFamilyId) {
+        return res.status(400).json({ error: "family_scope_required" });
       }
+      sql += " AND family_id = ?";
+      params.push(scopedFamilyId);
     } else if (MULTITENANT_ENFORCE) {
       return res.status(500).json({ error: "reward_missing_family_scope" });
     }
@@ -7497,18 +7461,18 @@ app.post("/api/tokens/earn", (req, res) => {
   }
 });
 
-app.post("/api/tokens/give", requireAdminKey, (req, res) => {
+app.post("/api/tokens/give", ...familyAccessChain, (req, res) => {
   const userId = normId(req.body?.userId);
   const amount = Number(req.body?.amount || 0);
   const note = req.body?.note ? String(req.body.note).slice(0, 200) : null;
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ error: "invalid_payload" });
   }
-  const ctx = req.auth ?? {};
-  if (ctx.role === 'family') {
+  const scopedFamilyId = req.family?.id || null;
+  if (scopedFamilyId) {
     const memberFamily = resolveMemberFamilyId(userId);
-    if (memberFamily && memberFamily !== (ctx.familyId ?? ctx.family_id ?? null)) {
-      return res.status(403).json({ error: 'forbidden' });
+    if (memberFamily && memberFamily !== scopedFamilyId) {
+      return res.status(403).json({ error: 'forbidden_family_scope' });
     }
   }
   const { token, payload } = createToken("give", { userId, amount: Math.floor(amount), note });
@@ -7551,16 +7515,13 @@ app.post("/api/earn/scan", (req, res) => {
   }
 });
 
-app.post("/api/earn/quick", authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post("/api/earn/quick", ...familyAccessChain, (req, res) => {
   const userId = normId(req.body?.userId);
   const templateId = Number(req.body?.templateId);
-  const familyId = req.scope?.family_id ?? null;
   if (!userId || !templateId) {
     return res.status(400).json(buildErrorResponse({ err: { message: "invalid_payload" }, userId }));
   }
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: "family_id required" }, userId }));
-  }
+  const familyId = req.family?.id || null;
   const tpl = db.prepare("SELECT * FROM earn_templates WHERE id = ?").get(templateId);
   if (!tpl) {
     return res.status(404).json(buildErrorResponse({ err: { message: "template_not_found" }, userId }));
@@ -7688,15 +7649,14 @@ app.post("/api/holds", express.json(), (req, res) => {
   }
 });
 
-app.get('/api/holds', requireAdminKey, (req, res) => {
+app.get('/api/holds', ...familyAccessChain, (req, res) => {
   const status = (req.query?.status || 'pending').toString().toLowerCase();
   const userId = normId(req.query?.userId ?? req.query?.user_id);
   const allowed = ['pending', 'redeemed', 'released', 'all'];
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: 'invalid_status' });
   }
-  const ctx = req.auth ?? {};
-  const familyId = ctx.role === 'family' ? ctx.familyId ?? ctx.family_id ?? null : null;
+  const familyId = req.family?.id || null;
   let sql = `
     SELECT h.*, m.family_id AS member_family_id
     FROM hold h
@@ -7713,7 +7673,7 @@ app.get('/api/holds', requireAdminKey, (req, res) => {
     params.push(userId);
   }
   if (familyId) {
-    filters.push('m.family_id = ?');
+    filters.push('COALESCE(h.family_id, m.family_id) = ?');
     params.push(familyId);
   }
   if (filters.length) {
@@ -7724,17 +7684,14 @@ app.get('/api/holds', requireAdminKey, (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post('/api/holds/:id/approve', ...familyAccessChain, (req, res) => {
   const started = Date.now();
   let hold = null;
   try {
     const id = String(req.params.id || '');
     const token = String(req.body?.token || '');
     const override = req.body?.finalCost ?? req.body?.final_cost;
-    const familyId = req.scope?.family_id ?? null;
-    if (!familyId && MULTITENANT_ENFORCE) {
-      return res.status(400).json(buildErrorResponse({ err: { message: 'family_id required' } }));
-    }
+    const familyId = req.family?.id || null;
     if (!id || !token) {
       return res.status(400).json(buildErrorResponse({ err: { message: 'invalid_payload' } }));
     }
@@ -7753,7 +7710,7 @@ app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, 
       return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
     }
     if (familyId && hold.familyId && hold.familyId !== familyId) {
-      return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden' }, userId: hold?.userId }));
+      return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden_family_scope' }, userId: hold?.userId }));
     }
     const cost = override !== undefined && override !== null
       ? Math.max(0, Math.floor(Number(override)))
@@ -7799,19 +7756,16 @@ app.post('/api/holds/:id/approve', authenticateAdmin, resolveFamilyScope, (req, 
   }
 });
 
-app.post('/api/holds/:id/cancel', authenticateAdmin, resolveFamilyScope, (req, res) => {
+app.post('/api/holds/:id/cancel', ...familyAccessChain, (req, res) => {
   const started = Date.now();
   const id = String(req.params.id || '');
   let hold = mapHoldRow(getHoldRow(id));
-  const familyId = req.scope?.family_id ?? null;
-  if (!familyId && MULTITENANT_ENFORCE) {
-    return res.status(400).json(buildErrorResponse({ err: { message: 'family_id required' }, userId: hold?.userId }));
-  }
+  const familyId = req.family?.id || null;
   if (!hold || hold.status !== 'pending') {
     return res.status(404).json(buildErrorResponse({ err: { message: 'hold_not_pending' }, userId: hold?.userId }));
   }
   if (familyId && hold.familyId && hold.familyId !== familyId) {
-    return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden' }, userId: hold?.userId }));
+    return res.status(403).json(buildErrorResponse({ err: { message: 'forbidden_family_scope' }, userId: hold?.userId }));
   }
   const now = Date.now();
   db.prepare(`
