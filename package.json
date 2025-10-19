@@ -4,7 +4,7 @@
   "description": "Hardhat 3 Beta project using the native Node.js test runner and the viem library for Ethereum interactions.",
   "main": "index.js",
   "scripts": {
-    "test": "node --test \"server/tests/**/*.js\"",
+    "test": "npm --prefix server test",
     "prestart": "node scripts/prestart-check.mjs",
     "start": "node server/index.js",
     "check": "node server/index.js --help || true",
@@ -28,9 +28,7 @@
     "multer": "^2.0.2",
     "qrcode": "^1.5.4"
   },
-  "devDependencies": {
-    "supertest": "file:vendor/supertest"
-  },
+  "devDependencies": {},
   "type": "module",
   "directories": {
     "test": "test"

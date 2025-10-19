@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "guard:schema": "node -e \"const s=require('fs').readFileSync('index.js','utf8'); if(/\\bawait\\b/.test(s)){ console.error('❌ Found `await` in server/index.js — startup/migrations must be synchronous.'); process.exit(1);} console.log('✅ schema guard ok');\"",
+    "guard:schema": "node -e \"const s=require('fs').readFileSync('index.js','utf8'); if(/\\bawait\\b/.test(s)){ console.error('\u274c Found `await` in server/index.js \u2014 startup/migrations must be synchronous.'); process.exit(1);} console.log('\u2705 schema guard ok');\"",
     "check": "node --check index.js",
     "prestart": "npm run guard:schema && node scripts/prestart-check.mjs",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test --experimental-test-coverage"
   }
 }
