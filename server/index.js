@@ -3153,19 +3153,9 @@ function tableExists(name) {
     .get(String(name));
 }
 
-function indexExists(name) {
-  if (!name) return false;
-  return !!db
-    .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name = ?")
-    .get(String(name));
-}
-
-function rebuildMenuTableForScope(
-  tableName,
-  { scopeDefault = "family", scopeCheck = null, onBackfill } = {}
-) {
+function rebuildMenuTableForScope(tableName, { scopeDefault = "family" } = {}) {
   if (!tableName || !tableExists(tableName)) {
-    return { addedScopeColumn: false };
+    return;
   }
 
   let info;
@@ -3173,16 +3163,19 @@ function rebuildMenuTableForScope(
     info = db.prepare(`PRAGMA table_info(${quoteIdent(tableName)})`).all();
   } catch (error) {
     console.warn(`[migration] unable to inspect ${tableName}`, error?.message || error);
-    return { addedScopeColumn: false };
+    return;
   }
 
   if (!Array.isArray(info) || info.length === 0) {
-    return { addedScopeColumn: false };
+    return;
   }
 
   const hasScopeColumn = info.some(col => col?.name === "scope");
-  if (hasScopeColumn) {
-    return { addedScopeColumn: false };
+  const familyColumn = info.find(col => col?.name === "family_id");
+  const familyIsNotNull = familyColumn ? Number(familyColumn.notnull) !== 0 : false;
+
+  if (hasScopeColumn && !familyIsNotNull) {
+    return;
   }
 
   const indices = db
@@ -3198,18 +3191,26 @@ function rebuildMenuTableForScope(
     if (col.name === "family_id") {
       return { ...col, notnull: 0 };
     }
+    if (col.name === "scope") {
+      return {
+        ...col,
+        notnull: 1,
+        dflt_value: col.dflt_value ?? scopeDefaultSql
+      };
+    }
     return { ...col };
   });
 
-  columns.push({
-    cid: columns.length,
-    name: "scope",
-    type: "TEXT",
-    notnull: 1,
-    dflt_value: scopeDefaultSql,
-    pk: 0,
-    check: scopeCheck
-  });
+  if (!hasScopeColumn) {
+    columns.push({
+      cid: columns.length,
+      name: "scope",
+      type: "TEXT",
+      notnull: 1,
+      dflt_value: scopeDefaultSql,
+      pk: 0
+    });
+  }
 
   const tempName = `${tableName}_scope_legacy_${Date.now()}`;
   const columnDefs = columns.map(col => {
@@ -3226,15 +3227,13 @@ function rebuildMenuTableForScope(
     if (col.dflt_value !== null && col.dflt_value !== undefined) {
       parts.push(`DEFAULT ${col.dflt_value}`);
     }
-    if (col.check) {
-      parts.push(`CHECK (${col.check})`);
-    }
     return parts.join(" ");
   });
 
   const newColumnNames = columns.map(col => col.name);
   const oldColumnNames = info.map(col => col.name);
 
+  db.exec("BEGIN");
   let renamed = false;
   try {
     db.exec(`ALTER TABLE ${quoteIdent(tableName)} RENAME TO ${quoteIdent(tempName)}`);
@@ -3270,7 +3269,10 @@ function rebuildMenuTableForScope(
         }
       }
     }
+
+    db.exec("COMMIT");
   } catch (error) {
+    db.exec("ROLLBACK");
     console.warn(`[migration] unable to rebuild ${tableName} for scope`, error?.message || error);
     if (renamed) {
       try {
@@ -3284,18 +3286,17 @@ function rebuildMenuTableForScope(
         );
       }
     }
-    throw error;
+    return;
   }
 
-  if (typeof onBackfill === "function") {
-    try {
-      onBackfill();
-    } catch (error) {
-      console.warn(`[migration] unable to backfill scope for ${tableName}`, error?.message || error);
-    }
+  try {
+    db.exec(
+      `UPDATE ${quoteIdent(tableName)} SET scope = ${scopeDefaultSql}
+         WHERE scope IS NULL OR TRIM(scope) = ''`
+    );
+  } catch (error) {
+    console.warn(`[migration] unable to backfill scope for ${tableName}`, error?.message || error);
   }
-
-  return { addedScopeColumn: true };
 }
 
 function mapGlobalTask(row) {
@@ -3948,7 +3949,7 @@ const ensureTables = db.transaction(() => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS reward (
       id TEXT PRIMARY KEY,
-      scope TEXT NOT NULL DEFAULT 'family' CHECK(scope IN ('global','family')),
+      scope TEXT NOT NULL DEFAULT 'family',
       family_id TEXT,
       name TEXT NOT NULL,
       cost INTEGER NOT NULL,
@@ -4283,8 +4284,19 @@ function ensureSchema() {
   // Base tables + seeds run inside a transaction for atomicity.
   ensureBaseSchema();
 
-  ensureScopeMigration();
-  ensureScopeIndexes();
+  rebuildMenuTableForScope("task", { scopeDefault: "family" });
+  rebuildMenuTableForScope("reward", { scopeDefault: "family" });
+
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_task_scope_family ON task(scope, family_id)");
+  } catch (err) {
+    console.warn("[schema] unable to ensure idx_task_scope_family", err?.message || err);
+  }
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_reward_scope_family ON reward(scope, family_id)");
+  } catch (err) {
+    console.warn("[schema] unable to ensure idx_reward_scope_family", err?.message || err);
+  }
 
   // Rebuild legacy -> modern ledger outside the transaction so we can
   // temporarily disable foreign key checks while swapping tables.
