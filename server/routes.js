@@ -54,6 +54,7 @@ function resolveRequestedFamilyId(req) {
     req.query?.family_id,
     req.query?.family,
     req.header("x-family"),
+    req.scope?.family_id,
     req.admin?.familyId,
     req.admin?.family_id,
   ];
@@ -99,6 +100,11 @@ function requireFamilyRecord(req, res, next) {
   req.family = normalized;
   req.familyScopeError = null;
   res.locals.family = { id: normalized.id, record: normalized };
+  if (!req.scope || typeof req.scope !== "object") {
+    req.scope = { family_id: normalized.id };
+  } else {
+    req.scope = { ...req.scope, family_id: normalized.id };
+  }
 
   next();
 }
@@ -769,5 +775,5 @@ function hasColumn(db, table, col) {
   }
 }
 
-export { router };
+export { router, familyAccessChain, requireFamilyRecord, resolveRequestedFamilyId };
 export default router;
