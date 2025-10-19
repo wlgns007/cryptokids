@@ -708,6 +708,16 @@ function initAdmin() {
   const masterRewardsTableBody = $k('masterRewardsTableBody');
   const masterRewardsEmpty = $k('masterRewardsEmpty');
   const masterRewardStatus = $k('masterRewardStatus');
+  const propagateModal = $k('modal-propagate-template');
+  const propagateModalTitle = $k('propagateModalTitle');
+  const propagateModalDescription = $k('propagateModalDescription');
+  const propagateModalStatus = $k('propagateModalStatus');
+  const propagateFamilyList = $k('propagateFamilyList');
+  const propagateConfirm = $k('propagateConfirm');
+  const propagateSelectAll = $k('propagateSelectAll');
+  const propagateSelectNone = $k('propagateSelectNone');
+  const propagateModalControls = $k('propagateModalControls');
+  const propagateConfirmDefaultText = propagateConfirm?.textContent || 'Push to families';
 
   const pendingTemplatesState = {
     items: [],
@@ -722,6 +732,12 @@ function initAdmin() {
     loadingRewards: false,
     activeTab: 'tasks',
     editing: { task: null, reward: null }
+  };
+
+  const propagateState = {
+    kind: null,
+    templateId: null,
+    busy: false
   };
 
   function canShowPendingBanner() {
@@ -763,16 +779,30 @@ function initAdmin() {
   }
 
   setActiveTab = (tab) => {
-    const desired = tab === 'families' ? 'families' : 'templates';
+    const rawDesired = tab === 'families' ? 'families' : 'templates';
+    const isMaster = state.role === 'master';
+    const desired = !isMaster && rawDesired === 'templates' ? 'families' : rawDesired;
     state.activeTab = desired;
 
-    qs('tabTemplates')?.classList.toggle('is-active', desired === 'templates');
-    qs('tabFamilies')?.classList.toggle('is-active', desired === 'families');
+    const templatesTabEl = qs('tabTemplates');
+    const familiesTabEl = qs('tabFamilies');
+    const showTemplates = isMaster && desired === 'templates';
 
-    qs('panel-templates')?.classList.toggle('hidden', desired !== 'templates');
-    qs('panel-families')?.classList.toggle('hidden', desired !== 'families');
+    if (templatesTabEl) {
+      templatesTabEl.hidden = !isMaster;
+      templatesTabEl.classList.toggle('is-active', showTemplates);
+      templatesTabEl.setAttribute('aria-selected', showTemplates ? 'true' : 'false');
+    }
+    if (familiesTabEl) {
+      familiesTabEl.classList.toggle('is-active', !showTemplates);
+      familiesTabEl.setAttribute('aria-selected', showTemplates ? 'false' : 'true');
+    }
 
-    const isMaster = state.role === 'master';
+    const templatesPanel = qs('panel-templates');
+    const familiesPanel = qs('panel-families');
+    if (templatesPanel) templatesPanel.classList.toggle('hidden', !showTemplates);
+    if (familiesPanel) familiesPanel.classList.toggle('hidden', showTemplates);
+
     if (adminState.masterView !== desired) {
       adminState.masterView = desired;
       if (isMaster) {
@@ -811,12 +841,13 @@ function initAdmin() {
         renderExistingFamiliesCardShell(false);
         renderFamilyManagement('Enter a valid admin key.');
       }
-    } else {
+    } else if (isMaster) {
       renderMasterTemplates();
     }
   };
 
   function renderMasterTemplates() {
+    if (state.role !== 'master') return;
     renderMasterTaskList();
     renderMasterRewardList();
     renderPendingTemplates();
@@ -1151,12 +1182,21 @@ function initAdmin() {
       tr.appendChild(statusCell);
 
       const actionsCell = document.createElement('td');
+      actionsCell.style.display = 'flex';
+      actionsCell.style.gap = '8px';
+      actionsCell.style.flexWrap = 'wrap';
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
       editBtn.className = 'btn';
       editBtn.textContent = 'Edit';
       editBtn.addEventListener('click', () => startEditMasterTask(item));
       actionsCell.appendChild(editBtn);
+      const pushBtn = document.createElement('button');
+      pushBtn.type = 'button';
+      pushBtn.className = 'btn-secondary';
+      pushBtn.textContent = 'Push to families';
+      pushBtn.addEventListener('click', () => openPropagateModal('task', item));
+      actionsCell.appendChild(pushBtn);
       tr.appendChild(actionsCell);
 
       masterTaskTableBody.appendChild(tr);
@@ -1216,12 +1256,21 @@ function initAdmin() {
       tr.appendChild(statusCell);
 
       const actionsCell = document.createElement('td');
+      actionsCell.style.display = 'flex';
+      actionsCell.style.gap = '8px';
+      actionsCell.style.flexWrap = 'wrap';
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
       editBtn.className = 'btn';
       editBtn.textContent = 'Edit';
       editBtn.addEventListener('click', () => startEditMasterReward(item));
       actionsCell.appendChild(editBtn);
+      const pushBtn = document.createElement('button');
+      pushBtn.type = 'button';
+      pushBtn.className = 'btn-secondary';
+      pushBtn.textContent = 'Push to families';
+      pushBtn.addEventListener('click', () => openPropagateModal('reward', item));
+      actionsCell.appendChild(pushBtn);
       tr.appendChild(actionsCell);
 
       masterRewardsTableBody.appendChild(tr);
@@ -1266,6 +1315,151 @@ function initAdmin() {
     setMasterTemplatesTab('rewards');
   }
 
+  function getPropagateSelectedIds() {
+    if (!propagateFamilyList) return [];
+    const inputs = Array.from(propagateFamilyList.querySelectorAll('input[type="checkbox"]'));
+    return inputs
+      .filter((input) => input instanceof HTMLInputElement && input.checked && isUUID(input.value))
+      .map((input) => input.value);
+  }
+
+  function resetPropagateModal() {
+    propagateState.kind = null;
+    propagateState.templateId = null;
+    propagateState.busy = false;
+    if (propagateFamilyList) propagateFamilyList.innerHTML = '';
+    if (propagateModalStatus) propagateModalStatus.textContent = '';
+    if (propagateModalDescription) propagateModalDescription.textContent = '';
+    if (propagateConfirm) {
+      propagateConfirm.disabled = true;
+      propagateConfirm.textContent = propagateConfirmDefaultText;
+    }
+  }
+
+  function closePropagateModal() {
+    resetPropagateModal();
+    hide('#modal-propagate-template');
+  }
+
+  function updatePropagateConfirmState() {
+    if (!propagateConfirm) return;
+    const selected = getPropagateSelectedIds();
+    propagateConfirm.disabled = propagateState.busy || selected.length === 0;
+  }
+
+  function setAllPropagateSelections(selected) {
+    if (!propagateFamilyList) return;
+    const inputs = propagateFamilyList.querySelectorAll('input[type="checkbox"]');
+    inputs.forEach((input) => {
+      if (input instanceof HTMLInputElement) input.checked = !!selected;
+    });
+    updatePropagateConfirmState();
+  }
+
+  async function openPropagateModal(kind, item) {
+    if (state.role !== 'master') return;
+    const templateId = item?.id ? String(item.id).trim() : '';
+    if (!templateId) return;
+
+    const normalizedKind = kind === 'reward' ? 'reward' : 'task';
+    propagateState.kind = normalizedKind;
+    propagateState.templateId = templateId;
+    propagateState.busy = false;
+
+    if (propagateModalTitle) {
+      propagateModalTitle.textContent =
+        normalizedKind === 'reward' ? 'Push reward template' : 'Push task template';
+    }
+    if (propagateModalDescription) {
+      const title = item?.title ? String(item.title).trim() : '';
+      propagateModalDescription.textContent = title
+        ? `Select families to receive “${title}”.`
+        : 'Select families to receive this template.';
+    }
+    if (propagateModalStatus) propagateModalStatus.textContent = '';
+    if (propagateConfirm) {
+      propagateConfirm.disabled = true;
+      propagateConfirm.textContent = propagateConfirmDefaultText;
+    }
+
+    let families = cloneFamilyList(state.families);
+    if (!families.length) {
+      const refreshed = await refreshFamiliesFromServer({ silent: true });
+      if (refreshed) {
+        families = cloneFamilyList(state.families);
+      }
+    }
+
+    if (!families.length) {
+      toast('No families available. Load families first.', 'error');
+      resetPropagateModal();
+      return;
+    }
+
+    families.sort((a, b) => {
+      const nameA = (a?.name || a?.title || a?.id || '').toLowerCase();
+      const nameB = (b?.name || b?.title || b?.id || '').toLowerCase();
+      if (nameA && nameB) return nameA.localeCompare(nameB);
+      if (nameA) return -1;
+      if (nameB) return 1;
+      return 0;
+    });
+
+    if (propagateFamilyList) {
+      propagateFamilyList.innerHTML = '';
+      const defaultSelected = new Set();
+      const scopedId = normalizeScopeId(
+        adminState.currentFamilyId || state.scopedFamilyId || state.familyId
+      );
+      if (scopedId) defaultSelected.add(scopedId);
+
+      for (const family of families) {
+        const id = normalizeScopeId(family?.id);
+        if (!id) continue;
+
+        const label = document.createElement('label');
+        label.className = 'propagate-family-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = id;
+        checkbox.checked = defaultSelected.has(id);
+        checkbox.addEventListener('change', updatePropagateConfirmState);
+
+        const textWrap = document.createElement('div');
+        textWrap.style.display = 'flex';
+        textWrap.style.flexDirection = 'column';
+        textWrap.style.gap = '2px';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = family?.name ? String(family.name) : id;
+        textWrap.appendChild(titleSpan);
+
+        const details = [id];
+        const status = family?.status ? String(family.status).trim().toLowerCase() : '';
+        if (status && status !== 'active') {
+          details.push(status);
+        }
+        if (details.length > 0) {
+          const meta = document.createElement('small');
+          meta.textContent = details.join(' · ');
+          textWrap.appendChild(meta);
+        }
+
+        label.appendChild(checkbox);
+        label.appendChild(textWrap);
+        propagateFamilyList.appendChild(label);
+      }
+    }
+
+    if (propagateModalControls) {
+      propagateModalControls.hidden = (propagateFamilyList?.children?.length || 0) <= 1;
+    }
+
+    updatePropagateConfirmState();
+    show('#modal-propagate-template');
+  }
+
   async function loadMasterTasks({ silent = false } = {}) {
     if (state.role !== 'master') {
       masterTemplatesState.tasks = [];
@@ -1276,7 +1470,7 @@ function initAdmin() {
     masterTemplatesState.loadingTasks = true;
     renderMasterTaskList();
     try {
-      const { res, body } = await adminFetch('/api/master/tasks', { skipScope: true });
+      const { res, body } = await adminFetch('/api/admin/templates/tasks', { skipScope: true });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         masterTemplatesState.tasks = [];
@@ -1308,7 +1502,7 @@ function initAdmin() {
     masterTemplatesState.loadingRewards = true;
     renderMasterRewardList();
     try {
-      const { res, body } = await adminFetch('/api/master/rewards', { skipScope: true });
+      const { res, body } = await adminFetch('/api/admin/templates/rewards', { skipScope: true });
       if (res.status === 401) {
         toast(ADMIN_INVALID_MSG, 'error');
         masterTemplatesState.rewards = [];
@@ -1384,7 +1578,7 @@ function initAdmin() {
     const editingId = masterTemplatesState.editing.task;
     try {
       if (editingId) {
-        const { res, body } = await adminFetch(`/api/master/tasks/${editingId}`, {
+        const { res, body } = await adminFetch(`/api/admin/templates/tasks/${editingId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1400,7 +1594,7 @@ function initAdmin() {
         }
         toast('Task template updated');
       } else {
-        const { res, body } = await adminFetch('/api/master/tasks', {
+        const { res, body } = await adminFetch('/api/admin/templates/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1453,7 +1647,7 @@ function initAdmin() {
     const editingId = masterTemplatesState.editing.reward;
     try {
       if (editingId) {
-        const { res, body } = await adminFetch(`/api/master/rewards/${editingId}`, {
+        const { res, body } = await adminFetch(`/api/admin/templates/rewards/${editingId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1469,7 +1663,7 @@ function initAdmin() {
         }
         toast('Reward template updated');
       } else {
-        const { res, body } = await adminFetch('/api/master/rewards', {
+        const { res, body } = await adminFetch('/api/admin/templates/rewards', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1490,6 +1684,97 @@ function initAdmin() {
       await loadPendingTemplates({ silent: true });
     } catch (error) {
       toast(error.message || 'Save failed', 'error');
+    }
+  });
+
+  const propagateCancelButton = propagateModal?.querySelector('[data-close="#modal-propagate-template"]');
+
+  propagateSelectAll?.addEventListener('click', () => setAllPropagateSelections(true));
+  propagateSelectNone?.addEventListener('click', () => setAllPropagateSelections(false));
+  propagateModal?.querySelector('.modal-backdrop')?.addEventListener('click', () => {
+    if (!propagateState.busy) {
+      closePropagateModal();
+    }
+  });
+  propagateCancelButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (!propagateState.busy) {
+      closePropagateModal();
+    }
+  });
+
+  propagateConfirm?.addEventListener('click', async () => {
+    if (propagateState.busy) return;
+    if (!propagateState.templateId) {
+      toast('Template unavailable.', 'error');
+      return;
+    }
+    const selectedIds = getPropagateSelectedIds();
+    if (!selectedIds.length) {
+      toast('Select at least one family', 'error');
+      return;
+    }
+
+    propagateState.busy = true;
+    if (propagateConfirm) {
+      propagateConfirm.disabled = true;
+      propagateConfirm.textContent = 'Pushing…';
+    }
+    if (propagateModalStatus) {
+      propagateModalStatus.textContent = 'Pushing to families…';
+    }
+
+    try {
+      const path = propagateState.kind === 'reward' ? 'rewards' : 'tasks';
+      const endpoint = `/api/admin/templates/${path}/${encodeURIComponent(propagateState.templateId)}/propagate`;
+      const { res, body } = await adminFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ familyIds: selectedIds }),
+        skipScope: true
+      });
+      if (res.status === 401) {
+        toast(ADMIN_INVALID_MSG, 'error');
+        throw new Error(ADMIN_INVALID_MSG);
+      }
+      if (!res.ok) {
+        const msg = presentError(body?.error, 'Propagation failed');
+        throw new Error(msg);
+      }
+
+      const insertedCount = Number(
+        body?.totalInserted ?? (Array.isArray(body?.inserted) ? body.inserted.length : 0)
+      ) || 0;
+      const skippedCount = Number(
+        body?.totalSkipped ?? (Array.isArray(body?.skipped) ? body.skipped.length : 0)
+      ) || 0;
+      const summary = skippedCount > 0
+        ? `Pushed to ${insertedCount} famil${insertedCount === 1 ? 'y' : 'ies'} (${skippedCount} skipped).`
+        : `Pushed to ${insertedCount} famil${insertedCount === 1 ? 'y' : 'ies'}.`;
+      toast(summary);
+      closePropagateModal();
+      await loadPendingTemplates({ silent: true });
+    } catch (error) {
+      const message = error?.message || 'Propagation failed';
+      if (propagateModalStatus) propagateModalStatus.textContent = message;
+      toast(message, 'error');
+    } finally {
+      propagateState.busy = false;
+      if (propagateConfirm) {
+        propagateConfirm.textContent = propagateConfirmDefaultText;
+      }
+      updatePropagateConfirmState();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (
+      event.key === 'Escape' &&
+      propagateModal &&
+      !propagateModal.classList.contains('hidden') &&
+      !propagateState.busy
+    ) {
+      closePropagateModal();
     }
   });
 
@@ -1565,11 +1850,12 @@ function initAdmin() {
 
   function applyRoleVisibility() {
     const activeRole = state.role || adminState.role || '';
-    const hasScope = Boolean(adminState.currentFamilyId);
     if (familySearchInput) familySearchInput.disabled = activeRole !== 'master';
     const searchSubmit = familySearchForm?.querySelector('button[type="submit"]');
     if (searchSubmit) searchSubmit.disabled = activeRole !== 'master';
     if (familiesRefreshButton) familiesRefreshButton.disabled = activeRole !== 'master';
+    const templatesTabEl = qs('tabTemplates');
+    const templatesPanel = qs('panel-templates');
     for (const node of roleVisibilityNodes) {
       if (!node) continue;
       const roles = (node.dataset.adminRole || '')
@@ -1580,13 +1866,29 @@ function initAdmin() {
       node.hidden = !show;
     }
 
+    if (templatesTabEl) {
+      templatesTabEl.hidden = activeRole !== 'master';
+    }
+    if (templatesPanel) {
+      if (activeRole !== 'master') {
+        templatesPanel.classList.add('hidden');
+      } else if (state.activeTab === 'templates') {
+        templatesPanel.classList.remove('hidden');
+      }
+    }
+
     if (!activeRole) {
       applyMasterViewVisibility();
       return;
     }
 
     if (activeRole !== 'master') {
-      applyMasterViewVisibility();
+      adminState.masterView = 'families';
+      if (state.activeTab === 'templates') {
+        setActiveTab('families');
+      } else {
+        applyMasterViewVisibility();
+      }
       return;
     }
 
@@ -1637,6 +1939,7 @@ function initAdmin() {
     const previousFamilyScope = adminState.currentFamilyId;
     const familyKeyProvided = Object.prototype.hasOwnProperty.call(partial, 'familyKey');
     const familyNameProvided = Object.prototype.hasOwnProperty.call(partial, 'familyName');
+    let forceFamilyTab = false;
     if (Object.prototype.hasOwnProperty.call(partial, 'role')) {
       const nextRole = partial.role ?? null;
       if (nextRole === 'master' && previousRole !== 'master') {
@@ -1647,6 +1950,7 @@ function initAdmin() {
       adminState.role = nextRole;
       if (adminState.role !== 'master') {
         adminState.showInactiveFamilies = false;
+        forceFamilyTab = true;
       }
       state.role = adminState.role;
     }
@@ -1736,6 +2040,9 @@ function initAdmin() {
     }
     if (!adminState.currentFamilyId && previousFamilyScope) {
       renderPendingTemplates();
+    }
+    if (forceFamilyTab && state.activeTab === 'templates') {
+      setActiveTab('families');
     }
     const viewChanged = previousView !== adminState.masterView;
     state.showInactive = adminState.showInactiveFamilies;
