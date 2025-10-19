@@ -1,5 +1,3 @@
-import { requireFamilyScope } from "../middleware/requireFamilyScope.js";
-
 export function listActivity(req, res) {
   // TODO: replace with a UNION over ledger/holds/events
   // For now, avoid hitting a non-existent "activity" table.
@@ -7,5 +5,3 @@ export function listActivity(req, res) {
 }
 
 export default listActivity;
-
-export const activityHandlers = [requireFamilyScope, listActivity];

@@ -73,6 +73,22 @@ test('missing family id returns 404', async () => {
   });
 });
 
+test('family panel endpoints enforce family existence', async () => {
+  const { createClient } = await createTestContext();
+  const client = createClient({ 'x-admin-key': MASTER_KEY });
+  const missingId = randomUUID();
+
+  for (const path of ['tasks', 'rewards', 'holds']) {
+    await assert.rejects(async () => {
+      await client.get(`/api/admin/families/${missingId}/${path}`);
+    }, (error) => {
+      assert.equal(error.status, 404);
+      assert.deepEqual(error.body, { error: 'family_not_found' });
+      return true;
+    });
+  }
+});
+
 test('scoped panel endpoints return arrays for tasks, rewards, and holds', async () => {
   const { createClient } = await createTestContext();
   const client = createClient({

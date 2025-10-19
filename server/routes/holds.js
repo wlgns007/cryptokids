@@ -1,40 +1,62 @@
-import { db } from '../db.js';
-import { tableExists, hasColumn } from '../lib/dbUtil.js';
-import { requireFamilyScope } from '../middleware/requireFamilyScope.js';
+import { db } from "../db.js";
+import { tableExists, hasColumn } from "../lib/dbUtil.js";
 
-export const listHolds = [
-  requireFamilyScope,
-  (req, res, next) => {
-    try {
-      const T = ['holds','reward_holds','reward_hold','pending_holds']
-        .find(t => tableExists(t));
-      if (!T) return res.json([]);
+export function listHolds(req, res) {
+  const familyId =
+    (res.locals?.family?.id ? String(res.locals.family.id).trim() : "") ||
+    (req.family?.id ? String(req.family.id).trim() : "");
 
-      const famCol    = hasColumn(T,'family_id') ? 'family_id' : null;
-      const idCol     = hasColumn(T,'id') ? 'id' : null;
-      const memberCol = hasColumn(T,'member_id') ? 'member_id'
-                      : hasColumn(T,'kid_id')    ? 'kid_id' : null;
-      const rewardCol = hasColumn(T,'reward_id') ? 'reward_id' : null;
-      const statusCol = hasColumn(T,'status') ? 'status' : null;
-      const pointsCol = hasColumn(T,'points') ? 'points'
-                      : hasColumn(T,'cost')   ? 'cost'   : null;
-      const createdCol= hasColumn(T,'created_at') ? 'created_at' : null;
-
-      const sel = [
-        idCol     ? `"${idCol}" AS id`             : 'NULL AS id',
-        famCol    ? `"${famCol}" AS family_id`     : '? AS family_id',
-        memberCol ? `"${memberCol}" AS member_id`  : 'NULL AS member_id',
-        rewardCol ? `"${rewardCol}" AS reward_id`  : 'NULL AS reward_id',
-        statusCol ? `"${statusCol}" AS status`     : `'pending' AS status`,
-        pointsCol ? `"${pointsCol}" AS points`     : '0 AS points',
-        createdCol? `"${createdCol}" AS created_at`: `strftime('%s','now') AS created_at`,
-      ].join(', ');
-
-      const where = famCol ? `WHERE "${famCol}" = ?` : '';
-      const order = createdCol || idCol || '1';
-      const sql = `SELECT ${sel} FROM "${T}" ${where} ORDER BY ${order} DESC LIMIT 200`;
-      const rows = db.prepare(sql).all(req.family.id);
-      res.json(rows);
-    } catch (e) { next(e); }
+  if (!familyId) {
+    return res.status(400).json({ error: "family_scope_required" });
   }
-];
+
+  try {
+    const table = ["holds", "reward_holds", "reward_hold", "pending_holds"].find((name) =>
+      tableExists(name)
+    );
+
+    if (!table) {
+      return res.json([]);
+    }
+
+    const familyColumn = hasColumn(table, "family_id") ? "family_id" : null;
+    const idColumn = hasColumn(table, "id") ? "id" : null;
+    const memberColumn = hasColumn(table, "member_id")
+      ? "member_id"
+      : hasColumn(table, "kid_id")
+        ? "kid_id"
+        : null;
+    const rewardColumn = hasColumn(table, "reward_id") ? "reward_id" : null;
+    const statusColumn = hasColumn(table, "status") ? "status" : null;
+    const pointsColumn = hasColumn(table, "points")
+      ? "points"
+      : hasColumn(table, "cost")
+        ? "cost"
+        : null;
+    const createdColumn = hasColumn(table, "created_at") ? "created_at" : null;
+
+    const projections = [
+      idColumn ? `"${idColumn}" AS id` : "NULL AS id",
+      familyColumn ? `"${familyColumn}" AS family_id` : "? AS family_id",
+      memberColumn ? `"${memberColumn}" AS member_id` : "NULL AS member_id",
+      rewardColumn ? `"${rewardColumn}" AS reward_id` : "NULL AS reward_id",
+      statusColumn ? `"${statusColumn}" AS status` : "'pending' AS status",
+      pointsColumn ? `"${pointsColumn}" AS points` : "0 AS points",
+      createdColumn
+        ? `"${createdColumn}" AS created_at`
+        : "strftime('%s','now') AS created_at",
+    ];
+
+    const whereClause = familyColumn ? `WHERE "${familyColumn}" = ?` : "";
+    const orderColumn = createdColumn || idColumn || "1";
+    const sql = `SELECT ${projections.join(", ")} FROM "${table}" ${whereClause} ORDER BY ${orderColumn} DESC LIMIT 200`;
+    const database = req.db || db;
+    const rows = database.prepare(sql).all(familyId);
+    return res.json(rows);
+  } catch (error) {
+    console.error("[admin.holds] failed to list holds", error?.message || error);
+    return res.status(500).json({ error: "server_error", detail: "holds_query_failed" });
+  }
+}
+
+export default listHolds;
