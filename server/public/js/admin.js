@@ -556,6 +556,24 @@ function initAdmin() {
     masterView: 'templates',
     showInactiveFamilies: false
   };
+  function syncCurrentScope(familyId = adminState.currentFamilyId) {
+    if (typeof window === 'undefined') return;
+    const normalized = familyId ? String(familyId).trim() : '';
+    const scope =
+      window.currentScope && typeof window.currentScope === 'object'
+        ? { ...window.currentScope }
+        : {};
+    if (normalized) {
+      scope.familyId = normalized;
+      scope.family_id = normalized;
+      window.currentFamilyId = normalized;
+    } else {
+      delete scope.familyId;
+      delete scope.family_id;
+      window.currentFamilyId = null;
+    }
+    window.currentScope = scope;
+  }
   const initialStoredScope = typeof window !== 'undefined' ? getFamilyScope() : null;
   adminState.showInactiveFamilies = !!adminState.showInactiveFamilies;
   state.activeTab = adminState.masterView || 'templates';
@@ -599,6 +617,7 @@ function initAdmin() {
         adminState.familyKey = '';
       }
     }
+    syncCurrentScope(adminState.currentFamilyId || uuid || null);
   }
 
   function persistAndApplyScope(scope) {
@@ -1595,6 +1614,7 @@ function initAdmin() {
     adminState.showInactiveFamilies = false;
     state.showInactive = false;
     window.currentFamilyId = null;
+    syncCurrentScope(null);
     saveAdminContext(null);
     updateWhoamiBanner();
     applyRoleVisibility();
@@ -1668,6 +1688,7 @@ function initAdmin() {
     }
     window.currentFamilyId = adminState.currentFamilyId || null;
     state.scopedFamilyId = adminState.currentFamilyId || null;
+    syncCurrentScope();
     if (state.scopedFamilyId) {
       const entry = findFamilyEntry(state.scopedFamilyId);
       if (!familyNameProvided) {
@@ -2073,10 +2094,13 @@ function initAdmin() {
   }
 
   refreshAdminAuth = async () => {
+    let scopeApplied = false;
+    let role = null;
+    let effectiveFamilyId = null;
     try {
       const me = await adminGET('/api/admin/whoami');
       clearAdminKeyTemp();
-      const role = typeof me?.role === 'string' ? me.role : null;
+      role = typeof me?.role === 'string' ? me.role : null;
       const rawFamilyId =
         me?.family_uuid ?? me?.familyId ?? me?.family_id ?? null;
       const familyId = rawFamilyId ? String(rawFamilyId) : null;
@@ -2096,8 +2120,7 @@ function initAdmin() {
       state.auth = me && typeof me === 'object' ? { ...me } : null;
       state.role = role;
 
-      let effectiveFamilyId = familyId;
-      let scopeApplied = false;
+      effectiveFamilyId = familyId;
 
       if (role === 'family') {
         if (familyId && isUUID(familyId)) {
@@ -2156,10 +2179,18 @@ function initAdmin() {
       state.scopedFamilyId = null;
       state.scopedFamilyName = '';
       state.familyKey = '';
+      role = null;
+      effectiveFamilyId = null;
+      scopeApplied = false;
       setAdminState({ role: null, family_id: null, familyKey: '', familyName: '' }, { persist: false });
       resetStoredScope();
     }
     renderRoleBadge();
+    return {
+      role: state.role || role || null,
+      familyId: state.familyId || effectiveFamilyId || null,
+      scopeApplied,
+    };
   };
 
   async function fetchFamilies() {
@@ -6915,8 +6946,14 @@ setupScanner({
     setupCollapsibles();
     setupShortcuts();
     initAdmin();
-    await refreshAdminAuth();
+    const authState = await refreshAdminAuth();
+    if (authState?.role === 'master') {
+      await loadFamiliesForMaster();
+    } else if (authState?.role === 'family' && authState.familyId) {
+      syncCurrentScope(authState.familyId);
+    }
     setActiveTab('templates');
+    return authState;
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -6924,20 +6961,6 @@ setupScanner({
     (async () => {
       await bootstrapScopeFromWhoAmI();
       await initAdminUI();
-      try {
-        const res = await fetch('/api/admin/whoami', {
-          credentials: 'same-origin',
-          cache: 'no-store'
-        });
-        if (res.ok) {
-          const me = await res.json();
-          if (me?.role === 'master') {
-            await loadFamiliesForMaster();
-          }
-        }
-      } catch (error) {
-        console.warn('Unable to refresh master family picker', error);
-      }
     })();
   });
 })();

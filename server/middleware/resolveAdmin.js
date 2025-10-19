@@ -29,6 +29,22 @@ export function resolveAdmin(req, res, next) {
       typeof existingKey === "string" &&
       existingKey.trim()
     ) {
+      const currentFamilyIdRaw = req.admin?.familyId ?? req.admin?.family_id ?? null;
+      const normalizedFamilyId =
+        typeof currentFamilyIdRaw === "string" && currentFamilyIdRaw.trim()
+          ? currentFamilyIdRaw.trim()
+          : null;
+      if (existingRole === "family" && normalizedFamilyId) {
+        req.admin.familyId = normalizedFamilyId;
+        req.admin.family_id = normalizedFamilyId;
+      } else if (existingRole === "master" && normalizedFamilyId) {
+        req.admin.familyId = normalizedFamilyId;
+        req.admin.family_id = normalizedFamilyId;
+      } else if (req.admin && typeof req.admin === "object") {
+        req.admin.familyId = null;
+        req.admin.family_id = null;
+      }
+      req.admin.role = existingRole;
       return next();
     }
 
@@ -45,11 +61,20 @@ export function resolveAdmin(req, res, next) {
       return;
     }
 
-    const admin = { role: context.role, key };
+    const admin = {
+      role: context.role,
+      key,
+    };
+
     if (context.role === "family" && context.familyId) {
       const normalizedFamilyId = String(context.familyId).trim();
-      admin.familyId = normalizedFamilyId;
-      admin.family_id = normalizedFamilyId;
+      if (normalizedFamilyId) {
+        admin.familyId = normalizedFamilyId;
+        admin.family_id = normalizedFamilyId;
+      }
+    } else {
+      admin.familyId = null;
+      admin.family_id = null;
     }
 
     req.admin = admin;
@@ -61,7 +86,9 @@ export function resolveAdmin(req, res, next) {
 }
 
 export function requireCanAccessFamily(req, res, next) {
-  const rawTarget = typeof req.params?.familyId === "string" ? req.params.familyId : "";
+  const paramFamily = typeof req.params?.familyId === "string" ? req.params.familyId : "";
+  const headerFamily = typeof req.header("x-family") === "string" ? req.header("x-family") : "";
+  const rawTarget = paramFamily || headerFamily;
   const targetFamilyId = rawTarget.trim();
   const normalizedTarget = targetFamilyId.toLowerCase();
 
@@ -74,6 +101,11 @@ export function requireCanAccessFamily(req, res, next) {
   const allowed =
     role === "master" ||
     (role === "family" && normalizedTarget && normalizedAdminFamilyId && normalizedTarget === normalizedAdminFamilyId);
+
+  if (!targetFamilyId) {
+    res.status(400).json({ error: "family_scope_required" });
+    return;
+  }
 
   try {
     console.info("[admin.guard]", {
@@ -92,6 +124,14 @@ export function requireCanAccessFamily(req, res, next) {
     res.status(403).json({ error: "forbidden_family_scope" });
     return;
   }
+
+  const nextAdmin = req.admin && typeof req.admin === "object" ? req.admin : {};
+  nextAdmin.familyId = targetFamilyId;
+  nextAdmin.family_id = targetFamilyId;
+  if (!nextAdmin.role) {
+    nextAdmin.role = role;
+  }
+  req.admin = nextAdmin;
 
   next();
 }
