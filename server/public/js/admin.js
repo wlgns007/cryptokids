@@ -204,6 +204,10 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
   'use strict';
 
   const root = typeof window !== 'undefined' ? window : globalThis;
+  const bootstrapScopeRaw =
+    root && root.__CK_FAMILY_BOOTSTRAP__ && typeof root.__CK_FAMILY_BOOTSTRAP__ === 'object'
+      ? root.__CK_FAMILY_BOOTSTRAP__
+      : null;
   root.toast = root.toast || function toast(msg, type = 'info') {
     try {
       const el = typeof document !== 'undefined' ? document.getElementById('ck-toast') : null;
@@ -574,6 +578,7 @@ function initAdmin() {
     }
     window.currentScope = scope;
   }
+  const normalizedBootstrapScope = normalizeBootstrapScope(bootstrapScopeRaw);
   const initialStoredScope = typeof window !== 'undefined' ? getFamilyScope() : null;
   adminState.showInactiveFamilies = !!adminState.showInactiveFamilies;
   state.activeTab = adminState.masterView || 'templates';
@@ -628,6 +633,9 @@ function initAdmin() {
 
   if (initialStoredScope?.uuid) {
     applyScopeToState(initialStoredScope);
+  } else if (normalizedBootstrapScope?.uuid) {
+    const persisted = persistFamilyScope(normalizedBootstrapScope) || normalizedBootstrapScope;
+    applyScopeToState(persisted);
   }
 
   function persistAdminContextSnapshot() {
@@ -755,6 +763,19 @@ function initAdmin() {
     const text = String(value).trim();
     if (!text) return null;
     return isUUID(text) ? text : null;
+  }
+
+  function normalizeBootstrapScope(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const candidate = raw.familyId ?? raw.family_id ?? raw.uuid ?? null;
+    const uuid = normalizeScopeId(candidate);
+    if (!uuid) return null;
+    return {
+      uuid,
+      key: raw.familyKey ?? raw.key ?? null,
+      name: raw.familyName ?? raw.name ?? null,
+      status: raw.familyStatus ?? raw.status ?? null
+    };
   }
 
   function applyMasterViewVisibility() {
@@ -2946,6 +2967,32 @@ function initAdmin() {
     }
   }
 
+  function extractArrayResponse(result, preferredKeys = []) {
+    if (Array.isArray(result)) {
+      return { list: result, error: null };
+    }
+    if (result && typeof result === 'object') {
+      const keys = Array.isArray(preferredKeys) ? preferredKeys : [preferredKeys];
+      for (const key of keys) {
+        if (Array.isArray(result?.[key])) {
+          return { list: result[key], error: null };
+        }
+      }
+      if (Array.isArray(result?.items)) {
+        return { list: result.items, error: null };
+      }
+      const message = typeof result.error === 'string'
+        ? result.error
+        : typeof result.message === 'string'
+          ? result.message
+          : null;
+      if (message) {
+        return { list: [], error: message };
+      }
+    }
+    return { list: [], error: null };
+  }
+
   async function renderScopePanels() {
     const host = document.getElementById('family-scope-panels');
     if (!host) return;
@@ -3021,12 +3068,32 @@ function initAdmin() {
 
       if (host.dataset.scopeToken !== token) return;
 
-      renderScopedMembers(members);
-      renderScopedIssuePoints(tasks, members);
-      renderScopedHolds(holds);
-      renderScopedRewards(rewards);
-      renderScopedEarn(tasks);
-      renderScopedActivity(activity);
+      const membersResult = extractArrayResponse(members, ['members']);
+      const tasksResult = extractArrayResponse(tasks, ['tasks']);
+      const rewardsResult = extractArrayResponse(rewards, ['rewards']);
+      const holdsResult = extractArrayResponse(holds, ['holds']);
+      const activityResult = extractArrayResponse(activity, ['activity']);
+
+      const scopedMembers = membersResult.list;
+      const scopedTasks = tasksResult.list;
+      const scopedRewards = rewardsResult.list;
+      const scopedHolds = holdsResult.list;
+      const scopedActivity = activityResult.list;
+
+      const errors = [membersResult, tasksResult, rewardsResult, holdsResult, activityResult]
+        .map((entry) => entry.error)
+        .filter(Boolean);
+
+      if (errors.length) {
+        throw new Error(errors[0]);
+      }
+
+      renderScopedMembers(scopedMembers);
+      renderScopedIssuePoints(scopedTasks, scopedMembers);
+      renderScopedHolds(scopedHolds);
+      renderScopedRewards(scopedRewards);
+      renderScopedEarn(scopedTasks);
+      renderScopedActivity(scopedActivity);
     } catch (error) {
       const status = typeof error?.status === 'number' ? error.status : Number(error?.message) || 0;
       const payload = error && typeof error === 'object' && error.payload && typeof error.payload === 'object'

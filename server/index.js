@@ -2976,8 +2976,38 @@ app.get(["/", "/index.html", "/child", "/child.html"], (_req, res) => {
   sendVersioned(res, "child.html");
 });
 
-app.get(["/admin", "/admin.html"], (_req, res) => {
-  sendVersioned(res, "admin.html");
+app.get(["/admin", "/admin.html"], (req, res) => {
+  let html = loadVersioned("admin.html");
+
+  try {
+    const adminKey = readAdminKey(req);
+    if (adminKey) {
+      const context = resolveAdminContext(db, adminKey);
+      if (context?.role === "family" && context.familyId) {
+        const familyId = String(context.familyId);
+        const bootstrap = {
+          familyId,
+          familyKey: context.familyKey || null,
+          familyName: context.familyName || "",
+          familyStatus: context.familyStatus || context.family_status || null
+        };
+        const scopeScript = `<script>(function(){try{const scope=window.currentScope&&typeof window.currentScope==='object'?{...window.currentScope}:{ };const fid=${JSON.stringify(familyId)};scope.familyId=fid;scope.family_id=fid;if(!scope.uuid)scope.uuid=fid;window.currentScope=scope;window.currentFamilyId=fid;window.__CK_FAMILY_BOOTSTRAP__=${JSON.stringify(bootstrap)};}catch(err){console.warn('Failed to bootstrap family scope',err);}})();</script>`;
+        const marker = '<script type="module" src="/js/admin.js';
+        const index = html.indexOf(marker);
+        if (index !== -1) {
+          html = `${html.slice(0, index)}${scopeScript}\n${html.slice(index)}`;
+        } else {
+          html = html.replace("</body>", `${scopeScript}</body>`);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("[admin.page] unable to resolve admin scope", error?.message || error);
+  }
+
+  res.type("text/html");
+  res.set("Cache-Control", "no-store");
+  res.send(html);
 });
 
 app.get("/install", (req, res) => {
