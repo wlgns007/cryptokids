@@ -18,6 +18,7 @@ import softAdminAuth from "./middleware/softAdminAuth.js";
 import { whoAmI } from "./routes/adminWhoAmI.js";
 import { adminLogin } from "./routes/adminLogin.js";
 import { familyForCurrentAdmin } from "./routes/familiesSelf.js";
+import { getActiveFamilies } from "./models/families.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -439,30 +440,27 @@ app.use("/api", ledgerRoutes);
 app.use("/api", apiRouter);
 
 app.get("/api/admin/families", authenticateAdmin, requireMaster, (req, res) => {
-  const statusParam = (req.query?.status || "").toString().trim().toLowerCase();
-  const status = statusParam === "active" || statusParam === "inactive" ? statusParam : null;
+  const database = req.db || db;
+  const families = getActiveFamilies(database);
+  const ids = families.map((family) => family.id);
+  console.log("[api.admin.families] returning active families", { ids });
+  res.json(families);
+});
 
-  let sql =
-    "SELECT id, admin_key, name, email, status, created_at, updated_at FROM \"family\" WHERE id <> 'default'";
-  const params = [];
-  if (status) {
-    sql += " AND status = ?";
-    params.push(status);
-  }
-  sql += " ORDER BY created_at DESC";
-
-  const rows = params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all();
-  const normalized = rows.map((row) => {
-    const { admin_key, ...rest } = row;
-    const key = admin_key != null ? String(admin_key) : null;
-    return {
-      ...rest,
-      admin_key,
-      key,
-      family_key: key || ""
-    };
-  });
-  res.json(normalized);
+app.get("/api/admin/families/options", authenticateAdmin, requireMaster, (req, res) => {
+  const database = req.db || db;
+  const families = getActiveFamilies(database);
+  const ids = families.map((family) => family.id);
+  console.log("[api.admin.families.options] returning active families", { ids });
+  res.json(
+    families.map((family) => ({
+      id: family.id,
+      name: family.name,
+      key: family.key,
+      email: family.email,
+      status: family.status,
+    }))
+  );
 });
 
 app.get("/api/admin/families/:id", authenticateAdmin, (req, res) => {

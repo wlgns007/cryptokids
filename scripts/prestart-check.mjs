@@ -190,6 +190,63 @@ function hasFamilyColumn(table) {
   return columnInfo(table).some((col) => col.name === "family_id");
 }
 
+function isUuid(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized);
+}
+
+function verifyJangFamilyRecord() {
+  if (!hasTable(db, "family")) {
+    console.log("[prestart] skipping Jang Family verification; family table missing");
+    return;
+  }
+
+  const hasDeletedAt = hasColumn(db, "family", "deleted_at");
+  let row = null;
+  try {
+    const stmt = db.prepare(
+      "SELECT id, status" + (hasDeletedAt ? ", deleted_at" : "") +
+        " FROM \"family\" WHERE LOWER(name) = LOWER(?) LIMIT 1"
+    );
+    row = stmt.get("Jang Family");
+  } catch (error) {
+    console.warn("[prestart] unable to verify Jang Family record", error?.message || error);
+    return;
+  }
+
+  if (!row) {
+    console.warn("[prestart] Jang Family record missing");
+    return;
+  }
+
+  const issues = [];
+  if (!isUuid(row.id)) {
+    issues.push("id");
+  }
+  const statusValue = typeof row.status === "string" ? row.status.trim().toLowerCase() : "";
+  if (statusValue !== "active") {
+    issues.push("status");
+  }
+  if (hasDeletedAt) {
+    const deletedAt = row.deleted_at;
+    if (deletedAt !== null && deletedAt !== undefined && String(deletedAt).trim() !== "") {
+      issues.push("deleted_at");
+    }
+  }
+
+  if (issues.length) {
+    console.warn("[prestart] Jang Family verification failed", { id: row.id, status: row.status, issues });
+  } else {
+    console.log("[prestart] verified Jang Family record", { id: row.id, status: row.status });
+  }
+}
+
 function upsertFamily({ id, name, email = null, status = "active" }) {
   const now = new Date().toISOString();
   const normalizedEmail = email ? String(email).trim().toLowerCase() || null : null;
@@ -437,5 +494,7 @@ if (!MASTER_ADMIN_KEY) {
 if (defaultFamilyAdminKey) {
   console.log("[DEV ONLY] Default family admin key:", defaultFamilyAdminKey);
 }
+
+verifyJangFamilyRecord();
 
 process.exit(0);
