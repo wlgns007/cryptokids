@@ -46,25 +46,64 @@ function getAdminRole(req) {
   return req.admin?.role || req.auth?.role || null;
 }
 
-function getAdminFamilyId(req) {
-  return (
-    req.admin?.family_id ||
-    req.admin?.familyId ||
-    req.auth?.familyId ||
-    req.auth?.family_id ||
-    null
-  );
+function resolveRequestedFamilyId(req) {
+  const candidates = [
+    req.params?.familyId,
+    req.params?.family,
+    req.query?.familyId,
+    req.query?.family_id,
+    req.query?.family,
+    req.header("x-family"),
+    req.admin?.familyId,
+    req.admin?.family_id,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "";
 }
 
-function allowFamilyOrMaster(req, familyId) {
-  const role = getAdminRole(req);
-  if (role === "master") return true;
-  if (role === "family") {
-    const scopedId = getAdminFamilyId(req);
-    return scopedId != null && String(scopedId) === String(familyId);
+function requireFamilyRecord(req, res, next) {
+  const familyId = resolveRequestedFamilyId(req);
+  if (!familyId) {
+    req.family = null;
+    req.familyScopeError = { code: "family_scope_required" };
+    return res.status(400).json({ error: "family_scope_required" });
   }
-  return false;
+
+  const database = req.db || db;
+  const record = getFamilyById(database, familyId);
+  if (!record) {
+    req.family = null;
+    req.familyScopeError = { code: "family_not_found", input: familyId };
+    return res.status(404).json({ error: "family_not_found" });
+  }
+
+  const normalized = {
+    id: record.id,
+    name: record.name ?? null,
+    status: record.status ?? null,
+    key: record.adminKey ?? null,
+    adminKey: record.adminKey ?? null,
+    admin_key: record.adminKey ?? null,
+    email: record.email ?? null,
+  };
+
+  req.family = normalized;
+  req.familyScopeError = null;
+  res.locals.family = { id: normalized.id, record: normalized };
+
+  next();
 }
+
+const familyAccessChain = [resolveAdmin, requireCanAccessFamily, requireFamilyRecord];
 
 function attemptFamilyDelete(id, enforceForeignKeys) {
   const normalized = String(id ?? "").trim();
@@ -212,34 +251,20 @@ router.get("/admin/families", (req, res, next) => {
 router.get("/api/admin/members", ...listMembers);
 router.get("/admin/members", ...listMembers);
 
-router.get("/api/admin/holds", ...listHolds);
-router.get("/admin/holds", ...listHolds);
+router.get("/api/admin/holds", ...familyAccessChain, listHolds);
+router.get("/admin/holds", ...familyAccessChain, listHolds);
 
-router.get("/admin/activity", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!fam?.id) return res.status(400).json({ error: "Missing family scope (x-family)" });
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
+router.get("/admin/activity", ...familyAccessChain, (req, res) => {
   return listActivity(req, res);
 });
 
 router.get(
   "/admin/families/:familyId/members",
-  resolveAdmin,
-  requireCanAccessFamily,
+  ...familyAccessChain,
   (req, res) => {
-    const familyIdRaw = typeof req.params?.familyId === "string" ? req.params.familyId : "";
-    const familyId = familyIdRaw.trim();
-    if (!familyId) {
-      return res.status(404).json({ error: "family_not_found" });
-    }
-
     const database = req.db || db;
+    const familyId = req.family?.id || resolveRequestedFamilyId(req);
     try {
-      const family = getFamilyById(database, familyId);
-      if (!family) {
-        return res.status(404).json({ error: "family_not_found" });
-      }
-
       const members = listKidsByFamilyId(database, familyId);
       return res.json({ members });
     } catch (error) {
@@ -254,29 +279,45 @@ router.get(
   }
 );
 
-router.get("/admin/families/:familyId/tasks", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-  const rows = db
-    .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(fam.id);
-  res.json(rows);
+router.get("/admin/families/:familyId/tasks", ...familyAccessChain, (req, res) => {
+  const database = req.db || db;
+  const familyId = req.family?.id || resolveRequestedFamilyId(req);
+  try {
+    const rows = database
+      .prepare("SELECT * FROM task WHERE family_id = ? ORDER BY updated_at DESC")
+      .all(familyId);
+    return res.json(rows);
+  } catch (error) {
+    console.error("[admin.tasks] failed to list tasks", {
+      familyId,
+      error: error?.message || error,
+    });
+    return res.status(500).json({ error: "server_error", detail: "tasks_query_failed" });
+  }
 });
 
-router.get("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-  const rows = db
-    .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
-    .all(fam.id);
-  res.json(rows);
+router.get("/admin/families/:familyId/rewards", ...familyAccessChain, (req, res) => {
+  const database = req.db || db;
+  const familyId = req.family?.id || resolveRequestedFamilyId(req);
+  try {
+    const rows = database
+      .prepare("SELECT * FROM reward WHERE family_id = ? ORDER BY updated_at DESC")
+      .all(familyId);
+    return res.json(rows);
+  } catch (error) {
+    console.error("[admin.rewards] failed to list rewards", {
+      familyId,
+      error: error?.message || error,
+    });
+    return res
+      .status(500)
+      .json({ error: "server_error", detail: "rewards_query_failed" });
+  }
 });
 
-router.get("/admin/families/:familyId/holds", ...listHolds);
+router.get("/admin/families/:familyId/holds", ...familyAccessChain, listHolds);
 
-router.get("/admin/families/:familyId/activity", requireFamilyScope, (req, res) => {
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
+router.get("/admin/families/:familyId/activity", ...familyAccessChain, (req, res) => {
   return listActivity(req, res);
 });
 
@@ -396,233 +437,268 @@ router.post(
 );
 
 // List active master tasks not yet adopted by a family
-router.get("/admin/families/:familyId/master-tasks/available", requireFamilyScope, (req, res) => {
-  if (!getAdminRole(req)) return res.sendStatus(401);
-
-  const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-
-  const rows = db
-    .prepare(
-      `SELECT mt.id, mt.title, mt.description, mt.base_points AS points, mt.icon, mt.youtube_url
-         FROM master_task mt
-        WHERE mt.status = 'active'
-          AND NOT EXISTS (
-            SELECT 1 FROM task t WHERE t.family_id = ? AND t.master_task_id = mt.id
-          )
-        ORDER BY mt.created_at DESC`
-    )
-    .all(fam.id);
-
-  res.json(rows);
-});
+router.get(
+  "/admin/families/:familyId/master-tasks/available",
+  ...familyAccessChain,
+  (req, res) => {
+    const database = req.db || db;
+    const familyId = req.family?.id || resolveRequestedFamilyId(req);
+    try {
+      const rows = database
+        .prepare(
+          `SELECT mt.id, mt.title, mt.description, mt.base_points AS points, mt.icon, mt.youtube_url
+             FROM master_task mt
+            WHERE mt.status = 'active'
+              AND NOT EXISTS (
+                SELECT 1 FROM task t WHERE t.family_id = ? AND t.master_task_id = mt.id
+              )
+            ORDER BY mt.created_at DESC`
+        )
+        .all(familyId);
+      return res.json(rows);
+    } catch (error) {
+      console.error("[admin.masterTasks] failed to list templates", {
+        familyId,
+        error: error?.message || error,
+      });
+      return res
+        .status(500)
+        .json({ error: "server_error", detail: "master_tasks_query_failed" });
+    }
+  }
+);
 
 // Create a family task from a master template
 router.post(
   "/admin/families/:familyId/tasks/from-master",
   express.json(),
-  requireFamilyScope,
+  ...familyAccessChain,
   (req, res) => {
-    if (!getAdminRole(req)) return res.sendStatus(401);
-
-    const fam = req.family;
-  if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-
+    const database = req.db || db;
+    const familyId = req.family?.id || resolveRequestedFamilyId(req);
     const { master_task_id } = req.body || {};
-    if (!master_task_id) return res.status(400).json({ error: "master_task_id required" });
+    if (!master_task_id) {
+      return res.status(400).json({ error: "master_task_id required" });
+    }
 
-    const mt = db.prepare(`SELECT * FROM master_task WHERE id = ? AND status = 'active'`).get(master_task_id);
-    if (!mt) return res.status(404).json({ error: "template not found or inactive" });
+    const mt = database
+      .prepare(`SELECT * FROM master_task WHERE id = ? AND status = 'active'`)
+      .get(master_task_id);
+    if (!mt) {
+      return res.status(404).json({ error: "template_not_found" });
+    }
 
     const id = randomUUID();
     const now = Date.now();
     const columns = ["id", "family_id"];
-    const values = [id, String(fam.id)];
+    const values = [id, String(familyId)];
 
-  if (hasColumn(db, "task", "title")) {
-    columns.push("title");
-    values.push(mt.title);
-  }
-  if (hasColumn(db, "task", "name")) {
-    columns.push("name");
-    values.push(mt.title);
-  }
-  if (hasColumn(db, "task", "description")) {
-    columns.push("description");
-    values.push(mt.description);
-  }
-  if (hasColumn(db, "task", "icon")) {
-    columns.push("icon");
-    values.push(mt.icon);
-  }
-  if (hasColumn(db, "task", "points")) {
-    columns.push("points");
-    values.push(mt.base_points);
-  }
-  if (hasColumn(db, "task", "base_points")) {
-    columns.push("base_points");
-    values.push(mt.base_points);
-  }
-  if (hasColumn(db, "task", "status")) {
-    columns.push("status");
-    values.push("active");
-  }
-  if (hasColumn(db, "task", "master_task_id")) {
-    columns.push("master_task_id");
-    values.push(mt.id);
-  }
-  if (hasColumn(db, "task", "sort_order")) {
-    columns.push("sort_order");
-    values.push(0);
-  }
-  if (hasColumn(db, "task", "created_at")) {
-    columns.push("created_at");
-    values.push(now);
-  }
-  if (hasColumn(db, "task", "updated_at")) {
-    columns.push("updated_at");
-    values.push(now);
-  }
+    if (hasColumn(database, "task", "title")) {
+      columns.push("title");
+      values.push(mt.title);
+    }
+    if (hasColumn(database, "task", "name")) {
+      columns.push("name");
+      values.push(mt.title);
+    }
+    if (hasColumn(database, "task", "description")) {
+      columns.push("description");
+      values.push(mt.description);
+    }
+    if (hasColumn(database, "task", "icon")) {
+      columns.push("icon");
+      values.push(mt.icon);
+    }
+    if (hasColumn(database, "task", "points")) {
+      columns.push("points");
+      values.push(mt.base_points);
+    }
+    if (hasColumn(database, "task", "base_points")) {
+      columns.push("base_points");
+      values.push(mt.base_points);
+    }
+    if (hasColumn(database, "task", "status")) {
+      columns.push("status");
+      values.push("active");
+    }
+    if (hasColumn(database, "task", "master_task_id")) {
+      columns.push("master_task_id");
+      values.push(mt.id);
+    }
+    if (hasColumn(database, "task", "sort_order")) {
+      columns.push("sort_order");
+      values.push(0);
+    }
+    if (hasColumn(database, "task", "created_at")) {
+      columns.push("created_at");
+      values.push(now);
+    }
+    if (hasColumn(database, "task", "updated_at")) {
+      columns.push("updated_at");
+      values.push(now);
+    }
 
-    const placeholders = columns.map(() => "?");
-    const sql = `INSERT INTO task (${columns.map((col) => `"${col}"`).join(", ")}) VALUES (${placeholders.join(", ")})`;
-    db.prepare(sql).run(...values);
-
-    res.status(201).json({ id });
+    try {
+      const placeholders = columns.map(() => "?");
+      const sql = `INSERT INTO task (${columns.map((col) => `"${col}"`).join(", ")}) VALUES (${placeholders.join(", ")})`;
+      database.prepare(sql).run(...values);
+      return res.status(201).json({ id });
+    } catch (error) {
+      console.error("[admin.tasks] failed to create from master", {
+        familyId,
+        master_task_id,
+        error: error?.message || error,
+      });
+      return res
+        .status(500)
+        .json({ error: "server_error", detail: "task_from_master_failed" });
+    }
   }
 );
 
-router.post("/admin/families/:familyId/tasks", requireFamilyScope, (req, res) => {
-  try {
-    const fam = req.family;
-    if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-    const familyId = String(fam.id);
+router.post(
+  "/admin/families/:familyId/tasks",
+  express.json(),
+  ...familyAccessChain,
+  (req, res) => {
+    try {
+      const database = req.db || db;
+      const familyId = String(req.family?.id || resolveRequestedFamilyId(req));
 
-    const {
-      title,
-      points = 0,
-      description = "",
-      icon = null,
-      youtube_url = null,
-      status = "active"
-    } = req.body || {};
+      const {
+        title,
+        points = 0,
+        description = "",
+        icon = null,
+        youtube_url = null,
+        status = "active",
+      } = req.body || {};
 
-    if (!title || !String(title).trim()) {
-      return res.status(400).json({ error: "title required" });
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ error: "title required" });
+      }
+
+      const id = randomUUID();
+      const titleText = String(title).trim();
+      const pointsValue = Number(points);
+      const pointsAmount = Number.isFinite(pointsValue) ? Math.max(pointsValue, 0) : 0;
+      const descText = description == null ? "" : String(description);
+      const iconValue = icon == null ? null : String(icon).trim() || null;
+      const youtubeValue = youtube_url == null ? null : String(youtube_url).trim() || null;
+      const normalizedStatus = String(status).trim().toLowerCase() === "inactive" ? "inactive" : "active";
+
+      const cols = ["id", "family_id", "title", "points", "description", "status", "created_at", "updated_at"];
+      const vals = ["@id", "@fid", "@title", "@points", "@desc", "@status", "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"];
+
+      const taskCols = database.prepare(`PRAGMA table_info(task)`).all().map((r) => r.name);
+      if (taskCols.includes("icon")) {
+        const statusIndex = cols.indexOf("status");
+        cols.splice(statusIndex, 0, "icon");
+        vals.splice(statusIndex, 0, "@icon");
+      }
+      if (taskCols.includes("youtube_url")) {
+        const statusIndex = cols.indexOf("status");
+        cols.splice(statusIndex, 0, "youtube_url");
+        vals.splice(statusIndex, 0, "@yt");
+      }
+      if (taskCols.includes("is_customized")) {
+        cols.push("is_customized");
+        vals.push("1");
+      }
+
+      const sql = `INSERT INTO task (${cols.join(",")}) VALUES (${vals.join(",")})`;
+      database.prepare(sql).run({
+        id,
+        fid: familyId,
+        title: titleText,
+        points: pointsAmount,
+        desc: descText,
+        icon: iconValue,
+        yt: youtubeValue,
+        status: normalizedStatus,
+      });
+
+      return res.json({ id });
+    } catch (error) {
+      console.error("[admin.tasks] failed to create custom task", error?.message || error);
+      return res
+        .status(500)
+        .json({ error: "server_error", detail: "task_create_failed" });
     }
-
-    const id = randomUUID();
-    const titleText = String(title).trim();
-    const pointsValue = Number(points);
-    const pointsAmount = Number.isFinite(pointsValue) ? Math.max(pointsValue, 0) : 0;
-    const descText = description == null ? "" : String(description);
-    const iconValue = icon == null ? null : String(icon).trim() || null;
-    const youtubeValue = youtube_url == null ? null : String(youtube_url).trim() || null;
-    const normalizedStatus = String(status).trim().toLowerCase() === "inactive" ? "inactive" : "active";
-
-    const cols = ["id", "family_id", "title", "points", "description", "status", "created_at", "updated_at"];
-    const vals = ["@id", "@fid", "@title", "@points", "@desc", "@status", "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"];
-
-    const taskCols = db.prepare(`PRAGMA table_info(task)`).all().map((r) => r.name);
-    if (taskCols.includes("icon")) {
-      const statusIndex = cols.indexOf("status");
-      cols.splice(statusIndex, 0, "icon");
-      vals.splice(statusIndex, 0, "@icon");
-    }
-    if (taskCols.includes("youtube_url")) {
-      const statusIndex = cols.indexOf("status");
-      cols.splice(statusIndex, 0, "youtube_url");
-      vals.splice(statusIndex, 0, "@yt");
-    }
-    if (taskCols.includes("is_customized")) {
-      cols.push("is_customized");
-      vals.push("1");
-    }
-
-    const sql = `INSERT INTO task (${cols.join(",")}) VALUES (${vals.join(",")})`;
-    db.prepare(sql).run({
-      id,
-      fid: familyId,
-      title: titleText,
-      points: pointsAmount,
-      desc: descText,
-      icon: iconValue,
-      yt: youtubeValue,
-      status: normalizedStatus
-    });
-
-    return res.json({ id });
-  } catch (e) {
-    console.error("create custom task failed:", e);
-    return res.sendStatus(500);
   }
-});
+);
 
-router.post("/admin/families/:familyId/rewards", requireFamilyScope, (req, res) => {
-  try {
-    const fam = req.family;
-    if (!allowFamilyOrMaster(req, fam.id)) return res.sendStatus(403);
-    const familyId = String(fam.id);
+router.post(
+  "/admin/families/:familyId/rewards",
+  express.json(),
+  ...familyAccessChain,
+  (req, res) => {
+    try {
+      const database = req.db || db;
+      const familyId = String(req.family?.id || resolveRequestedFamilyId(req));
 
-    const {
-      title,
-      cost = 0,
-      description = "",
-      icon = null,
-      youtube_url = null,
-      status = "active"
-    } = req.body || {};
+      const {
+        title,
+        cost = 0,
+        description = "",
+        icon = null,
+        youtube_url = null,
+        status = "active",
+      } = req.body || {};
 
-    if (!title || !String(title).trim()) {
-      return res.status(400).json({ error: "title required" });
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ error: "title required" });
+      }
+
+      const id = randomUUID();
+      const titleText = String(title).trim();
+      const costValue = Number(cost);
+      const costAmount = Number.isFinite(costValue) ? Math.max(costValue, 0) : 0;
+      const descText = description == null ? "" : String(description);
+      const iconValue = icon == null ? null : String(icon).trim() || null;
+      const youtubeValue = youtube_url == null ? null : String(youtube_url).trim() || null;
+      const normalizedStatus = String(status).trim().toLowerCase() === "inactive" ? "inactive" : "active";
+
+      const cols = ["id", "family_id", "title", "cost", "description", "status", "created_at", "updated_at"];
+      const vals = ["@id", "@fid", "@title", "@cost", "@desc", "@status", "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"];
+
+      const rewardCols = database.prepare(`PRAGMA table_info(reward)`).all().map((r) => r.name);
+      if (rewardCols.includes("icon")) {
+        const statusIndex = cols.indexOf("status");
+        cols.splice(statusIndex, 0, "icon");
+        vals.splice(statusIndex, 0, "@icon");
+      }
+      if (rewardCols.includes("youtube_url")) {
+        const statusIndex = cols.indexOf("status");
+        cols.splice(statusIndex, 0, "youtube_url");
+        vals.splice(statusIndex, 0, "@yt");
+      }
+      if (rewardCols.includes("is_customized")) {
+        cols.push("is_customized");
+        vals.push("1");
+      }
+
+      const sql = `INSERT INTO reward (${cols.join(",")}) VALUES (${vals.join(",")})`;
+      database.prepare(sql).run({
+        id,
+        fid: familyId,
+        title: titleText,
+        cost: costAmount,
+        desc: descText,
+        icon: iconValue,
+        yt: youtubeValue,
+        status: normalizedStatus,
+      });
+
+      return res.json({ id });
+    } catch (error) {
+      console.error("[admin.rewards] failed to create custom reward", error?.message || error);
+      return res
+        .status(500)
+        .json({ error: "server_error", detail: "reward_create_failed" });
     }
-
-    const id = randomUUID();
-    const titleText = String(title).trim();
-    const costValue = Number(cost);
-    const costAmount = Number.isFinite(costValue) ? Math.max(costValue, 0) : 0;
-    const descText = description == null ? "" : String(description);
-    const iconValue = icon == null ? null : String(icon).trim() || null;
-    const youtubeValue = youtube_url == null ? null : String(youtube_url).trim() || null;
-    const normalizedStatus = String(status).trim().toLowerCase() === "inactive" ? "inactive" : "active";
-
-    const cols = ["id", "family_id", "title", "cost", "description", "status", "created_at", "updated_at"];
-    const vals = ["@id", "@fid", "@title", "@cost", "@desc", "@status", "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"];
-
-    const rewardCols = db.prepare(`PRAGMA table_info(reward)`).all().map((r) => r.name);
-    if (rewardCols.includes("icon")) {
-      const statusIndex = cols.indexOf("status");
-      cols.splice(statusIndex, 0, "icon");
-      vals.splice(statusIndex, 0, "@icon");
-    }
-    if (rewardCols.includes("youtube_url")) {
-      const statusIndex = cols.indexOf("status");
-      cols.splice(statusIndex, 0, "youtube_url");
-      vals.splice(statusIndex, 0, "@yt");
-    }
-    if (rewardCols.includes("is_customized")) {
-      cols.push("is_customized");
-      vals.push("1");
-    }
-
-    const sql = `INSERT INTO reward (${cols.join(",")}) VALUES (${vals.join(",")})`;
-    db.prepare(sql).run({
-      id,
-      fid: familyId,
-      title: titleText,
-      cost: costAmount,
-      desc: descText,
-      icon: iconValue,
-      yt: youtubeValue,
-      status: normalizedStatus
-    });
-
-    return res.json({ id });
-  } catch (e) {
-    console.error("create custom reward failed:", e);
-    return res.sendStatus(500);
   }
-});
+);
 
 router.delete("/admin/families/:id", requireFamilyScope, (req, res) => {
   if (getAdminRole(req) !== "master") return res.sendStatus(403);
