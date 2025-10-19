@@ -37,7 +37,7 @@ function columnMap(database, table) {
   }
 }
 
-function ensureKidsFamilyScope(database) {
+export function ensureKidsFamilyScope(database) {
   const dbRef = database || db;
   if (!hasTable(dbRef, 'kids')) {
     return;
@@ -101,10 +101,22 @@ ensureKidsFamilyScope(db);
 
 function ensureKidsFamilyScopeForFile(filePath) {
   try {
-    if (!filePath || !fs.existsSync(filePath)) {
+    if (!filePath) {
       return;
     }
-    const connection = new Database(filePath);
+    const absolutePath = path.resolve(filePath);
+    if (absolutePath === path.resolve(DB_PATH)) {
+      return;
+    }
+    if (!fs.existsSync(absolutePath)) {
+      return;
+    }
+    const stat = fs.statSync(absolutePath);
+    if (!stat.isFile()) {
+      return;
+    }
+
+    const connection = new Database(absolutePath);
     try {
       ensureKidsFamilyScope(connection);
     } finally {
@@ -118,13 +130,37 @@ function ensureKidsFamilyScopeForFile(filePath) {
   }
 }
 
-const LEGACY_DB_PATHS = [
-  path.join(process.cwd(), 'server', 'app.db'),
-  path.join(process.cwd(), 'server', 'parentshop.db'),
-  path.join(process.cwd(), 'server', 'parentshop.backup.db'),
-];
+function discoverLegacyDbPaths() {
+  const paths = new Set();
 
-for (const legacyPath of LEGACY_DB_PATHS) {
+  const defaultCandidates = [
+    path.join(process.cwd(), 'server', 'app.db'),
+    path.join(process.cwd(), 'server', 'parentshop.db'),
+    path.join(process.cwd(), 'server', 'parentshop.backup.db'),
+  ];
+
+  for (const candidate of defaultCandidates) {
+    paths.add(path.resolve(candidate));
+  }
+
+  try {
+    for (const entry of fs.readdirSync(DATA_DIR)) {
+      if (!entry) continue;
+      const lower = entry.toLowerCase();
+      if (!lower.endsWith('.db') && !lower.endsWith('.sqlite')) {
+        continue;
+      }
+      paths.add(path.resolve(DATA_DIR, entry));
+    }
+  } catch (error) {
+    console.warn('[db] unable to inspect data directory for legacy databases', error?.message || error);
+  }
+
+  paths.delete(path.resolve(DB_PATH));
+  return Array.from(paths);
+}
+
+for (const legacyPath of discoverLegacyDbPaths()) {
   ensureKidsFamilyScopeForFile(legacyPath);
 }
 
