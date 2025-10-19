@@ -655,6 +655,12 @@ if (columnInfo('reward').length) {
 }
 
 function ensureMasterCascadeTriggers() {
+  try {
+    db.exec('DROP TRIGGER IF EXISTS trg_master_task_inactivate');
+  } catch (err) {
+    console.warn('[db] unable to drop trg_master_task_inactivate', err?.message || err);
+  }
+
   const statements = [];
   if (tableHasColumn("task", "master_task_id")) {
     statements.push(`

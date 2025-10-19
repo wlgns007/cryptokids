@@ -119,21 +119,9 @@ function deleteFamilyScopedData(db, familyId) {
   } catch (e) {
     db.exec("ROLLBACK");
     console.warn(
-      "[prestart] ordered family delete failed with FKs ON; falling back to FK=OFF once.",
-      e.message
+      "[prestart] ordered family delete failed; skipping cleanup",
+      e?.message || e
     );
-  }
-
-  // Last resort: FK OFF within one transaction, then ON again
-  db.exec("PRAGMA foreign_keys = OFF; BEGIN");
-  try {
-    for (const t of order) {
-      db.prepare(`DELETE FROM ${quoteIdentifier(t)} WHERE family_id = ?`).run(familyId);
-    }
-    db.exec("COMMIT; PRAGMA foreign_keys = ON;");
-  } catch (e) {
-    db.exec("ROLLBACK; PRAGMA foreign_keys = ON;");
-    throw e;
   }
 }
 

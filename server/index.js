@@ -4177,6 +4177,109 @@ const ensureLedgerSchemaTx = db.transaction(() => {
   ensureLedgerSchema();
 });
 
+function shouldEnableScopeMigration() {
+  const raw = process.env.CK_MIGRATE_SCOPE;
+  if (raw === undefined || raw === null || raw === "") {
+    return true;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  return !(normalized === "0" || normalized === "false");
+}
+
+function ensureScopeMigration() {
+  const migrationEnabled = shouldEnableScopeMigration();
+  const taskHasScope = tableHasColumn("task", "scope");
+  const rewardHasScope = tableHasColumn("reward", "scope");
+
+  if (!migrationEnabled) {
+    if (!rewardHasScope) {
+      console.info("[migration] CK_MIGRATE_SCOPE disabled; skipping scope migration");
+    }
+    return { taskScopeAdded: false, rewardScopeAdded: false, rewardHasScope };
+  }
+
+  const shouldMigrateTask = tableExists("task") && !taskHasScope;
+  const shouldMigrateReward = tableExists("reward") && !rewardHasScope;
+
+  if (!shouldMigrateTask && !shouldMigrateReward) {
+    console.info("[migration] reward.scope already present; skipping scope migration");
+    return { taskScopeAdded: false, rewardScopeAdded: false, rewardHasScope: true };
+  }
+
+  try {
+    db.exec("BEGIN");
+    const taskResult = shouldMigrateTask
+      ? rebuildMenuTableForScope("task", {
+          scopeDefault: "family",
+          onBackfill: () => {
+            db.exec("UPDATE task SET scope = 'global' WHERE master_task_id IS NOT NULL");
+            db.exec(
+              "UPDATE task SET scope = 'family' WHERE scope IS NULL OR TRIM(scope) = ''"
+            );
+          }
+        })
+      : { addedScopeColumn: false };
+
+    const rewardResult = shouldMigrateReward
+      ? rebuildMenuTableForScope("reward", {
+          scopeDefault: "family",
+          scopeCheck: "scope IN ('global','family')",
+          onBackfill: () => {
+            db.exec(
+              "UPDATE reward SET scope = 'global' WHERE master_reward_id IS NOT NULL"
+            );
+            db.exec(
+              "UPDATE reward SET scope = 'family' WHERE scope IS NULL OR TRIM(scope) = ''"
+            );
+          }
+        })
+      : { addedScopeColumn: false };
+
+    db.exec("COMMIT");
+
+    if (rewardResult.addedScopeColumn) {
+      console.info("[migration] reward.scope column added and backfilled");
+    } else {
+      console.info("[migration] reward.scope already present; backfill skipped");
+    }
+
+    return {
+      taskScopeAdded: !!taskResult.addedScopeColumn,
+      rewardScopeAdded: !!rewardResult.addedScopeColumn,
+      rewardHasScope: rewardHasScope || !!rewardResult.addedScopeColumn
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    console.warn("[migration] scope migration failed", error?.message || error);
+    throw error;
+  }
+}
+
+function ensureScopeIndexes() {
+  const taskHasScope = tableHasColumn("task", "scope");
+  const rewardHasScope = tableHasColumn("reward", "scope");
+
+  if (taskHasScope && tableHasColumn("task", "family_id") && !indexExists("idx_task_scope_family")) {
+    try {
+      db.exec("CREATE INDEX idx_task_scope_family ON task(scope, family_id)");
+    } catch (err) {
+      console.warn("[schema] unable to ensure idx_task_scope_family", err?.message || err);
+    }
+  }
+
+  if (
+    rewardHasScope &&
+    tableHasColumn("reward", "family_id") &&
+    !indexExists("idx_reward_scope_family")
+  ) {
+    try {
+      db.exec("CREATE INDEX idx_reward_scope_family ON reward(scope, family_id)");
+    } catch (err) {
+      console.warn("[schema] unable to ensure idx_reward_scope_family", err?.message || err);
+    }
+  }
+}
+
 function ensureSchema() {
   // Base tables + seeds run inside a transaction for atomicity.
   ensureBaseSchema();
