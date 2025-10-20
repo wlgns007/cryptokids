@@ -7,8 +7,6 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import QRCode from "qrcode";
 import db, { DATA_DIR, ensureMasterCascadeTriggers, resolveAdminContext } from "./db.js";
-import runMigrations from "./db/migrate.js";
-import { seedGlobalTemplates } from "./db/seeds/globalTemplates.js";
 import { MULTITENANT_ENFORCE } from "./config.js";
 import ledgerRoutes from "./routes/ledger.js";
 import apiRouter, { scopeMiddleware, familyAccessChain } from "./routes.js";
@@ -33,18 +31,6 @@ const rootPackage = JSON.parse(
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const PARENT_SECRET = (process.env.PARENT_SECRET || "dev-secret-change-me").trim();
-
-const appliedMigrations = runMigrations(db);
-const seedSummary = seedGlobalTemplates(db);
-const MIGRATION_LOG = `[startup] DB ready; applied migrations: ${
-  appliedMigrations.length ? appliedMigrations.join(", ") : "none"
-}.`;
-
-if (seedSummary?.tasks?.length || seedSummary?.rewards?.length) {
-  console.log(
-    `[startup] seeded master templates: tasks=${seedSummary.tasks.length}, rewards=${seedSummary.rewards.length}`
-  );
-}
 
 if (process.argv.includes("--help")) {
   console.log("Parents Shop API");
@@ -8025,11 +8011,8 @@ app.use((err, req, res, next) => {
 
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(MIGRATION_LOG);
     console.log(`Parents Shop API listening on http://0.0.0.0:${PORT}`);
   });
-} else {
-  console.log(MIGRATION_LOG);
 }
 
 export {
