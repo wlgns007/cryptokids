@@ -5,10 +5,6 @@ const MASTER_ADMIN_KEY_RAW = process.env.MASTER_ADMIN_KEY;
 const MASTER_ADMIN_KEY = (MASTER_ADMIN_KEY_RAW || "").trim();
 const DEFAULT_FAMILY_ADMIN_KEY_RAW = process.env.ADMIN_KEY;
 const DEFAULT_FAMILY_ADMIN_KEY = (DEFAULT_FAMILY_ADMIN_KEY_RAW || "").trim();
-const isProduction =
-  String(process.env.NODE_ENV || "").toLowerCase() === "production" ||
-  Boolean(process.env.RENDER) ||
-  Boolean(process.env.RENDER_SERVICE_ID);
 
 console.log("[prestart] starting DB checks...");
 const { default: db } = await import("../server/db.js");
@@ -18,32 +14,28 @@ function quoteIdentifier(id) {
   return `"${String(id).replaceAll('"', '""')}"`;
 }
 
-if (isProduction) {
-  console.log("[prestart] production detected; skipping Jang cleanup");
-} else {
-  try {
-    db.exec("BEGIN");
-    const familyColumns = db
-      .prepare("PRAGMA table_info(\"family\")")
-      .all()
-      .map((column) => column.name.toLowerCase());
-    const shortKeyColumns = [];
-    if (familyColumns.includes("key")) shortKeyColumns.push("key");
-    if (familyColumns.includes("family_key")) shortKeyColumns.push("family_key");
-    if (familyColumns.includes("admin_key")) shortKeyColumns.push("admin_key");
+try {
+  db.exec("BEGIN");
+  const familyColumns = db
+    .prepare("PRAGMA table_info(\"family\")")
+    .all()
+    .map((column) => column.name.toLowerCase());
+  const shortKeyColumns = [];
+  if (familyColumns.includes("key")) shortKeyColumns.push("key");
+  if (familyColumns.includes("family_key")) shortKeyColumns.push("family_key");
+  if (familyColumns.includes("admin_key")) shortKeyColumns.push("admin_key");
 
-    for (const column of shortKeyColumns) {
-      db.prepare(
-        `DELETE FROM "family" WHERE ${quoteIdentifier(column)} = ? COLLATE NOCASE`
-      ).run("jang");
-    }
-
-    db.prepare("DELETE FROM \"family\" WHERE LOWER(name) = LOWER(?)").run("jang");
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    console.warn("[prestart] Jang cleanup skipped:", error?.message || error);
+  for (const column of shortKeyColumns) {
+    db.prepare(
+      `DELETE FROM "family" WHERE ${quoteIdentifier(column)} = ? COLLATE NOCASE`
+    ).run("jang");
   }
+
+  db.prepare("DELETE FROM \"family\" WHERE LOWER(name) = LOWER(?)").run("jang");
+  db.exec("COMMIT");
+} catch (error) {
+  db.exec("ROLLBACK");
+  console.warn("[prestart] Jang cleanup skipped:", error?.message || error);
 }
 
 // ---- helpers ----
@@ -484,11 +476,7 @@ const defaultFamilyAdminKey = ensureFamilyAdminKey(DEFAULT_FAMILY_ID, {
   preset: DEFAULT_FAMILY_ADMIN_KEY,
   allowGenerate: true
 });
-if (isProduction) {
-  console.log("[prestart] production detected; skipping default family cleanup");
-} else {
-  clearDefaultFamilyData();
-}
+clearDefaultFamilyData();
 
 const familyCount = db.prepare("SELECT COUNT(*) AS count FROM family").get()?.count ?? 0;
 const defaultAdminPresent = !!db
